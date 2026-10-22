@@ -37,10 +37,17 @@ const WINDOWS_CAMERA = 'microsoft.windows.camera:'
 const MAC_OPEN = '/usr/bin/open'
 const MAC_OSASCRIPT = '/usr/bin/osascript'
 
-const BUNDLE_NOTES = 'com.apple.Notes'
-const BUNDLE_ARC = 'company.thebrowser.Browser'
-const BUNDLE_PHOTO_BOOTH = 'com.apple.PhotoBooth'
-const BUNDLE_SYSTEM_EVENTS = 'com.apple.systemevents'
+/** The one list of target apps: the adapters dispatch to them and the pre-dispatch preflight checks the same ones. */
+export const DESKTOP_BUNDLE_IDS = {
+  notes: 'com.apple.Notes',
+  arc: 'company.thebrowser.Browser',
+  photoBooth: 'com.apple.PhotoBooth',
+  systemEvents: 'com.apple.systemevents'
+} as const
+const BUNDLE_NOTES = DESKTOP_BUNDLE_IDS.notes
+const BUNDLE_ARC = DESKTOP_BUNDLE_IDS.arc
+const BUNDLE_PHOTO_BOOTH = DESKTOP_BUNDLE_IDS.photoBooth
+const BUNDLE_SYSTEM_EVENTS = DESKTOP_BUNDLE_IDS.systemEvents
 
 /** How long the frontmost stream has to show the app after the launch was acknowledged. */
 const FRONTMOST_WINDOW_MS = 3_000

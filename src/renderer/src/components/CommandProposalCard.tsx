@@ -23,7 +23,7 @@ export function commandProposalRequest(proposal: CommandProposal, id = 1): Navig
     id,
     kind: 'confirm',
     title: preview.title,
-    message: preview.argument ? `“${preview.argument}”` : (preview.detail ?? ''),
+    message: [preview.argument ? `“${preview.argument}”` : null, preview.detail ?? null].filter(Boolean).join('\n'),
     saveLabel: preview.confirmLabel,
     cancelLabel: 'Cancel'
   }

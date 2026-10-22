@@ -1,30 +1,20 @@
 import { isDesktopAdapterId, type DesktopActionRequest, type DesktopAdapterId } from './desktop-actions'
-import { commandRiskNeedsConfirmation, type MetisCommandPreview, type MetisCommandRisk } from './metis-command-contract'
-
-export { commandRiskNeedsConfirmation }
+import type { MetisCommandPreview, MetisCommandRisk } from './metis-command-contract'
+import { classifyDesktopRequest, previewFor, validateDesktopRequest, voicePlatformOf } from './voice/catalog'
 
 /**
- * The exact consequence a confirmation card states, built from the action and its arguments and nothing else.
- * There is no parameter through which a transcript could reach it. V03's catalog may later own the templates; the
- * result shape is what the card, the IPC state and the approval binding depend on.
+ * The exact consequence a confirmation card states, as main publishes it. The wording, the class and the argument
+ * validation all come from the voice catalog (V03): a request the catalog rejects (out of bounds, control or
+ * bidirectional characters, unknown action, unsupported on this platform) has no preview and so no card. This
+ * module adds only what the card itself needs on top: the verb for the default button, the app icon key, and the
+ * body text the catalog's one-line preview omits, so the card never hides part of what will run. There is no
+ * parameter through which a transcript could reach it.
  */
 export type CommandPreviewResult = {
   actionId: DesktopAdapterId
   risk: MetisCommandRisk
   preview: MetisCommandPreview
   appIconKey?: string
-}
-
-/** The card shows the whole argument or no card at all: a truncated preview would hide part of what runs. */
-export const COMMAND_PREVIEW_ARGUMENT_MAX = 240
-
-// Control characters (including newlines) and bidirectional overrides/isolates can make text read differently
-// from what it is. An argument containing any of them is not shown, so no card is shown either.
-const UNSAFE_DISPLAY = /[\u0000-\u001F\u007F-\u009F؜‎‏‪-‮⁦-⁩]/u
-
-function shownArgument(value: unknown): string | null {
-  if (typeof value !== 'string' || value.length === 0 || value.length > COMMAND_PREVIEW_ARGUMENT_MAX) return null
-  return UNSAFE_DISPLAY.test(value) ? null : value
 }
 
 const LABELS: Record<DesktopAdapterId, string> = {
@@ -41,71 +31,48 @@ export function desktopActionLabel(id: string): string | null {
   return isDesktopAdapterId(id) ? LABELS[id] : null
 }
 
+const CONFIRM_LABEL: Record<DesktopAdapterId, string> = {
+  'desktop.open_notes': 'Open',
+  'desktop.create_note': 'Create',
+  'desktop.open_arc': 'Open',
+  'desktop.google_search': 'Search',
+  'desktop.open_x': 'Open',
+  'desktop.photo_booth_capture': 'Take photo'
+}
+
+const APP_ICON: Record<DesktopAdapterId, string> = {
+  'desktop.open_notes': 'notes',
+  'desktop.create_note': 'notes',
+  'desktop.open_arc': 'arc',
+  'desktop.google_search': 'browser',
+  'desktop.open_x': 'browser',
+  'desktop.photo_booth_capture': 'photo-booth'
+}
+
 export function previewForDesktopAction(
   request: DesktopActionRequest,
-  platform: NodeJS.Platform = process.platform
+  platform: NodeJS.Platform | string = process.platform
 ): CommandPreviewResult | null {
-  if (!request || typeof request !== 'object' || !isDesktopAdapterId(request.id)) return null
-  const windows = platform === 'win32'
-  switch (request.id) {
-    case 'desktop.create_note': {
-      const argument = shownArgument(request.args?.title)
-      if (argument === null) return null
-      return {
-        actionId: request.id,
-        risk: 'create',
-        appIconKey: windows ? 'notepad' : 'notes',
-        preview: {
-          title: windows ? 'Create a note in Notepad' : 'Create a note in Notes',
-          argument,
-          confirmLabel: 'Create'
-        }
-      }
+  // Re-validated here, so a request that skipped the grammar (the panel path) is held to the same bounds.
+  const valid = validateDesktopRequest(request)
+  if (!valid) return null
+  const voicePlatform = voicePlatformOf(platform)
+  const risk = classifyDesktopRequest(valid, voicePlatform)
+  if (risk === null) return null
+  const base = previewFor(valid, voicePlatform)
+  const windows = voicePlatform === 'win32'
+  const body = valid.id === 'desktop.create_note' ? valid.args.body : undefined
+  const detail =
+    body ?? (valid.id === 'desktop.photo_booth_capture' && windows ? 'Press the shutter yourself.' : undefined)
+  return {
+    actionId: valid.id,
+    risk,
+    appIconKey: windows && APP_ICON[valid.id] === 'notes' ? 'notepad' : APP_ICON[valid.id],
+    preview: {
+      title: base.title,
+      ...(base.argument !== undefined ? { argument: base.argument } : {}),
+      ...(detail !== undefined ? { detail } : {}),
+      confirmLabel: windows && valid.id === 'desktop.photo_booth_capture' ? 'Open' : CONFIRM_LABEL[valid.id]
     }
-    case 'desktop.photo_booth_capture':
-      return windows
-        ? {
-            actionId: request.id,
-            risk: 'reversible',
-            appIconKey: 'camera',
-            preview: { title: 'Open Camera', detail: 'Press the shutter yourself.', confirmLabel: 'Open' }
-          }
-        : {
-            actionId: request.id,
-            risk: 'create',
-            appIconKey: 'photo-booth',
-            preview: { title: 'Take a photo in Photo Booth', confirmLabel: 'Take photo' }
-          }
-    case 'desktop.google_search': {
-      const argument = shownArgument(request.args?.q)
-      if (argument === null) return null
-      return {
-        actionId: request.id,
-        risk: 'read',
-        appIconKey: 'browser',
-        preview: { title: 'Search Google for', argument, confirmLabel: 'Search' }
-      }
-    }
-    case 'desktop.open_notes':
-      return {
-        actionId: request.id,
-        risk: 'reversible',
-        appIconKey: windows ? 'notepad' : 'notes',
-        preview: { title: 'Open Notes', confirmLabel: 'Open' }
-      }
-    case 'desktop.open_arc':
-      return {
-        actionId: request.id,
-        risk: 'reversible',
-        appIconKey: 'arc',
-        preview: { title: 'Open Arc', confirmLabel: 'Open' }
-      }
-    case 'desktop.open_x':
-      return {
-        actionId: request.id,
-        risk: 'reversible',
-        appIconKey: 'browser',
-        preview: { title: 'Open x.com', confirmLabel: 'Open' }
-      }
   }
 }

@@ -8,11 +8,11 @@
 import { access, mkdir, stat, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
-import { app, systemPreferences } from 'electron'
+import { app } from 'electron'
 import type { DesktopAdapterDeps, NoteFileSystem } from './desktop-adapters'
 import { createFrontmostVerifier } from './desktop-frontmost-verifier'
 import { startForegroundWatcher } from './foreground-watcher'
-import { getTccStatus } from './mac-helper'
+import { createDesktopPermissionProbes } from './desktop-permission-probes'
 import { mainLog } from './logger'
 
 const noteFileSystem: NoteFileSystem = {
@@ -53,6 +53,7 @@ export function createProductionDesktopAdapterDeps(
     }
   }
   if (platform !== 'darwin') return {}
+  const probes = createDesktopPermissionProbes(platform)
   return {
     frontmost: createFrontmostVerifier({
       start: (onChange) =>
@@ -60,8 +61,8 @@ export function createProductionDesktopAdapterDeps(
           onError: (message) => mainLog.warn(`[desktop-adapters] frontmost: ${message}`)
         })
     }),
-    automationStatus: async (bundleId) => (await getTccStatus('automation', bundleId)) ?? 'unknown',
-    accessibilityTrusted: () => systemPreferences.isTrustedAccessibilityClient(false),
+    automationStatus: async (bundleId) => (await probes.automationStatus(bundleId, { ask: false })) ?? 'unknown',
+    accessibilityTrusted: probes.accessibilityTrusted,
     macAppInstalled: async () =>
       (await exists('/Applications/Arc.app')) || (await exists(join(homedir(), 'Applications', 'Arc.app')))
   }

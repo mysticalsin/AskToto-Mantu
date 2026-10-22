@@ -35,11 +35,11 @@ function make(gate: () => CommandImmediateRunGate, meeting = false) {
     ok: true,
     outcome: 'unknown' as const
   }))
-  const propose = vi.fn(() => ({ proposalId: 'p'.repeat(32), nonce: 'n'.repeat(64), argsHash: 'h'.repeat(64) }))
+  const propose = vi.fn(async () => ({ proposalId: 'p'.repeat(32), nonce: 'n'.repeat(64), argsHash: 'h'.repeat(64) }))
   const send = vi.fn()
   const outcomes: unknown[] = []
   const turns = createMainVoiceTurns({
-    commandControl: { immediateRunGate: gate, propose } as never,
+    commandControl: { immediateRunGate: gate, proposeChecked: propose } as never,
     authority: { hasMeetingReservation: meeting },
     window: () => ({ isDestroyed: () => false, webContents: { send } }),
     platform: 'darwin',

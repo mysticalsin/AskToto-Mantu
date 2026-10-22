@@ -85,8 +85,12 @@ export interface VoiceActionExecutorDeps {
   platform: NodeJS.Platform | string
   /** The durable dispatch (the task bridge's executor). Every immediate run goes through it. */
   execute: CommandExecutor
-  /** Create the pending proposal in CommandControl. Null when there is no owner window to confirm in. */
-  propose(request: DesktopActionRequest): CommandControlProposal | null
+  /**
+   * Create the pending proposal in CommandControl, through its preflight (V04), so the card, its Return guard, TTL
+   * and focus restore apply to a spoken create exactly as to a panel one. Null when there is no owner window to
+   * confirm in or the preflight refused (the person then already has the honest sentence: a notice).
+   */
+  propose(request: DesktopActionRequest): CommandControlProposal | null | Promise<CommandControlProposal | null>
   /** The owner window as main knows it (never renderer supplied), for the task's owner binding. */
   owner(): { webContentsId: number; revision: number } | null
   /** Live main state for the gate, read at the moment of the decision. */
@@ -182,17 +186,17 @@ export function createVoiceActionExecutor(deps: VoiceActionExecutorDeps): VoiceA
     return { status: 'failed', actionId: request.id, actionClass, reason: failureReason(result) }
   }
 
-  function needConfirmation(
+  async function needConfirmation(
     request: DesktopActionRequest,
     claim: VoiceTurnClaim,
     actionClass: VoiceActionClass
-  ): VoiceActionResult {
+  ): Promise<VoiceActionResult> {
     const refusal = deps.owner() ? gateRefusal(claim) : 'not_allowed'
     if (refusal) return { status: 'refused', reason: refusal, actionId: request.id }
     if (!claim.consume()) return { status: 'refused', reason: 'turn_ended', actionId: request.id }
     let proposal: CommandControlProposal | null = null
     try {
-      proposal = deps.propose(request)
+      proposal = await deps.propose(request)
     } catch {
       proposal = null
     }
@@ -217,7 +221,7 @@ export function createVoiceActionExecutor(deps: VoiceActionExecutorDeps): VoiceA
       if (decision === 'refuse' || actionClass === null) {
         result = { status: 'refused', reason: 'unsupported_platform', actionId: request.id }
       } else if (decision === 'confirm') {
-        result = needConfirmation(request, claim, actionClass)
+        result = await needConfirmation(request, claim, actionClass)
       } else {
         result = await runImmediate(request, claim, actionClass)
       }

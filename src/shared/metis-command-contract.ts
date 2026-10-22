@@ -40,11 +40,6 @@ export type MetisCommandState =
       appIconKey?: string
     }
 
-/** Create, send, type and delete show a confirmation card. Read and reversible actions run directly (V03 policy). */
-export function commandRiskNeedsConfirmation(risk: MetisCommandRisk): boolean {
-  return risk === 'create' || risk === 'send' || risk === 'type' || risk === 'delete'
-}
-
 /** Why a command could not start. Honest copy, delivered instead of a card that cannot succeed. */
 export const METIS_COMMAND_NOTICE_CODES = [
   'signed_out',

@@ -9,6 +9,7 @@
  */
 import type { DesktopActionRequest } from '@shared/desktop-actions'
 import type { MetisCommandNotice } from '@shared/metis-command-contract'
+import { DESKTOP_BUNDLE_IDS } from '../desktop-adapters'
 import type { CommandPreflightResult, CommandPreflightStage } from '../command-control'
 
 export type AutomationStatus = 'granted' | 'denied' | 'unknown'
@@ -25,10 +26,7 @@ export interface CommandPreflightDeps {
   accessibilityTrusted(): boolean
 }
 
-const NOTES = 'com.apple.Notes'
-const SYSTEM_EVENTS = 'com.apple.systemevents'
-const PHOTO_BOOTH = 'com.apple.PhotoBooth'
-const ARC = 'company.thebrowser.Browser'
+const { notes: NOTES, systemEvents: SYSTEM_EVENTS, photoBooth: PHOTO_BOOTH, arc: ARC } = DESKTOP_BUNDLE_IDS
 
 type MacRequirement = {
   app: { bundleId: string; missing: string }

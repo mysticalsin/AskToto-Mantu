@@ -129,7 +129,10 @@ function ConfirmSheetDialog({
             <h2 id={titleId} className="m-0 text-[14px] font-semibold text-[color:var(--color-ink)]">
               {request.title}
             </h2>
-            <p id={messageId} className="m-0 mt-1 text-[12px] leading-snug text-[color:var(--color-ink-2)]">
+            <p
+              id={messageId}
+              className="m-0 mt-1 whitespace-pre-wrap text-[12px] leading-snug text-[color:var(--color-ink-2)]"
+            >
               {request.message}
             </p>
           </div>

@@ -3,11 +3,12 @@
  * preflight, the focus exception's controller and assistive-technology lifetime, as one object index.ts spreads
  * into CommandConfirmation. Electron, the mac helper and the foreground watcher are touched only here.
  */
-import { app, systemPreferences } from 'electron'
+import { app } from 'electron'
 import type { MetisCommandRecoveryNotice } from '@shared/metis-command-contract'
 import type { CommandConfirmationDeps } from '../command-confirmation'
 import { startForegroundWatcher, type ForegroundWatcher } from '../foreground-watcher'
-import { activatePid, askAutomation, getBundleCopies, getTccStatus } from '../mac-helper'
+import { createDesktopPermissionProbes } from '../desktop-permission-probes'
+import { activatePid } from '../mac-helper'
 import { mainLog } from '../logger'
 import { desktopActionTaskDeps } from '../tasks/desktop-action-task-runtime'
 import { createCommandPreflight } from './command-preflight'
@@ -40,16 +41,13 @@ export function createCommandConfirmRuntime(options: CommandConfirmRuntimeOption
     return watcher
   }
   const platform = process.platform
+  // The same probes the adapters read inside a dispatch (desktop-permission-probes.ts): one source of truth.
+  const probes = createDesktopPermissionProbes(platform)
   const preflight = createCommandPreflight({
     platform,
     isAuthenticated: options.isAuthenticated,
     isRecordingMeeting: options.isRecordingMeeting,
-    appInstalled: async (bundleId) => {
-      const copies = await getBundleCopies(bundleId)
-      return copies === null ? null : copies.length > 0
-    },
-    automationStatus: (bundleId, { ask }) => (ask ? askAutomation(bundleId) : getTccStatus('automation', bundleId)),
-    accessibilityTrusted: () => platform !== 'darwin' || systemPreferences.isTrustedAccessibilityClient(false)
+    ...probes
   })
   const focus = createConfirmFocus({
     platform,

@@ -38,6 +38,11 @@ describe('commandProposalRequest (what the card shows is exactly what main allow
     expect(commandProposalRequest(windowsPhoto).message).toBe('Press the shutter yourself.')
   })
 
+  it('shows the argument and then the detail (a note body) so nothing that will run is hidden', () => {
+    const withBody: Proposal = { ...proposal, preview: { ...proposal.preview, detail: 'milk and eggs' } }
+    expect(commandProposalRequest(withBody).message).toBe('“Groceries”\nmilk and eggs')
+  })
+
   it('is never styled destructive: the person deliberately asked for the action', () => {
     expect(commandProposalRequest(proposal).destructive).toBeUndefined()
   })

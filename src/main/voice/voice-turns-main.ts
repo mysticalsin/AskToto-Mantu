@@ -26,7 +26,7 @@ interface WindowLike {
 }
 
 export interface MainVoiceTurnsDeps {
-  commandControl: Pick<CommandConfirmation, 'immediateRunGate' | 'propose'>
+  commandControl: Pick<CommandConfirmation, 'immediateRunGate' | 'proposeChecked'>
   authority: Pick<InputSessionAuthority, 'hasMeetingReservation'>
   window(): WindowLike | null | undefined
   platform?: NodeJS.Platform
@@ -51,10 +51,11 @@ export function createMainVoiceTurns(deps: MainVoiceTurnsDeps): NonNullable<Voic
     executor: {
       platform: deps.platform ?? process.platform,
       execute: deps.execute ?? ((request, context) => desktopActionTaskDeps().execute(request, context)),
-      propose(request): CommandControlProposal | null {
+      async propose(request): Promise<CommandControlProposal | null> {
         const id = live()?.ownerWebContentsId
+        // Through the preflight: a spoken create gets the same card, Return guard, TTL and focus restore.
         return typeof id === 'number'
-          ? deps.commandControl.propose({ webContentsId: id, revision: ++revision }, request)
+          ? deps.commandControl.proposeChecked({ webContentsId: id, revision: ++revision }, request)
           : null
       },
       owner() {

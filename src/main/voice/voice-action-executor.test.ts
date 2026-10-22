@@ -64,7 +64,15 @@ const GATE_OK: ReturnType<VoiceActionExecutorDeps['gate']> = {
 
 type Adapter = (request: DesktopActionRequest, envelope: ActionEnvelope) => Promise<DesktopActionResult>
 
-function harness(options: { platform?: string; store?: MemoryStore; adapter?: Adapter } = {}) {
+function harness(
+  options: {
+    platform?: string
+    store?: MemoryStore
+    adapter?: Adapter
+    preflight?: ConstructorParameters<typeof CommandControl>[0]['preflight']
+    onNotice?: ConstructorParameters<typeof CommandControl>[0]['onNotice']
+  } = {}
+) {
   const store = options.store ?? new MemoryStore()
   const adapter =
     options.adapter ??
@@ -73,14 +81,20 @@ function harness(options: { platform?: string; store?: MemoryStore; adapter?: Ad
     )
   const audit = vi.fn()
   const bridge = new DesktopActionTaskBridge({ execute: adapter, store, authSessionGeneration: () => 1, audit })
-  const control = new CommandControl({ execute: bridge.execute, policyAllows: () => true })
+  const control = new CommandControl({
+    execute: bridge.execute,
+    policyAllows: () => true,
+    platform: (options.platform ?? 'darwin') as NodeJS.Platform,
+    preflight: options.preflight,
+    onNotice: options.onNotice
+  })
   let gate = { ...GATE_OK }
   let ownerPresent = true
   let ids = 0
   const executor = createVoiceActionExecutor({
-    platform: options.platform ?? 'darwin',
+    platform: (options.platform ?? 'darwin') as NodeJS.Platform,
     execute: bridge.execute,
-    propose: (request) => control.propose({ webContentsId: 7, revision: 1 }, request),
+    propose: (request) => control.proposeChecked({ webContentsId: 7, revision: 1 }, request),
     owner: () => (ownerPresent ? { webContentsId: 7, revision: 1 } : null),
     gate: () => gate,
     audit,
@@ -334,6 +348,31 @@ describe('confirm: a create action becomes a typed needsConfirmation decision an
     })
     // The nonce authorizes the confirmation and stays inside the existing CommandControl push.
     expect(JSON.stringify(result)).not.toContain((state as { nonce: string }).nonce)
+  })
+
+  it('a spoken create goes through the preflight: a refusal shows no card, publishes the honest sentence and runs nothing', async () => {
+    const notices: unknown[] = []
+    const notice = {
+      code: 'automation_denied',
+      copy: "Métis isn't allowed to control Notes.",
+      settingsKind: 'automation'
+    } as const
+    const h = harness({ preflight: async () => ({ ok: false, notice }), onNotice: (n) => notices.push(n) })
+    const result = await h.executor.handle(NOTE, makeClaim().claim, 'push-to-talk')
+    expect(result).toEqual({ status: 'refused', reason: 'not_allowed', actionId: 'desktop.create_note' })
+    expect(h.control.getState()).toEqual({ proposalId: null })
+    expect(notices).toEqual([notice])
+    expect(h.adapter).not.toHaveBeenCalled()
+    expect(h.bridge.snapshot()).toEqual([])
+  })
+
+  it('a spoken create that passes the preflight gets the card, which carries the preview, risk and the Return-guarded TTL', async () => {
+    const h = harness({ preflight: async () => ({ ok: true }) })
+    await h.executor.handle(NOTE, makeClaim().claim, 'push-to-talk')
+    expect(h.control.getState()).toMatchObject({
+      risk: 'create',
+      preview: { title: 'Create a note in Notes', argument: 'Synthetic private title', confirmLabel: 'Create' }
+    })
   })
 
   it('approving it is the existing confirm path: nonce, args hash, then one durable task', async () => {
