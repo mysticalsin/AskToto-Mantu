@@ -59,11 +59,7 @@ import {
   MeetingStartActivationAuthority,
   type MeetingStartActivationFrame
 } from './meeting-start-activation-authority'
-import {
-  CommandMicActivationAuthority,
-  commandMicOwner,
-  type CommandMicActivationFrame
-} from './command-mic-activation-authority'
+import { CommandMicActivationAuthority, commandMicOwner } from './command-mic-activation-authority'
 import { CommandSpeechCapture } from './command-speech-capture'
 import { InputSessionStopRequestSchema } from '@shared/input-session'
 import {
@@ -605,6 +601,7 @@ import { installAppQuitLifecycle } from './lifecycle/app-quit-lifecycle'
 import { registerQuitIpc } from './ipc/quit-ipc'
 import { QA_IDENTITY_BUILD, installQaFaultHook } from './qa-hooks'
 import { createCommandMicAvailability, createVoiceActionsRuntime } from './voice/voice-actions-runtime'
+import { createMainVoiceTurns } from './voice/voice-turns-main'
 import { createCommandMicLeaseTimer } from './command-mic-lease-timer'
 import { registerVoiceActionsIpc } from './ipc/voice-actions-ipc'
 import { installQaCaptureSource } from './qa-capture-source'
@@ -1457,7 +1454,7 @@ function commandSpeechOwnerFromEvent(event: Electron.IpcMainInvokeEvent): Return
     inputSessionAuthority.hardStop('sign-out')
     return null
   }
-  const frame = commandMicActivationFrameFromEvent(event)
+  const frame = activationFrameFromEvent(event)
   const currentFrame = currentMainActivationFrame()
   if (
     !frame ||
@@ -1490,7 +1487,7 @@ commandSpeechCapture = new CommandSpeechCapture({
     return parakeetTranscribe(samples)
   },
   ingestTranscript: (text) => {
-    getMetisCommandRuntime()?.ingestTranscript(text, 'command')
+    if (!voiceActions?.onTranscript(text)) getMetisCommandRuntime()?.ingestTranscript(text, 'command')
   },
   onExpired: (sessionId) => {
     if (inputSessionAuthority.activeLease?.sessionId === sessionId) inputSessionAuthority.hardStop('cancelled')
@@ -1508,10 +1505,9 @@ voiceActions = createVoiceActionsRuntime({
   onboardingActive: onboardingExclusiveLive,
   availability: commandMicAvailability,
   parakeet: { refreshPresence, ensure: ensureParakeetModel, release: parakeetRelease },
-  speechBusy: () => listeningActive || importJobs?.hasMemoryHeavyWork() === true
+  speechBusy: () => listeningActive || importJobs?.hasMemoryHeavyWork() === true,
+  turns: createMainVoiceTurns({ commandControl, authority: inputSessionAuthority, window: () => win })
 })
-const commandMicActivationFrameFromEvent: (e: Electron.IpcMainInvokeEvent) => CommandMicActivationFrame | null =
-  activationFrameFromEvent
 function activationFrameFromEvent(event: Electron.IpcMainInvokeEvent): MeetingStartActivationFrame | null {
   const frame = event.senderFrame
   if (!frame) return null
@@ -8929,7 +8925,7 @@ function registerIpc(): void {
     currentInputSessionContext,
     captureAuthSessionBoundary,
     commandMicAvailability,
-    commandMicActivationFrameFromEvent,
+    commandMicActivationFrameFromEvent: activationFrameFromEvent,
     commandMicOwner,
     commandSpeechOwnerFromEvent,
     commandLeaseCurrentAndAllowed,

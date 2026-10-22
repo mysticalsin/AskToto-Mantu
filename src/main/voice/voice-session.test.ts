@@ -633,3 +633,96 @@ describe('VoiceSession idle release of the speech helper', () => {
     expect(h.deps.speech.releaseIdle).not.toHaveBeenCalled()
   })
 })
+
+describe("VoiceSession turn claim (V03): the right to act on one turn's recognized text", () => {
+  const sealed = () => {
+    const h = harness()
+    h.session.refresh()
+    h.emit('armed')
+    h.emit('released')
+    return h
+  }
+
+  it('is minted once per sealed turn and not before the turn is sealed', () => {
+    const h = harness()
+    h.session.refresh()
+    expect(h.session.claimTurn()).toBeNull() // nothing to claim while idle
+    h.emit('armed')
+    expect(h.session.claimTurn()).toBeNull() // still listening: no recognized text exists yet
+    h.emit('released')
+    const claim = h.session.claimTurn()
+    expect(claim).toMatchObject({ turnId: 'turn-1' })
+    expect(h.session.claimTurn()).toBeNull() // a second delivery of text for the same turn cannot claim again
+  })
+
+  it('is single use', () => {
+    const claim = sealed().session.claimTurn()!
+    expect(claim.valid()).toBe(true)
+    expect(claim.consume()).toBe(true)
+    expect(claim.consume()).toBe(false)
+    expect(claim.valid()).toBe(false)
+  })
+
+  it('survives the turn ending normally, so the pipeline can finish after recognition completes', () => {
+    const h = sealed()
+    const claim = h.session.claimTurn()!
+    h.session.onSpeechFinished({ ok: true })
+    expect(h.session.snapshot().state).toBe('idle')
+    expect(claim.valid()).toBe(true)
+  })
+
+  it.each([
+    ['sign-out', (h: ReturnType<typeof harness>) => h.session.onHardStop('sign-out')],
+    ['screen lock', (h: ReturnType<typeof harness>) => h.session.onHardStop('screen-locked')],
+    ['system suspend', (h: ReturnType<typeof harness>) => h.session.onHardStop('system-suspend')],
+    ['quit', (h: ReturnType<typeof harness>) => h.session.onHardStop('shutdown')],
+    ['a meeting starting', (h: ReturnType<typeof harness>) => h.session.onMeetingReserved()],
+    ['a renderer reset', (h: ReturnType<typeof harness>) => h.session.onRendererReset()],
+    [
+      'the feature turned off',
+      (h: ReturnType<typeof harness>) => {
+        h.config.enabled = false
+        h.session.refresh()
+      }
+    ],
+    ['dispose', (h: ReturnType<typeof harness>) => h.session.dispose()],
+    ['a new hold', (h: ReturnType<typeof harness>) => h.emit('armed')],
+    [
+      'a watcher revoke',
+      (h: ReturnType<typeof harness>) => h.emit({ type: 'revoked', cause: 'lock' } as ChordWatcherEvent)
+    ]
+  ])('dies on %s, even after the turn itself ended', (_label, revoke) => {
+    const h = sealed()
+    const claim = h.session.claimTurn()!
+    h.session.onSpeechFinished({ ok: true })
+    expect(claim.valid()).toBe(true)
+    revoke(h)
+    expect(claim.valid()).toBe(false)
+    expect(claim.consume()).toBe(false)
+  })
+
+  it('dies when the turn is cancelled while thinking', () => {
+    const h = sealed()
+    const claim = h.session.claimTurn()!
+    h.session.report({ turnId: 'turn-1', phase: 'failed', reason: 'recognition_unavailable' })
+    expect(claim.valid()).toBe(false)
+  })
+
+  it('is not minted when voice actions are off', () => {
+    const h = sealed()
+    h.config.enabled = false
+    h.session.refresh()
+    expect(h.session.claimTurn()).toBeNull()
+  })
+
+  it('a claim from an earlier turn stays dead when a later turn is sealed', () => {
+    const h = sealed()
+    const first = h.session.claimTurn()!
+    h.session.onSpeechFinished({ ok: true })
+    h.emit('armed')
+    h.emit('released')
+    const second = h.session.claimTurn()!
+    expect(first.valid()).toBe(false)
+    expect(second.valid()).toBe(true)
+  })
+})

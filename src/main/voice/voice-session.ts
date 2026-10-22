@@ -77,6 +77,23 @@ interface Turn {
   readonly id: string
   phase: Phase
   capturing: boolean
+  /** The recognized text of this turn has been handed to the action pipeline once. */
+  claimed: boolean
+}
+
+/**
+ * The right to act on one turn's recognized text (V03). It is minted once per turn, after speech was recognized
+ * and while the turn is still sealed, so the text came from this hardware-activated hold. It stays usable while
+ * the action pipeline works, even after the turn itself ended normally, and dies the moment anything revokes the
+ * owner session: sign-out, lock, suspend, quit, a renderer reset, a meeting starting, the feature being turned
+ * off, or a new hold. Single use: one turn yields at most one action.
+ */
+export interface VoiceTurnClaim {
+  readonly turnId: string
+  /** False once the turn was revoked or the claim was used. */
+  valid(): boolean
+  /** Take the single use. True exactly once, and only while valid. */
+  consume(): boolean
 }
 
 const START_WATCHDOG_MS = 5_000
@@ -133,6 +150,8 @@ export class VoiceSession {
   #reason: VoiceReason | null = null
   #turnIdShown: string | null = null
   #revision = 0
+  /** Bumped by every revocation. A claim made under an older epoch is dead. */
+  #epoch = 0
   #snapshot: VoiceStateSnapshot
   #capTimer: ReturnType<typeof setTimeout> | null = null
   #watchdog: ReturnType<typeof setTimeout> | null = null
@@ -153,6 +172,7 @@ export class VoiceSession {
     if (this.#disposed) return
     this.#enabled = this.deps.settings().enabled
     if (!this.#enabled) {
+      this.#epoch++
       this.#cancelTurn(null, 'disabled')
       this.deps.chord.refresh()
       this.#clearFlash()
@@ -172,6 +192,7 @@ export class VoiceSession {
 
   dispose(): void {
     if (this.#disposed) return
+    this.#epoch++
     this.#cancelTurn(null, 'disabled')
     this.#clearFlash()
     this.#clearIdle()
@@ -209,6 +230,29 @@ export class VoiceSession {
     else this.#set('idle', null)
   }
 
+  /**
+   * Claim the recognized text of the current sealed turn for the action pipeline. Null unless a hardware-activated
+   * turn is waiting on its recognition result and nothing claimed it yet, so text from any other source (the
+   * panel, a replay, a second delivery) never becomes a voice action.
+   */
+  claimTurn(): VoiceTurnClaim | null {
+    const turn = this.#turn
+    if (this.#disposed || !this.#enabled || !turn || turn.phase !== 'thinking' || turn.claimed) return null
+    turn.claimed = true
+    const epoch = this.#epoch
+    let used = false
+    const valid = (): boolean => !used && !this.#disposed && this.#enabled && this.#epoch === epoch
+    return {
+      turnId: turn.id,
+      valid,
+      consume: () => {
+        if (!valid()) return false
+        used = true
+        return true
+      }
+    }
+  }
+
   /** The renderer's report. It can only move the current turn toward failure; a stale turn id is ignored. */
   report(report: VoiceReport): void {
     const turn = this.#turn
@@ -223,18 +267,24 @@ export class VoiceSession {
 
   /** The authority hard-stopped (sign-out, lock, suspend, quit, renderer reset, window hidden, a lease timeout). */
   onHardStop(reason: InputSessionStopReason): void {
-    if (this.#stopping || !this.#turn) return
+    if (this.#stopping) return
+    // A hard stop also kills an action that is already past its turn (V03): nothing recognized earlier acts after it.
+    this.#epoch++
+    if (!this.#turn) return
     this.#cancelTurn(reasonForHardStop(reason), reason)
   }
 
   /** A meeting reservation was accepted. The authority already revoked any interactive lease. */
   onMeetingReserved(): void {
-    if (this.#stopping || !this.#turn) return
+    if (this.#stopping) return
+    this.#epoch++
+    if (!this.#turn) return
     this.#cancelTurn('meeting_started', 'meeting')
   }
 
   /** The renderer crashed, was destroyed or navigated away. */
   onRendererReset(): void {
+    this.#epoch++
     if (!this.#turn) return
     this.#cancelTurn('renderer_reset', 'renderer-reset', 'renderer-reset')
   }
@@ -256,11 +306,13 @@ export class VoiceSession {
         return
       case 'refused':
         // A hold during a meeting: explain, open nothing, touch no capture.
+        this.#epoch++
         if (this.#turn) this.#cancelTurn(null, 'superseded')
         this.#audit('refused', { reason: 'meeting_recording' })
         this.#flash('meeting_recording')
         return
       case 'revoked':
+        this.#epoch++
         if (this.#turn) this.#cancelTurn(reasonForRevoke(event.cause), `watcher-${event.cause}`)
         return
     }
@@ -286,6 +338,8 @@ export class VoiceSession {
   #begin(): void {
     if (this.#turn?.phase === 'listening') return
     if (this.#turn) this.#cancelTurn(null, 'superseded')
+    // A new hold supersedes whatever an earlier turn had in flight.
+    this.#epoch++
     this.#clearFlash()
     this.#clearIdle()
     const refusal = this.#refusal()
@@ -299,7 +353,7 @@ export class VoiceSession {
       this.#flash('not_ready')
       return
     }
-    const turn: Turn = { id: this.deps.newTurnId(), phase: 'listening', capturing: false }
+    const turn: Turn = { id: this.deps.newTurnId(), phase: 'listening', capturing: false, claimed: false }
     this.#turn = turn
     this.#audit('started')
     this.#set('listening', null)
@@ -329,6 +383,7 @@ export class VoiceSession {
   #cancelTurn(reason: VoiceReason | null, why: string, stopReason: 'cancelled' | 'renderer-reset' = 'cancelled'): void {
     const turn = this.#turn
     if (!turn) return
+    if (turn.claimed) this.#epoch++
     this.#audit('cancelled', { reason: reason ?? why })
     this.#stopping = true
     try {

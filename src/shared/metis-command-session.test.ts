@@ -27,13 +27,13 @@ describe('command proposal session', () => {
     expect(state).not.toHaveProperty('pending')
   })
 
-  it('selects only the first static candidate from a chained utterance', () => {
+  it('never proposes a chained utterance: one utterance is one action (V03 grammar), not a guessed first step', () => {
     const state = reduceMetisCommandSession(idleMetisCommandSession(), {
       type: 'transcript',
       text: 'open notes then open Arc',
       channel: 'command'
     })
-    expect(state.proposal?.request.id).toBe('desktop.open_notes')
+    expect(state.proposal).toBeUndefined()
   })
 
   it('revokes a proposal on cancel, stop, expiry, or a newer partial', () => {
@@ -55,7 +55,9 @@ describe('command proposal session', () => {
     expect(state.reason).toBe('cancelled')
 
     state = reduceMetisCommandSession(idleMetisCommandSession(), {
-      type: 'transcript', text: 'open notes', channel: 'command'
+      type: 'transcript',
+      text: 'open notes',
+      channel: 'command'
     })
     state = reduceMetisCommandSession(state, { type: 'transcript', text: 'open Arc', channel: 'command' })
     expect(state.proposal?.request.id).toBe('desktop.open_arc')
@@ -65,7 +67,9 @@ describe('command proposal session', () => {
 
   it('keeps wake and listening pill behavior without action authority', () => {
     let state = reduceMetisCommandSession(idleMetisCommandSession(), {
-      type: 'transcript', text: 'Métis', channel: 'command'
+      type: 'transcript',
+      text: 'Métis',
+      channel: 'command'
     })
     expect(state).toMatchObject({ active: true, pillCopy: METIS_PILL_HI, chime: 'single' })
     state = reduceMetisCommandSession(state, { type: 'tick_listening_copy' })

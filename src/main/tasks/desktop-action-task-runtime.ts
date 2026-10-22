@@ -1,5 +1,6 @@
 import { app } from 'electron'
 import { join } from 'node:path'
+import { createProductionDesktopAdapterDeps } from '../desktop-adapter-deps'
 import { executeDesktopAction } from '../desktop-adapters'
 import { authSessionGeneration } from '../auth'
 import { auditLog, mainLog } from '../logger'
@@ -16,7 +17,9 @@ import { createEncryptedTaskFileStore } from './encrypted-task-file-store'
  */
 export function createDesktopActionTaskBridge(): DesktopActionTaskBridge {
   return new DesktopActionTaskBridge({
-    execute: (request) => executeDesktopAction(request),
+    // The envelope main derived rides along so a verified outcome can carry a receipt bound to this dispatch.
+    execute: (request, envelope) =>
+      executeDesktopAction(request, { envelope, deps: createProductionDesktopAdapterDeps() }),
     store: createEncryptedTaskFileStore({
       file: () => join(app.getPath('userData'), 'desktop-action-tasks.bin'),
       encrypt: encryptSecret,
@@ -29,8 +32,17 @@ export function createDesktopActionTaskBridge(): DesktopActionTaskBridge {
   })
 }
 
-/** The executor and boot-recovery hook CommandConfirmation needs, backed by one production bridge. */
+let sharedDeps: Pick<CommandConfirmationDeps, 'execute' | 'recoverTasks'> | null = null
+
+/**
+ * The executor and boot-recovery hook CommandConfirmation needs, backed by ONE production bridge for the process.
+ * Voice actions dispatch through the same bridge, so a confirmed command and a spoken immediate run share one task
+ * archive and one set of uncertain tasks, and an uncertain task is never replayed by either.
+ */
 export function desktopActionTaskDeps(): Pick<CommandConfirmationDeps, 'execute' | 'recoverTasks'> {
-  const bridge = createDesktopActionTaskBridge()
-  return { execute: bridge.execute, recoverTasks: bridge.recover }
+  if (!sharedDeps) {
+    const bridge = createDesktopActionTaskBridge()
+    sharedDeps = { execute: bridge.execute, recoverTasks: bridge.recover }
+  }
+  return sharedDeps
 }

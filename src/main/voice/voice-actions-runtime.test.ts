@@ -469,3 +469,87 @@ describe('createCommandMicAvailability (the engine-decoupled availability main s
     expect(gate.availability()).toEqual({ ok: false, reason: 'policy_blocked' })
   })
 })
+
+describe("recognized text (V03): only a voice turn's text reaches the action pipeline", () => {
+  const sealedTurn = (h: ReturnType<typeof setup>) => {
+    h.runtime.refresh()
+    h.emit('armed')
+    h.state.lease = lease('push-to-talk', 'command')
+    h.emit('released')
+  }
+
+  it("hands a voice turn's text and a claim to the pipeline and keeps it from the command panel", () => {
+    const handle = vi.fn()
+    const h = setup({ turns: { handle } })
+    sealedTurn(h)
+    expect(h.runtime.onTranscript('open notes')).toBe(true)
+    expect(handle).toHaveBeenCalledTimes(1)
+    expect(handle.mock.calls[0][0]).toBe('open notes')
+    expect(handle.mock.calls[0][1]).toMatchObject({ turnId: expect.any(String) })
+    expect(handle.mock.calls[0][1].valid()).toBe(true)
+  })
+
+  it('text from any other capture (the panel, an ambient lease, no lease) is not a voice action', () => {
+    const handle = vi.fn()
+    for (const other of [
+      null,
+      lease('deliberate-talk', 'command'),
+      lease('wake', 'conversation'),
+      lease('push-to-talk', 'dictation')
+    ]) {
+      const h = setup({ turns: { handle } })
+      h.runtime.refresh()
+      h.state.lease = other
+      expect(h.runtime.onTranscript('open notes')).toBe(false)
+    }
+    expect(handle).not.toHaveBeenCalled()
+  })
+
+  it('a second delivery for the same turn is consumed and dropped, never routed twice or to the panel', () => {
+    const handle = vi.fn()
+    const h = setup({ turns: { handle } })
+    sealedTurn(h)
+    expect(h.runtime.onTranscript('open notes')).toBe(true)
+    expect(h.runtime.onTranscript('open notes')).toBe(true)
+    expect(handle).toHaveBeenCalledTimes(1)
+  })
+
+  it('text for a turn that is still listening or already cancelled is dropped, not given to the panel', () => {
+    const handle = vi.fn()
+    const h = setup({ turns: { handle } })
+    h.runtime.refresh()
+    h.emit('armed')
+    h.state.lease = lease('push-to-talk', 'command')
+    expect(h.runtime.onTranscript('open notes')).toBe(true) // listening: nothing sealed yet
+    h.emit('aborted')
+    h.runtime.onTranscript('open notes') // the voice lease was stopped with the turn, so there is nothing to claim
+    expect(handle).not.toHaveBeenCalled()
+  })
+
+  it('a throwing pipeline never reaches the capture, and a missing pipeline drops the text', () => {
+    const h = setup({
+      turns: {
+        handle: () => {
+          throw new Error('boom')
+        }
+      }
+    })
+    sealedTurn(h)
+    expect(() => h.runtime.onTranscript('open notes')).not.toThrow()
+    const bare = setup()
+    sealedTurn(bare)
+    expect(bare.runtime.onTranscript('open notes')).toBe(true)
+  })
+
+  it('the claim dies on a lock that arrives after the turn ended', () => {
+    const handle = vi.fn()
+    const h = setup({ turns: { handle } })
+    sealedTurn(h)
+    h.runtime.onTranscript('open notes')
+    const claim = handle.mock.calls[0][1]
+    h.runtime.onSpeechFinished('a'.repeat(48), { ok: true })
+    expect(claim.valid()).toBe(true)
+    h.runtime.onHardStop('screen-locked')
+    expect(claim.valid()).toBe(false)
+  })
+})

@@ -23,7 +23,7 @@ import { auditLog } from '../logger'
 import type { ChordWatcherEvent } from './chord-watcher'
 import { createVoiceChordWiring, type VoiceChordWiring } from './chord-wiring'
 import { commandSpeechAvailability, createParakeetPresence } from './voice-availability'
-import { VoiceSession, type VoiceAuditPhase } from './voice-session'
+import { VoiceSession, type VoiceAuditPhase, type VoiceTurnClaim } from './voice-session'
 
 interface WindowLike {
   isDestroyed(): boolean
@@ -56,6 +56,11 @@ export interface VoiceActionsRuntimeDeps {
   speechBusy(): boolean
   /** The hold-chord wiring (V01). Defaults to the real one; tests and the QA FIFO source (V08) may replace it. */
   chord?: VoiceChordWiring
+  /**
+   * What to do with a recognized voice turn (V03): route it to an action, a confirmation or the Ask path. Absent
+   * only in tests that do not exercise actions; the recognized text is then dropped, never given to anything else.
+   */
+  turns?: { handle(text: string, claim: VoiceTurnClaim): void }
   /** Defaults to the `voice.turn` audit event (phase and machine reason only). */
   audit?(phase: VoiceAuditPhase, detail?: { reason?: string }): void
   newTurnId?(): string
@@ -74,6 +79,12 @@ export interface VoiceActionsRuntime {
   onHardStop(reason: InputSessionStopReason): void
   onMeetingReserved(): void
   onSpeechFinished(sessionId: string, result: CommandSpeechResult): void
+  /**
+   * Recognized text from the command capture. True means a voice turn owns it (it was handed to the action pipeline,
+   * or dropped because it could not be claimed) and the legacy command panel must not see it. False means it is not
+   * a voice turn's text and the caller keeps its own path.
+   */
+  onTranscript(text: string): boolean
   onRendererReset(): void
   bindWebContents(contents: RendererContentsLike): void
   /** A renderer report (validated here). Applies only to the current turn and only toward failure. */
@@ -176,6 +187,18 @@ export function createVoiceActionsRuntime(deps: VoiceActionsRuntimeDeps): VoiceA
     onSpeechFinished(sessionId, result) {
       const lease = deps.authority.activeLease
       if (isVoiceLease(lease) && lease.sessionId === sessionId) session.onSpeechFinished(result)
+    },
+    onTranscript(text) {
+      if (!isVoiceLease(deps.authority.activeLease)) return false
+      const claim = session.claimTurn()
+      if (claim) {
+        try {
+          deps.turns?.handle(text, claim)
+        } catch {
+          /* the pipeline reports its own failures; a throw must not reach the capture */
+        }
+      }
+      return true
     },
     onRendererReset: () => session.onRendererReset(),
     bindWebContents(contents) {

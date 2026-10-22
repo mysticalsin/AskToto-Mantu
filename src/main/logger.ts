@@ -395,6 +395,8 @@ export type AuditEvent =
   | 'meeting.journal.recovery'
   // V02: one voice turn (phase and machine reason only, never speech, text, a title or a query).
   | 'voice.turn'
+  // V03: one voice action decision and its outcome (action id, class, source, status; never a title, query or words).
+  | 'voice.action'
   | 'task.recovered'
   | 'task.effect_uncertain'
   | 'task.dispatch_denied'

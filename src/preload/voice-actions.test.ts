@@ -41,6 +41,19 @@ describe('voice actions preload bridge', () => {
     expect(ends).toEqual([{ turnId: 't1', cancelled: false }])
   })
 
+  it('delivers a valid recognized question and drops anything malformed or oversized (V03)', () => {
+    const { ipc, push } = fakeIpc()
+    const api = createVoiceActionsPreloadApi(ipc as never).voiceActions
+    const asks: unknown[] = []
+    api.onAsk((v) => asks.push(v))
+    push(VOICE_ACTIONS_IPC.ask, { turnId: 't1', text: 'what is the capital of Portugal' })
+    push(VOICE_ACTIONS_IPC.ask, { turnId: 't1', text: 'x', action: 'desktop.open_notes' })
+    push(VOICE_ACTIONS_IPC.ask, { turnId: 't1', text: '' })
+    push(VOICE_ACTIONS_IPC.ask, { turnId: 't1', text: 'x'.repeat(2_001) })
+    push(VOICE_ACTIONS_IPC.ask, 'nope')
+    expect(asks).toEqual([{ turnId: 't1', text: 'what is the capital of Portugal' }])
+  })
+
   it('unsubscribes, and a throwing subscriber does not break delivery', () => {
     const { ipc, push, listeners } = fakeIpc()
     const api = createVoiceActionsPreloadApi(ipc as never).voiceActions
@@ -78,7 +91,7 @@ describe('voice actions preload bridge', () => {
   it('exposes report as the only renderer-to-main call, and nothing that starts a turn or mints an activation', () => {
     const { ipc } = fakeIpc()
     const api = createVoiceActionsPreloadApi(ipc as never).voiceActions
-    expect(Object.keys(api).sort()).toEqual(['getState', 'onBegin', 'onEnd', 'onState', 'report'])
+    expect(Object.keys(api).sort()).toEqual(['getState', 'onAsk', 'onBegin', 'onEnd', 'onState', 'report'])
     void api.report({ turnId: 't1', phase: 'capturing' })
     expect(ipc.invoke).toHaveBeenCalledWith(VOICE_ACTIONS_IPC.report, { turnId: 't1', phase: 'capturing' })
   })

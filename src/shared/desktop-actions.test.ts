@@ -25,13 +25,21 @@ describe('Cap2 desktop adapter contracts', () => {
   })
 
   it('fingerprints create_note + google_search by args', () => {
-    expect(
-      desktopActionFingerprint({ id: 'desktop.create_note', args: { title: 'hello' } })
-    ).toBe('desktop.create_note:hello')
-    expect(
-      desktopActionFingerprint({ id: 'desktop.google_search', args: { q: 'Norbert Wiener' } })
-    ).toBe('desktop.google_search:Norbert Wiener')
+    expect(desktopActionFingerprint({ id: 'desktop.create_note', args: { title: 'hello' } })).toBe(
+      'desktop.create_note:hello'
+    )
+    expect(desktopActionFingerprint({ id: 'desktop.google_search', args: { q: 'Norbert Wiener' } })).toBe(
+      'desktop.google_search:Norbert Wiener'
+    )
     expect(desktopActionFingerprint({ id: 'desktop.open_notes', args: {} })).toBe('desktop.open_notes')
+  })
+
+  it('fingerprints a named browser, so Arc and the default browser are different proposals', () => {
+    expect(desktopActionFingerprint({ id: 'desktop.google_search', args: { q: 'cats', browser: 'arc' } })).toBe(
+      'desktop.google_search:cats@arc'
+    )
+    expect(desktopActionFingerprint({ id: 'desktop.open_x', args: { browser: 'arc' } })).toBe('desktop.open_x@arc')
+    expect(desktopActionFingerprint({ id: 'desktop.open_x', args: {} })).toBe('desktop.open_x')
   })
 
   it('photo booth must never reach decide/Jev', () => {

@@ -15,12 +15,16 @@ export const DESKTOP_ADAPTER_IDS = [
 
 export type DesktopAdapterId = (typeof DESKTOP_ADAPTER_IDS)[number]
 
+/** The only browser a request can name. Absent means the system default browser: no silent substitution either way. */
+export type DesktopBrowser = 'arc'
+
 export type DesktopActionArgs = {
   'desktop.open_notes': Record<string, never>
-  'desktop.create_note': { title: string }
+  /** `title` is at most 120 characters and `body` at most 2000 (src/shared/voice/catalog.ts validates them). */
+  'desktop.create_note': { title: string; body?: string }
   'desktop.open_arc': Record<string, never>
-  'desktop.google_search': { q: string }
-  'desktop.open_x': Record<string, never>
+  'desktop.google_search': { q: string; browser?: DesktopBrowser }
+  'desktop.open_x': { browser?: DesktopBrowser }
   'desktop.photo_booth_capture': Record<string, never>
 }
 
@@ -58,8 +62,8 @@ export const WINDOWS_DESKTOP_EQUIVALENTS: Record<DesktopAdapterId, { preferred: 
     note: 'Mac Notes has no silent Win twin; fail visibly if Sticky Notes / Notepad unavailable.'
   },
   'desktop.create_note': {
-    preferred: 'Sticky Notes new note / Notepad new file titled hello',
-    note: 'Title must be exactly hello when requested; no silent rename.'
+    preferred: 'A .txt file in Documents\\Métis Notes, opened in Notepad',
+    note: 'Windows has no Notes twin: the note is a text file named from the title (unsafe characters removed), never overwriting an existing file.'
   },
   'desktop.open_arc': {
     preferred: 'Arc (if installed)',
@@ -67,7 +71,7 @@ export const WINDOWS_DESKTOP_EQUIVALENTS: Record<DesktopAdapterId, { preferred: 
   },
   'desktop.google_search': {
     preferred: 'Default browser Google search',
-    note: 'Open Google search URL; if Arc was the Mac target, Win uses default https handler only after disclosing Arc absence for open_arc.'
+    note: 'Open the Google search URL in the default browser. Naming Arc is refused on Windows, never swapped for another browser.'
   },
   'desktop.open_x': {
     preferred: 'Default browser → https://x.com',
@@ -86,7 +90,9 @@ export function isDesktopAdapterId(raw: unknown): raw is DesktopAdapterId {
 /** Fingerprint for idempotency / mid-sentence commit tracking. */
 export function desktopActionFingerprint(req: DesktopActionRequest): string {
   if (req.id === 'desktop.create_note') return `${req.id}:${req.args.title}`
-  if (req.id === 'desktop.google_search') return `${req.id}:${req.args.q}`
+  if (req.id === 'desktop.google_search')
+    return `${req.id}:${req.args.q}${req.args.browser ? `@${req.args.browser}` : ''}`
+  if (req.id === 'desktop.open_x' && req.args.browser) return `${req.id}@${req.args.browser}`
   return req.id
 }
 

@@ -283,3 +283,72 @@ describe('CommandConfirmation task recovery', () => {
     await vi.waitFor(() => expect(logger.warn).toHaveBeenCalled())
   })
 })
+
+describe('CommandConfirmation immediate-run gate (V03: the confirmation inputs minus owner focus)', () => {
+  it('reads the same live inputs the confirmation policy reads, and focus is not one of them', () => {
+    const { confirmation, state } = createConfirmation()
+    initialize(confirmation, new FakePowerMonitor())
+    state.owner!.focused = false
+    const gate = confirmation.immediateRunGate()
+    expect(gate).toMatchObject({
+      authenticated: true,
+      listenEntitled: true,
+      ownerPresent: true,
+      ownerVisible: true,
+      onboardingExclusive: false,
+      lifecycleHooksReady: true
+    })
+    expect(Object.keys(gate)).not.toContain('ownerFocused')
+  })
+
+  it('follows each input as it changes', () => {
+    const { confirmation, state } = createConfirmation()
+    expect(confirmation.immediateRunGate().lifecycleHooksReady).toBe(false) // hooks not registered yet
+    initialize(confirmation, new FakePowerMonitor())
+    state.authenticated = false
+    state.listenEntitled = false
+    state.onboardingExclusive = true
+    state.owner = { destroyed: false, visible: false, focused: true }
+    expect(confirmation.immediateRunGate()).toMatchObject({
+      authenticated: false,
+      listenEntitled: false,
+      onboardingExclusive: true,
+      ownerPresent: true,
+      ownerVisible: false
+    })
+    state.owner = { destroyed: true, visible: true, focused: true }
+    expect(confirmation.immediateRunGate()).toMatchObject({
+      ownerPresent: false,
+      ownerVisible: false,
+      ownerWebContentsId: null
+    })
+    state.owner = null
+    expect(confirmation.immediateRunGate()).toMatchObject({ ownerPresent: false, ownerVisible: false })
+  })
+
+  it('a failed lifecycle hook leaves the gate closed', () => {
+    const { confirmation } = createConfirmation()
+    initialize(confirmation, new FakePowerMonitor('lock-screen'))
+    expect(confirmation.immediateRunGate().lifecycleHooksReady).toBe(false)
+  })
+
+  it('names the owner window id only when the window exposes one', () => {
+    const state = { id: 17 as number | undefined }
+    const confirmation = new CommandConfirmation({
+      execute: vi.fn(),
+      isAuthenticated: () => true,
+      hasListenEntitlement: () => true,
+      getOwner: () => ({
+        isDestroyed: () => false,
+        isVisible: () => true,
+        isFocused: () => false,
+        webContents: { id: state.id, send: vi.fn() }
+      }),
+      isOnboardingExclusive: () => false,
+      audit: vi.fn()
+    })
+    expect(confirmation.immediateRunGate().ownerWebContentsId).toBe(17)
+    state.id = undefined
+    expect(confirmation.immediateRunGate().ownerWebContentsId).toBeNull()
+  })
+})

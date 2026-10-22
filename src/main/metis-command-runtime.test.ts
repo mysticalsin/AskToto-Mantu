@@ -11,10 +11,10 @@ describe('command runtime proposals', () => {
     expect(execute).not.toHaveBeenCalled()
   })
 
-  it('keeps only the first allowlisted candidate from a chained utterance', () => {
+  it('never proposes a chained utterance: one utterance is one action, not a guessed first step', () => {
     const runtime = createMetisCommandRuntime({ onState: () => {} })
     runtime.ingestTranscript('open notes then open Arc', 'command')
-    expect(runtime.getState().proposal?.request.id).toBe('desktop.open_notes')
+    expect(runtime.getState().proposal).toBeUndefined()
   })
 
   it('expires and revokes proposals on reset or stop', async () => {

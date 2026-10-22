@@ -1,9 +1,11 @@
 import type { IpcRenderer } from 'electron'
 import {
   VOICE_ACTIONS_IPC,
+  VoiceAskSchema,
   VoiceBeginSchema,
   VoiceEndSchema,
   VoiceStateSnapshotSchema,
+  type VoiceAsk,
   type VoiceBegin,
   type VoiceEnd,
   type VoiceReport,
@@ -24,6 +26,8 @@ export function createVoiceActionsPreloadApi(ipc: Pick<IpcRenderer, 'on' | 'remo
     onState(cb: (state: VoiceStateSnapshot) => void): Unsub
     onBegin(cb: (turn: VoiceBegin) => void): Unsub
     onEnd(cb: (turn: VoiceEnd) => void): Unsub
+    /** A recognized question for the typed Ask router. Never an action: actions never reach the renderer as text. */
+    onAsk(cb: (ask: VoiceAsk) => void): Unsub
     report(report: VoiceReport): Promise<unknown>
   }
 } {
@@ -55,6 +59,7 @@ export function createVoiceActionsPreloadApi(ipc: Pick<IpcRenderer, 'on' | 'remo
       onState: (cb) => subscribe(VOICE_ACTIONS_IPC.state, parser(VoiceStateSnapshotSchema), cb),
       onBegin: (cb) => subscribe(VOICE_ACTIONS_IPC.begin, parser(VoiceBeginSchema), cb),
       onEnd: (cb) => subscribe(VOICE_ACTIONS_IPC.end, parser(VoiceEndSchema), cb),
+      onAsk: (cb) => subscribe(VOICE_ACTIONS_IPC.ask, parser(VoiceAskSchema), cb),
       report: (report) => ipc.invoke(VOICE_ACTIONS_IPC.report, report)
     }
   }

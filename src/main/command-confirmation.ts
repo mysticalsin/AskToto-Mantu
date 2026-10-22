@@ -1,11 +1,17 @@
 import { IPC } from '@shared/ipc'
+import type { VoiceImmediateRunInput } from '@shared/voice/voice-action-policy'
 import { CommandControl, commandConfirmationPolicyAllows, type CommandExecutor } from './command-control'
 
 type CommandOwner = {
   isDestroyed(): boolean
   isVisible(): boolean
   isFocused(): boolean
-  webContents: { send(channel: string, ...args: unknown[]): void }
+  webContents: { id?: number; send(channel: string, ...args: unknown[]): void }
+}
+
+/** What an immediate voice run asks main about right now: the confirmation policy's inputs, without owner focus. */
+export type CommandImmediateRunGate = Omit<VoiceImmediateRunInput, 'turnCurrent' | 'meetingReserved'> & {
+  ownerWebContentsId: number | null
 }
 
 export type CommandConfirmationDeps = {
@@ -30,6 +36,7 @@ type CommandConfirmationLogger = Pick<typeof import('./logger').mainLog, 'warn' 
 export class CommandConfirmation extends CommandControl {
   private readonly lifecycleState: { hooksReady: boolean }
   private readonly recoverTasks: (() => Promise<unknown>) | undefined
+  private readonly readImmediateRunGate: () => CommandImmediateRunGate
 
   constructor(deps: CommandConfirmationDeps) {
     const lifecycleState = { hooksReady: false }
@@ -58,6 +65,25 @@ export class CommandConfirmation extends CommandControl {
     })
     this.lifecycleState = lifecycleState
     this.recoverTasks = deps.recoverTasks
+    this.readImmediateRunGate = () => {
+      const owner = deps.getOwner()
+      const live = owner !== null && !owner.isDestroyed()
+      const id = live ? owner.webContents.id : undefined
+      return {
+        authenticated: deps.isAuthenticated(),
+        listenEntitled: deps.hasListenEntitlement(),
+        ownerPresent: live,
+        ownerVisible: live && owner.isVisible(),
+        onboardingExclusive: deps.isOnboardingExclusive(),
+        lifecycleHooksReady: lifecycleState.hooksReady,
+        ownerWebContentsId: typeof id === 'number' ? id : null
+      }
+    }
+  }
+
+  /** The inputs an immediate voice run is gated on, read live. Focus is deliberately not one of them. */
+  immediateRunGate(): CommandImmediateRunGate {
+    return this.readImmediateRunGate()
   }
 
   initialize(
