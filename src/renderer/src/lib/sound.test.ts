@@ -1,7 +1,17 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { CLICK_BODY_HZ, CLICK_DURATION_S, CLICK_OVERTONE_RATIO, CLICK_PEAK, playClick, setSoundsEnabled } from './sound'
+import {
+  CLICK_BODY_HZ,
+  CLICK_DURATION_S,
+  CLICK_OVERTONE_RATIO,
+  CLICK_PEAK,
+  LISTEN_BODY_HZ,
+  LISTEN_DURATION_S,
+  LISTEN_PEAK,
+  playClick,
+  setSoundsEnabled
+} from './sound'
 
 describe('playClick tactile tap', () => {
   it('is not a lone 880Hz sine — body stays under 500Hz with a short dark envelope', () => {
@@ -26,5 +36,14 @@ describe('playClick tactile tap', () => {
     setSoundsEnabled(false)
     expect(() => playClick()).not.toThrow()
     setSoundsEnabled(true)
+  })
+})
+
+describe('voice actions listen cue (V05)', () => {
+  it('is a soft dark tap under 500 Hz, quieter and shorter than a chime', () => {
+    expect(LISTEN_BODY_HZ).toBeLessThan(500)
+    expect(LISTEN_BODY_HZ).toBeLessThanOrEqual(CLICK_BODY_HZ)
+    expect(LISTEN_DURATION_S).toBeLessThanOrEqual(0.12)
+    expect(LISTEN_PEAK).toBeLessThan(CLICK_PEAK)
   })
 })

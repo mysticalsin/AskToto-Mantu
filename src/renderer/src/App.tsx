@@ -36,6 +36,7 @@ import { CloudSpeechConsentPrompt } from './components/CloudSpeechConsentPrompt'
 import { QuickActions, type QuickKind } from './components/QuickActions'
 import { ConfirmSheet } from './ui/ConfirmSheet'
 import { useAsk, useAutoResize, useSettings, useAuth, type AnswerState } from './state'
+import { VoiceActionsLayer } from './components/voice/VoiceActionsLayer'
 import { useWindowDrag } from './lib/window-drag'
 import { noteCrashContext } from './lib/crash-context'
 import { useTransitionView } from './lib/history-transition'
@@ -4150,30 +4151,24 @@ export function App(): JSX.Element {
     ) : null
 
   return (
-    // Root drag is withheld while minimized: ControlPill (rendered below) arms its OWN drag instance on
-    // its own narrower pill div, and arming both here and there would double every moveBy delta.
+    // Root drag is withheld while minimized: ControlPill arms its own drag, and both would double every move.
     <div
       ref={setRoot}
       {...(minimized ? {} : windowDrag)}
-      // Auto-hide (MQA-274): pointer-enter reveals the full bar from the peek strip; pointer-leave arms
-      // the grace collapse back to peek. No-ops unless auto-hide is actually in effect (see the reducer).
+      // Auto-hide (MQA-274): enter reveals the bar from the peek strip, leave arms the grace collapse (reducer).
       onMouseEnter={onOverlayPointerEnter}
       onMouseLeave={onOverlayPointerLeave}
       data-settings-surface={overlayShowsSettingsSheet(view, minimized) || undefined}
       className={[
         'relative flex w-full flex-col gap-2',
-        // Settings fills the 880×800 surface. Without h-full the 480-era panel grew past the
-        // window and the last rows were clipped (Tony live: M / tray open, cannot scroll down).
-        // Circle rest must not keep h-full or the hug becomes a Settings-tall gray slab.
+        // Settings fills the 880×800 surface (without h-full its last rows clipped); circle rest must not keep
+        // h-full or the hug becomes a Settings-tall gray slab.
         overlayShowsSettingsSheet(view, minimized) ? 'h-full min-h-0' : '',
-        // The right-edge drawer is absolutely positioned. Its host must fill the native 360×560
-        // sidecar window or the root will hug a normal-flow notice and clip the drawer to that notice.
+        // The absolutely positioned right-edge drawer needs its host to fill the 360×560 sidecar window.
         rightEdgeDockVisible ? 'h-full min-h-0' : '',
-        // Stealth (contentProtection) paints a multi-colour halo that spills ~34px past the widget via
-        // box-shadow (see .aw-hidden-rainbow). The overlay window hugs content height to ~2px, so without
-        // extra room the halo would be clipped at the window edge into a flat band. Widen the transparent
-        // margin only while invisible; the resting/visible overlay keeps its tight p-1.5. Settings is
-        // opaque glass, so skip the 20px stealth pad that crushed the scroll surface.
+        // Stealth (contentProtection) paints a halo ~34px past the widget (.aw-hidden-rainbow) that the hugging
+        // window would clip into a flat band, so the transparent margin widens only while invisible; Settings is
+        // opaque glass and skips the 20px stealth pad.
         overlayPeeked
           ? 'p-0'
           : rightEdgeDockVisible
@@ -4581,6 +4576,11 @@ export function App(): JSX.Element {
           )}
         </>
       )}
+      <VoiceActionsLayer
+        placement={rightEdgeDockVisible ? 'right-edge' : 'top-center'}
+        soundCues={settings?.soundCues ?? true}
+        hintsShown={settings?.voiceActions?.firstUseHintsShown ?? 0}
+      />
     </div>
   )
 }

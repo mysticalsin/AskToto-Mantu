@@ -1,0 +1,147 @@
+/* Voice actions pill (V05, design §1.3–§1.6). Tokens only (tokens.css); compositor-only motion (opacity and
+   transform). The pill is a status, never a dialog: no focus ring, no pointer target beyond itself. */
+.voice-layer {
+  display: flex;
+  pointer-events: none;
+}
+/* Under the bar or island: in the overlay root's flow, centered, so the window grows to fit it. */
+.voice-layer--top-center {
+  justify-content: center;
+  padding-top: 2px;
+}
+/* Beside the right-edge dock: a capsule leaning out of the dock's vertical center, 12 px inset. */
+.voice-layer--right-edge {
+  position: fixed;
+  top: 50%;
+  right: 12px;
+  transform: translateY(-50%);
+  z-index: 70;
+}
+.voice-pill {
+  pointer-events: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  max-width: min(420px, 92vw);
+  min-height: 36px;
+  padding: 8px 14px 8px 12px;
+  border-radius: 999px;
+  background: var(--glass-fill-elevated);
+  border: 1px solid var(--glass-tint-white);
+  box-shadow: var(--shadow-panel);
+  backdrop-filter: blur(18px) saturate(1.3);
+  color: var(--color-ink);
+  font-size: 13px;
+  line-height: 1.25;
+  /* Faster than the 360 ms overlay spring: a hold must feel instant. Same geometry as the peek, no scale. */
+  animation: overlay-peek-in 150ms var(--ease-spring) both;
+  transition: width var(--duration-panel) var(--ease-spring);
+}
+.voice-pill--leaving {
+  animation: voice-pill-out 280ms var(--ease-spring) both;
+}
+@keyframes voice-pill-out {
+  from {
+    opacity: 1;
+    transform: translateY(0);
+  }
+  to {
+    opacity: 0;
+    transform: translateY(-8px);
+  }
+}
+.voice-pill__text {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+}
+.voice-pill__title {
+  overflow: hidden;
+  font-weight: 500;
+  letter-spacing: -0.005em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.voice-pill__detail {
+  overflow: hidden;
+  color: var(--color-ink-3);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.voice-pill__title,
+.voice-pill__detail {
+  animation: voice-pill-text-in 150ms var(--ease-spring) 60ms both;
+}
+@keyframes voice-pill-text-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+/* Listening: three bars breathing out of phase. A liveness signal, not a level meter. */
+.voice-pill__bars {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 2px;
+  width: 14px;
+  height: 14px;
+}
+.voice-pill__bars > span {
+  width: 3px;
+  height: 100%;
+  border-radius: 2px;
+  background: var(--color-accent-2);
+  transform-origin: center;
+  animation: voice-bar 900ms var(--ease-spring) infinite;
+}
+.voice-pill__bars > span:nth-child(2) {
+  animation-delay: 150ms;
+}
+.voice-pill__bars > span:nth-child(3) {
+  animation-delay: 300ms;
+}
+@keyframes voice-bar {
+  0%,
+  100% {
+    transform: scaleY(0.35);
+  }
+  50% {
+    transform: scaleY(1);
+  }
+}
+.voice-pill__ring {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 999px;
+}
+.voice-pill__check,
+.voice-pill__info {
+  flex: none;
+  color: var(--color-accent-2);
+}
+.voice-pill__check path {
+  stroke-dasharray: 14;
+  stroke-dashoffset: 14;
+  animation: voice-check-draw 150ms var(--ease-spring) forwards;
+}
+@keyframes voice-check-draw {
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  /* Movement is zeroed by the global rule; the listening bars keep an opacity-only breathe (liveness + consent). */
+  .voice-pill__bars > span {
+    transform: scaleY(0.7);
+    animation: asktoto-loading-pulse 1.4s ease-in-out infinite !important;
+    animation-duration: 1.4s !important;
+  }
+  .voice-pill__check path {
+    stroke-dashoffset: 0;
+  }
+}

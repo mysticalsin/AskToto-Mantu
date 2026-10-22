@@ -3,7 +3,7 @@
  * Each cue spins up a short-lived AudioContext and closes it right after, so nothing stays resident.
  * Call sites gate on the user's `soundCues` setting; this module just plays when asked.
  */
-type Cue = 'ready' | 'send' | 'error'
+type Cue = 'ready' | 'send' | 'error' | 'listen'
 
 // Master gate for ALL interface sounds (click feedback + cues). Synced from the `uiSounds` setting by the
 // app; when off, every sound in this module stays silent regardless of call site. Default on.
@@ -27,8 +27,7 @@ export function playClick(): void {
   if (!soundsOn) return
   try {
     const AudioCtx =
-      window.AudioContext ||
-      (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext
+      window.AudioContext || (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext
     if (!AudioCtx) return
     if (!clickCtx) clickCtx = new AudioCtx()
     const ctx = clickCtx
@@ -75,12 +74,16 @@ export function playClick(): void {
   }
 }
 
+/** Voice actions "I'm listening" tap (V05): softer and lower than playClick, body under 500 Hz, no sine beep. */
+export const LISTEN_BODY_HZ = 170
+export const LISTEN_DURATION_S = 0.09
+export const LISTEN_PEAK = 0.022
+
 export function playCue(kind: Cue): void {
   if (!soundsOn) return
   try {
     const AudioCtx =
-      window.AudioContext ||
-      (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext
+      window.AudioContext || (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext
     if (!AudioCtx) return
     const ctx = new AudioCtx()
     const t0 = ctx.currentTime
@@ -98,7 +101,19 @@ export function playCue(kind: Cue): void {
       osc.stop(t0 + start + dur + 0.02)
     }
 
-    if (kind === 'ready') {
+    if (kind === 'listen') {
+      // A dark, rounded tap: triangle body with a slow attack, so the hold reads as "on" without a beep.
+      const body = ctx.createOscillator()
+      const gain = ctx.createGain()
+      body.type = 'triangle'
+      body.frequency.value = LISTEN_BODY_HZ
+      gain.gain.setValueAtTime(0.0001, t0)
+      gain.gain.linearRampToValueAtTime(LISTEN_PEAK, t0 + 0.012)
+      gain.gain.exponentialRampToValueAtTime(0.0001, t0 + LISTEN_DURATION_S)
+      body.connect(gain).connect(ctx.destination)
+      body.start(t0)
+      body.stop(t0 + LISTEN_DURATION_S + 0.02)
+    } else if (kind === 'ready') {
       // soft two-note rise — "your answer is ready"
       tone(659.25, 0, 0.13, 0.05)
       tone(987.77, 0.075, 0.17, 0.045)
