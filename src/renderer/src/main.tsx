@@ -5,6 +5,7 @@ import './styles.css'
 import { App } from './App'
 import { useAutoResize } from './state'
 import { crashReport } from './lib/crash-context'
+import { createCrashReportLimiter, createReloadBudget, installGlobalCrashHandlers } from './lib/renderer-crash-guard'
 
 /**
  * The boundary's fallback replaces the ENTIRE App tree — including App's useAutoResize instance, the
@@ -29,9 +30,7 @@ function CrashCard({ message, onReload }: { message: string; onReload: () => voi
     // collapses out of it and gets clipped — padding is included. Same pattern as App's root.
     <div ref={setRoot} className="p-1.5">
       <div className="glass-strong flex flex-col items-center gap-3 rounded-2xl p-6 text-center">
-        <div className="font-ui text-[14px] font-semibold text-[color:var(--color-ink)]">
-          Métis hit a snag
-        </div>
+        <div className="font-ui text-[14px] font-semibold text-[color:var(--color-ink)]">Métis hit a snag</div>
         <div className="max-w-[420px] text-[12px] text-[color:var(--color-ink-2)]">
           {message || 'Something went wrong rendering the overlay.'}
         </div>
@@ -50,6 +49,9 @@ function CrashCard({ message, onReload }: { message: string; onReload: () => voi
 /** Stops a render throw from white-screening the always-on overlay; offers a one-click recover. */
 class ErrorBoundary extends Component<{ children: ReactNode }, { error: Error | null }> {
   state: { error: Error | null } = { error: null }
+  // A remount re-renders the same state, so a deterministic throw would loop on Reload; the third remount
+  // inside a minute becomes a real renderer reload (D10-8).
+  private readonly reloadBudget = createReloadBudget()
   static getDerivedStateFromError(error: Error): { error: Error } {
     return { error }
   }
@@ -60,7 +62,14 @@ class ErrorBoundary extends Component<{ children: ReactNode }, { error: Error | 
   // without that flag or the renderer devtools open.
   componentDidCatch(error: Error, info: { componentStack?: string | null }): void {
     // eslint-disable-next-line no-console
-    console.error('[error-boundary]', error?.message, '\nstack:', error?.stack, '\ncomponentStack:', info?.componentStack)
+    console.error(
+      '[error-boundary]',
+      error?.message,
+      '\nstack:',
+      error?.stack,
+      '\ncomponentStack:',
+      info?.componentStack
+    )
     try {
       // .catch, not just the surrounding try: window.toto.reportCrash returns a promise (ipcRenderer.invoke) —
       // a rejection (e.g. the main handler itself throwing) surfaces as an unhandled rejection, not a sync throw.
@@ -69,11 +78,23 @@ class ErrorBoundary extends Component<{ children: ReactNode }, { error: Error | 
       /* preload bridge itself may be what broke — still show the card */
     }
   }
+  private reload(): void {
+    if (this.reloadBudget() === 'reload') window.location.reload()
+    else this.setState({ error: null })
+  }
   render(): ReactNode {
     if (!this.state.error) return this.props.children
-    return <CrashCard message={this.state.error.message} onReload={() => this.setState({ error: null })} />
+    return <CrashCard message={this.state.error.message} onReload={() => this.reload()} />
   }
 }
+
+// Errors outside React's render path (event handlers, timers, rejected IPC promises) never reach the
+// boundary. Report them to main, rate-limited, without replacing a working overlay with a crash card.
+installGlobalCrashHandlers(
+  window,
+  (report) => void window.toto.reportCrash(report).catch(() => {}),
+  createCrashReportLimiter()
+)
 
 createRoot(document.getElementById('root') as HTMLElement).render(
   <React.StrictMode>

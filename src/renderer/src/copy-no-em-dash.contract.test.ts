@@ -1,6 +1,7 @@
-import { existsSync, readdirSync, readFileSync } from 'node:fs'
+import { existsSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
+import { readModuleSource } from '../../test-helpers/module-source'
 
 /**
  * User-facing copy rule (DESIGN.md, bank-grade pass 2026-09-05): no em dashes in text the user sees.
@@ -11,31 +12,35 @@ import { describe, expect, it } from 'vitest'
  * Add a file here when it becomes user-facing; do not add an exception list.
  */
 const root = join(__dirname, '..', '..', '..')
-const DIRECTORIES = [
-  'src/renderer/src/components/history',
-  'src/renderer/src/features/settings',
-  'src/renderer/src/ui'
-]
-const FILES = [
-  'src/renderer/src/App.tsx',
-  'src/renderer/src/components/Bar.tsx',
-  'src/renderer/src/components/Settings.tsx',
-  'src/renderer/src/components/Review.tsx',
-  'src/renderer/src/components/RecallView.tsx',
-  'src/renderer/src/components/UpcomingSection.tsx',
-  'src/renderer/src/components/QuickActions.tsx',
-  'src/renderer/src/components/Answer.tsx',
-  'src/renderer/src/components/Copilot.tsx',
-  'src/renderer/src/components/SignInWall.tsx',
-  'src/renderer/src/components/LicenseGate.tsx',
-  'src/renderer/src/components/AgendaView.tsx',
-  'src/renderer/src/components/UpdateReadyToast.tsx',
-  'src/renderer/src/components/MeetingOpenErrorToast.tsx',
-  'src/renderer/src/components/OperatorGateToast.tsx',
-  'src/renderer/src/components/NewMeetingToast.tsx',
-  'src/renderer/src/components/VisibilityToast.tsx',
-  'src/renderer/src/components/RecordingConsentReminder.tsx',
-  'intelligence/src/App.tsx'
+const DIRECTORIES = ['src/renderer/src/components/history', 'src/renderer/src/features/settings', 'src/renderer/src/ui']
+/** Module specifiers resolved by readModuleSource (FF-07: no `.tsx` path literals in a test that reads files). */
+const MODULES = [
+  './App',
+  './components/Bar',
+  './components/Settings',
+  './components/Review',
+  './components/RecallView',
+  './components/UpcomingSection',
+  './components/QuickActions',
+  './components/Answer',
+  './components/Copilot',
+  './components/SignInWall',
+  './components/LicenseGate',
+  './components/AgendaView',
+  './components/UpdateReadyToast',
+  './components/MeetingOpenErrorToast',
+  './components/OperatorGateToast',
+  './components/NewMeetingToast',
+  './components/VisibilityToast',
+  './components/RecordingConsentReminder',
+  './components/ShortcutFailureToast',
+  './components/work-progress',
+  './components/WorkProgressMeter',
+  './components/BrainView',
+  './components/BrainBars',
+  './components/ImportQueue',
+  './components/OverlayPeek',
+  '../../../intelligence/src/App'
 ]
 
 function listFiles(relDir: string): string[] {
@@ -50,22 +55,30 @@ function listFiles(relDir: string): string[] {
     .sort()
 }
 
-const COPY_FILES = [...FILES, ...DIRECTORIES.flatMap(listFiles)]
+const COPY_FILES: Array<{ label: string; specifier: string }> = [
+  ...MODULES.map((specifier) => ({ label: specifier, specifier })),
+  ...DIRECTORIES.flatMap(listFiles).map((rel) => ({
+    label: rel,
+    specifier: `../../../${rel.replace(/\.tsx?$/, '')}`
+  }))
+]
 
 /** Remove block comments, JSX comments and line comments. Strings are left alone (a `//` inside a URL string
  *  only truncates that one line, which can hide an em dash but never invent one). */
 export function stripComments(source: string): string {
-  return source
-    // Keep the newlines of a block comment so reported line numbers match the real file.
-    .replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, ''))
-    .replace(/^[ \t]*\/\/.*$/gm, '')
-    .replace(/([^:'"`])\/\/.*$/gm, '$1')
+  return (
+    source
+      // Keep the newlines of a block comment so reported line numbers match the real file.
+      .replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, ''))
+      .replace(/^[ \t]*\/\/.*$/gm, '')
+      .replace(/([^:'"`])\/\/.*$/gm, '$1')
+  )
 }
 
 describe('no em dashes in user-facing copy', () => {
-  for (const rel of COPY_FILES) {
+  for (const { label: rel, specifier } of COPY_FILES) {
     it(rel, () => {
-      const text = stripComments(readFileSync(join(root, rel), 'utf8').replace(/\r\n/g, '\n'))
+      const text = stripComments(readModuleSource(__dirname, specifier).text.replace(/\r\n/g, '\n'))
       const hits = text
         .split('\n')
         .map((line, i) => ({ line: i + 1, text: line.trim() }))

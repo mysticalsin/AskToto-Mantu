@@ -130,7 +130,7 @@ export function describeImportProgress(job: ImportProgressSnapshot): ImportProgr
       if (percent === null || percent === 0) {
         return {
           active: true,
-          detail: 'Loading the transcription engine — this can take a moment.',
+          detail: 'Loading the transcription engine. This can take a moment.',
           label: 'Preparing on-device engine…',
           percent: null,
           valueText: 'Preparing on-device engine',

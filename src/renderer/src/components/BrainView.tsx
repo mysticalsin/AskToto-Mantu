@@ -34,9 +34,24 @@ import { MantuMark } from './MantuMark'
 import { TextButton } from './ui'
 import { AgentStatus, InlineOrb } from './AgentStatus'
 import { WorkProgressMeter } from './WorkProgressMeter'
+import { SectorBars, WeeklyBars } from './BrainBars'
+
+// Kept exported from here: BrainView.weeks.test.ts exercises the weekly bucketing through this module.
+export { computeWeeklyBars } from './BrainBars'
 import { useFlash } from '../lib/useFlash'
-import { BrainRecordPage, recordKey, sortAttentionItems, type BrainRecordRef, type RecentMerge } from './BrainRecordPage'
-import { brainStatusError, brainStatusIsWorking, brainStatusPollInterval, shouldRefreshAfterBrainStatus } from './brain-status-refresh'
+import {
+  BrainRecordPage,
+  recordKey,
+  sortAttentionItems,
+  type BrainRecordRef,
+  type RecentMerge
+} from './BrainRecordPage'
+import {
+  brainStatusError,
+  brainStatusIsWorking,
+  brainStatusPollInterval,
+  shouldRefreshAfterBrainStatus
+} from './brain-status-refresh'
 import { createBrainRefresh } from './brain-refresh'
 import { INTELLIGENCE_STATUS_UNAVAILABLE, startIntelligenceUpdateFromClick } from '@shared/intelligence-pass'
 import { describeMeetingIndexProgress } from './work-progress'
@@ -68,17 +83,6 @@ const VELOCITY_META = {
   'soft-organizational-gate': { label: 'Soft intent', color: MIXED_COLOR, Icon: CalendarClock },
   'no-hard-date-found': { label: 'No date', color: 'var(--color-ink-3)', Icon: CalendarX }
 } as const
-
-/** ISO-week (Mon-anchored) start for a date, as a ms timestamp. */
-function weekStart(ms: number): number {
-  const d = new Date(ms)
-  d.setHours(0, 0, 0, 0)
-  const day = (d.getDay() + 6) % 7 // Mon=0 … Sun=6
-  d.setDate(d.getDate() - day)
-  return d.getTime()
-}
-
-const WEEKS_SHOWN = 12
 
 /**
  * The honest "time saved" card. Deliberately NOT styled like the measured KPI tiles beside it — it shows
@@ -181,127 +185,6 @@ function Chip({
       <Icon size={11} strokeWidth={2.2} />
       {label}
     </span>
-  )
-}
-
-export interface WeeklyBarData {
-  weeks: { w: number; n: number }[]
-  max: number
-  maxIdx: number
-}
-
-/**
- * The WEEKS_SHOWN meetings-per-week columns (oldest first), the bar scale, and the busiest column.
- * Pure and `now`-injected so the bucketing is testable across a DST boundary. Exported for unit testing.
- */
-export function computeWeeklyBars(meetings: MeetingSummary[], now: number): WeeklyBarData {
-  // Step back seven CALENDAR days at a time instead of subtracting 7*24h: `weekStart` returns local
-  // Monday midnights, and consecutive local Monday midnights are 7d ± 1h apart across a DST
-  // transition. Fixed-millisecond columns therefore miss every bucket key on the far side of a
-  // transition (bars read zero) and, going into spring-forward, land on Sunday 23:00 — mislabelling
-  // the axis too. `setDate` preserves the wall-clock fields, so each column stays a real Monday 00:00.
-  const columns: number[] = []
-  const cursor = new Date(weekStart(now))
-  for (let i = 0; i < WEEKS_SHOWN; i++) {
-    columns.unshift(cursor.getTime())
-    cursor.setDate(cursor.getDate() - 7)
-  }
-  const counts = new Map<number, number>()
-  for (const m of meetings) {
-    const ms = Date.parse(m.date)
-    if (isNaN(ms)) continue
-    const w = weekStart(ms)
-    counts.set(w, (counts.get(w) || 0) + 1)
-  }
-  // No range guard needed: a bucket outside the 12 columns is simply never read.
-  const weeks = columns.map((w) => ({ w, n: counts.get(w) || 0 }))
-  const max = Math.max(1, ...weeks.map((x) => x.n))
-  const maxIdx = weeks.reduce((best, x, i) => (x.n > weeks[best].n ? i : best), 0)
-  return { weeks, max, maxIdx }
-}
-
-/** Meetings-per-week bars: single hue, thin marks, rounded data ends, native tooltips per bar. */
-function WeeklyBars({ meetings }: { meetings: MeetingSummary[] }): JSX.Element {
-  const { weeks, max, maxIdx } = useMemo(() => computeWeeklyBars(meetings, Date.now()), [meetings])
-
-  const W = 480
-  const H = 64
-  const gap = 6
-  const bw = (W - gap * (WEEKS_SHOWN - 1)) / WEEKS_SHOWN
-  const fmt = (w: number): string =>
-    new Date(w).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
-
-  return (
-    <div>
-      <svg
-        viewBox={`0 0 ${W} ${H}`}
-        preserveAspectRatio="none"
-        className="block h-[64px] w-full"
-        role="img"
-        aria-label="Meetings per week"
-      >
-        {weeks.map(({ w, n }, i) => {
-          const h = n === 0 ? 2 : Math.max(4, (n / max) * (H - 14))
-          const x = i * (bw + gap)
-          return (
-            <g key={w}>
-              <rect
-                x={x}
-                y={H - h}
-                width={bw}
-                height={h}
-                rx={n === 0 ? 1 : 4}
-                fill={n === 0 ? 'rgba(255,255,255,0.08)' : 'var(--color-accent-2)'}
-              >
-                <title>{`Week of ${fmt(w)}: ${n} meeting${n === 1 ? '' : 's'}`}</title>
-              </rect>
-              {/* Selective direct labels: only the busiest week and the current week carry a number. */}
-              {n > 0 && (i === maxIdx || i === WEEKS_SHOWN - 1) && (
-                <text
-                  x={x + bw / 2}
-                  y={H - h - 4}
-                  textAnchor="middle"
-                  className="fill-[color:var(--color-ink-2)]"
-                  fontSize={10}
-                  fontWeight={600}
-                >
-                  {n}
-                </text>
-              )}
-            </g>
-          )
-        })}
-      </svg>
-      <div className="mt-0.5 flex justify-between text-[9px] text-[color:var(--color-ink-3)]">
-        <span>{fmt(weeks[0].w)}</span>
-        <span>this week</span>
-      </div>
-    </div>
-  )
-}
-
-/** Horizontal magnitude bars (accounts per sector) — label left, single-hue track, count right. */
-function SectorBars({ sectors }: { sectors: { sector: string; n: number }[] }): JSX.Element {
-  const max = Math.max(1, ...sectors.map((s) => s.n))
-  return (
-    <div className="flex flex-col gap-1.5">
-      {sectors.map(({ sector, n }) => (
-        <div key={sector} className="flex items-center gap-2" title={`${sector}: ${n} account${n === 1 ? '' : 's'}`}>
-          <div className="w-32 shrink-0 truncate text-right text-[11px] capitalize text-[color:var(--color-ink-3)]">
-            {sector.replace(/-/g, ' ')}
-          </div>
-          <div className="h-[6px] min-w-[24px] flex-1 overflow-hidden rounded-full bg-white/[0.05]">
-            <div
-              className="h-full rounded-full bg-[var(--color-accent-2)]"
-              style={{ width: `${(n / max) * 100}%` }}
-            />
-          </div>
-          <div className="min-w-[1.25rem] shrink-0 text-right text-[11px] font-semibold text-[color:var(--color-ink-2)]">
-            {n}
-          </div>
-        </div>
-      ))}
-    </div>
   )
 }
 
@@ -477,40 +360,42 @@ export function BrainView({
     conversationMinutes: 0,
     firstMeetingAt: 0
   })
-  const [timeSavedAssumptions, setTimeSavedAssumptions] = useState<TimeSavedAssumptions>(
-    DEFAULT_TIME_SAVED_ASSUMPTIONS
-  )
+  const [timeSavedAssumptions, setTimeSavedAssumptions] = useState<TimeSavedAssumptions>(DEFAULT_TIME_SAVED_ASSUMPTIONS)
   // A full dashboard refresh reads every entity and meeting. During indexing, poll only the small status
   // payload for responsive progress, then hydrate the complete dashboard once the batch settles.
   const statusWasWorkingRef = useRef(false)
   const statusRevisionRef = useRef<number | undefined>(undefined)
-  const refresh = useMemo(() => createBrainRefresh(
-    async () => {
-      const [read, st, list, att, settings] = await Promise.all([
-        window.toto.brainRead(),
-        window.toto.brainStatus(),
-        window.toto.recallList(),
-        window.toto.brainAttention(),
-        window.toto.getSettings()
-      ])
-      return { read, st, list, att, settings }
-    },
-    ({ read, st, list, att, settings }) => {
-      setData(read)
-      setStatus(st)
-      setMeetings(list)
-      setAttention(att.items)
-      setProviderReady(settings.providerReady)
-      setLocalFallbackReady(settings.localFallbackReady)
-      setLocalSummaryReady(settings.localSummaryReady)
-      setUsageStats(settings.usageStats)
-      setTimeSavedAssumptions(settings.timeSaved)
-      setError(st?.error ?? null)
-      setStatusError(null)
-    },
-    setError,
-    () => setLoading(false)
-  ), [])
+  const refresh = useMemo(
+    () =>
+      createBrainRefresh(
+        async () => {
+          const [read, st, list, att, settings] = await Promise.all([
+            window.toto.brainRead(),
+            window.toto.brainStatus(),
+            window.toto.recallList(),
+            window.toto.brainAttention(),
+            window.toto.getSettings()
+          ])
+          return { read, st, list, att, settings }
+        },
+        ({ read, st, list, att, settings }) => {
+          setData(read)
+          setStatus(st)
+          setMeetings(list)
+          setAttention(att.items)
+          setProviderReady(settings.providerReady)
+          setLocalFallbackReady(settings.localFallbackReady)
+          setLocalSummaryReady(settings.localSummaryReady)
+          setUsageStats(settings.usageStats)
+          setTimeSavedAssumptions(settings.timeSaved)
+          setError(st?.error ?? null)
+          setStatusError(null)
+        },
+        setError,
+        () => setLoading(false)
+      ),
+    []
+  )
 
   const refreshStatus = useCallback(async (): Promise<void> => {
     try {
@@ -664,7 +549,9 @@ export function BrainView({
   const sectors = useMemo(() => {
     const by = new Map<string, number>()
     for (const a of data?.accounts ?? []) by.set(a.sector, (by.get(a.sector) || 0) + 1)
-    return Array.from(by, ([sector, n]) => ({ sector, n })).sort((a, b) => b.n - a.n).slice(0, 8)
+    return Array.from(by, ([sector, n]) => ({ sector, n }))
+      .sort((a, b) => b.n - a.n)
+      .slice(0, 8)
   }, [data])
 
   const deals = useMemo(() => {
@@ -719,8 +606,10 @@ export function BrainView({
   // Deduped by text so a commitment landing on both a deal and its speaker's ledger counts once.
   const nextStepsCount = useMemo(() => {
     const seen = new Set<string>()
-    for (const d of data?.deals ?? []) for (const c of d.commitments ?? []) seen.add((c.text || '').trim().toLowerCase())
-    for (const p of data?.people ?? []) for (const c of p.commitments ?? []) seen.add((c.text || '').trim().toLowerCase())
+    for (const d of data?.deals ?? [])
+      for (const c of d.commitments ?? []) seen.add((c.text || '').trim().toLowerCase())
+    for (const p of data?.people ?? [])
+      for (const c of p.commitments ?? []) seen.add((c.text || '').trim().toLowerCase())
     seen.delete('')
     return seen.size
   }, [data])
@@ -808,7 +697,7 @@ export function BrainView({
               <span>
                 {topError
                   ? `Your AI provider is failing: ${topError}. Check Settings → AI`
-                  : indexProgress?.label ?? 'Some meetings need attention.'}
+                  : (indexProgress?.label ?? 'Some meetings need attention.')}
               </span>
             </div>
             <span className="flex shrink-0 items-center gap-1">
@@ -864,7 +753,9 @@ export function BrainView({
           data={data}
           onOpenRecord={openRecord}
           onOpenMeeting={onOpenMeeting}
-          onRefresh={async () => { await refresh() }}
+          onRefresh={async () => {
+            await refresh()
+          }}
           onError={setError}
           onMerged={setRecentMerge}
           recentMerge={recentMerge}
@@ -876,7 +767,10 @@ export function BrainView({
         <div className="flex flex-col items-center gap-3 rounded-xl border border-[var(--color-hair-soft)] bg-white/[0.02] px-6 py-8 text-center">
           <Brain size={28} className="text-[color:var(--color-accent-2)]" />
           <div className="text-[13px] font-semibold text-[color:var(--color-ink)]">
-            Build your intelligence from {meetings.length > 0 ? `${meetings.length} saved meeting${meetings.length === 1 ? '' : 's'}` : 'your meetings'}
+            Build your intelligence from{' '}
+            {meetings.length > 0
+              ? `${meetings.length} saved meeting${meetings.length === 1 ? '' : 's'}`
+              : 'your meetings'}
           </div>
           <div className="max-w-[380px] text-[12px] leading-snug text-[color:var(--color-ink-3)]">
             {meetings.length > 0
@@ -905,7 +799,9 @@ export function BrainView({
             <div className="rounded-xl border border-[var(--color-hair-soft)] bg-[var(--color-accent-soft)] px-3 py-2 text-[11px] text-[color:var(--color-ink-2)]">
               <div className="flex items-center gap-2">
                 <InlineOrb kind="searching" />
-                <span aria-atomic="true" aria-live="polite">{indexProgress?.label ?? 'Updating…'}</span>
+                <span aria-atomic="true" aria-live="polite">
+                  {indexProgress?.label ?? 'Updating…'}
+                </span>
               </div>
               <WorkProgressMeter
                 active
@@ -928,7 +824,9 @@ export function BrainView({
             <div className="rounded-xl border border-[var(--color-hair-soft)] bg-[var(--color-accent-soft)] px-3 py-2 text-[11px] text-[color:var(--color-ink-2)]">
               <div className="flex items-center gap-2">
                 <InlineOrb kind="searching" />
-                <span aria-atomic="true" aria-live="polite">Finishing Intelligence update…</span>
+                <span aria-atomic="true" aria-live="polite">
+                  Finishing Intelligence update…
+                </span>
               </div>
               <WorkProgressMeter
                 active
@@ -981,8 +879,8 @@ export function BrainView({
             (status?.accounts ?? 0) === 0 &&
             (status?.deals ?? 0) === 0 && (
               <div className="rounded-xl border border-[var(--color-hair-soft)] bg-white/[0.02] px-3 py-2.5 text-[12px] leading-snug text-[color:var(--color-ink-3)]">
-                Meetings are ingested, but no people, accounts, or deals were extracted yet. Usually the
-                transcripts are short or don&rsquo;t name clients. Longer, client-facing meetings will fill this in.
+                Meetings are ingested, but no people, accounts, or deals were extracted yet. Usually the transcripts are
+                short or don&rsquo;t name clients. Longer, client-facing meetings will fill this in.
               </div>
             )}
 
@@ -1022,7 +920,9 @@ export function BrainView({
                       )}
                       <span className="min-w-0 flex-1">
                         <span className="text-[12px] font-semibold text-[color:var(--color-ink)]">{item.label}</span>
-                        <span className="block truncate text-[11px] text-[color:var(--color-ink-3)]">{item.detail}</span>
+                        <span className="block truncate text-[11px] text-[color:var(--color-ink-3)]">
+                          {item.detail}
+                        </span>
                       </span>
                       <ChevronRight size={13} className="shrink-0 text-[color:var(--color-ink-3)]" />
                     </button>
@@ -1068,7 +968,11 @@ export function BrainView({
                   // not a bug — so the Kept/Broken actions only render for deal-backed rows.
                   const dealName = c.deal
                   return (
-                    <div key={c.meeting + c.text + (c.deal ?? c.person ?? '')} className="flex items-center gap-2 text-[12px]" title={c.quote || undefined}>
+                    <div
+                      key={c.meeting + c.text + (c.deal ?? c.person ?? '')}
+                      className="flex items-center gap-2 text-[12px]"
+                      title={c.quote || undefined}
+                    >
                       <span
                         className="shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold"
                         style={{
@@ -1155,7 +1059,11 @@ export function BrainView({
                   title="Copy the full Mars draft as markdown"
                   className="no-drag focus-ring flex items-center gap-1 rounded-lg px-1.5 py-0.5 text-[10px] font-semibold text-[color:var(--color-ink-3)] hover:text-[color:var(--color-ink)]"
                 >
-                  {marsCopied ? <Check size={11} className="text-[var(--color-success)]" /> : <ClipboardList size={11} />}
+                  {marsCopied ? (
+                    <Check size={11} className="text-[var(--color-success)]" />
+                  ) : (
+                    <ClipboardList size={11} />
+                  )}
                   {marsCopied ? 'Copied' : 'Copy draft'}
                 </button>
               </div>
@@ -1179,8 +1087,7 @@ export function BrainView({
                             title={`${prev} last week`}
                             style={{
                               // Direction color follows MEANING: more losses is bad, more of the rest is good.
-                              color:
-                                (label === 'Lost' ? d < 0 : d > 0) ? 'var(--color-success)' : 'var(--color-danger)'
+                              color: (label === 'Lost' ? d < 0 : d > 0) ? 'var(--color-success)' : 'var(--color-danger)'
                             }}
                           >
                             {d > 0 ? `▲${d}` : `▼${-d}`}
@@ -1195,7 +1102,9 @@ export function BrainView({
               <div className="flex flex-col gap-1">
                 {mars.meetings.slice(0, 6).map((m) => (
                   <div key={m.date + m.title} className="flex items-center gap-2 text-[12px]">
-                    <span className="shrink-0 text-[10px] tabular-nums text-[color:var(--color-ink-3)]">{m.date.slice(5)}</span>
+                    <span className="shrink-0 text-[10px] tabular-nums text-[color:var(--color-ink-3)]">
+                      {m.date.slice(5)}
+                    </span>
                     <span className="min-w-0 flex-1 truncate text-[color:var(--color-ink-2)]">
                       <span className="text-[color:var(--color-ink)]">{m.title}</span>
                       {m.account && <span className="text-[color:var(--color-ink-3)]"> · {m.account}</span>}
@@ -1208,9 +1117,7 @@ export function BrainView({
                         First contact
                       </span>
                     )}
-                    {m.band && (
-                      <span className="shrink-0 text-[10px] text-[color:var(--color-ink-3)]">{m.band}</span>
-                    )}
+                    {m.band && <span className="shrink-0 text-[10px] text-[color:var(--color-ink-3)]">{m.band}</span>}
                   </div>
                 ))}
                 {mars.meetings.length > 6 && (
@@ -1227,7 +1134,10 @@ export function BrainView({
                     </span>
                   )}
                   {mars.atRisk.length > 0 && (
-                    <span className="rounded px-1.5 py-0.5" style={{ background: 'rgba(255,255,255,0.04)', color: MIXED_COLOR }}>
+                    <span
+                      className="rounded px-1.5 py-0.5"
+                      style={{ background: 'rgba(255,255,255,0.04)', color: MIXED_COLOR }}
+                    >
                       {mars.atRisk.length} at risk
                     </span>
                   )}
@@ -1277,12 +1187,20 @@ export function BrainView({
                     {(s.droppedTopics.length > 0 || s.vanishedPeople.length > 0) && (
                       <div className="mt-0.5 flex flex-wrap items-center gap-1 text-[10px] text-[color:var(--color-ink-3)]">
                         {s.droppedTopics.slice(0, 4).map((t) => (
-                          <span key={t.topic} className="rounded px-1.5 py-0.5" style={{ background: 'rgba(255,255,255,0.04)' }}>
+                          <span
+                            key={t.topic}
+                            className="rounded px-1.5 py-0.5"
+                            style={{ background: 'rgba(255,255,255,0.04)' }}
+                          >
                             dropped: {t.topic}
                           </span>
                         ))}
                         {s.vanishedPeople.slice(0, 2).map((p) => (
-                          <span key={p} className="rounded px-1.5 py-0.5" style={{ background: 'rgba(255,255,255,0.04)' }}>
+                          <span
+                            key={p}
+                            className="rounded px-1.5 py-0.5"
+                            style={{ background: 'rgba(255,255,255,0.04)' }}
+                          >
                             {p} went quiet
                           </span>
                         ))}
@@ -1399,8 +1317,8 @@ export function BrainView({
               provider). Say so — a silent wait reads as a completed delete. */}
           {status?.cleanupPending && (
             <div className="rounded-xl border border-[var(--color-hair-soft)] bg-white/[0.03] px-3 py-2 text-[11px] text-[color:var(--color-ink-2)]">
-              Cleanup after a deleted meeting is pending — references to it are removed automatically the
-              next time indexing runs.
+              Cleanup after a deleted meeting is pending. References to it are removed automatically the next time
+              indexing runs.
             </div>
           )}
 
@@ -1427,7 +1345,8 @@ export function BrainView({
           <button
             type="button"
             onClick={() => {
-              void window.toto.brainOpenDashboard()
+              void window.toto
+                .brainOpenDashboard()
                 .catch((e) => ({ ok: false, error: String(e) }))
                 .then((r) => {
                   if (!r.ok) setError(r.error || 'Could not open Mantu Intelligence.')

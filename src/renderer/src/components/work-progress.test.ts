@@ -49,9 +49,7 @@ describe('meeting index progress presentation', () => {
 describe('audio import progress presentation', () => {
   describe('phase 1: warm-up (queued, or decoding/transcribing before a real checkpoint)', () => {
     it('shows the queue phase as indeterminate with the existing queued copy', () => {
-      expect(
-        describeImportProgress({ state: 'queued', cursor: 0, totalChunks: 0, pct: null })
-      ).toEqual({
+      expect(describeImportProgress({ state: 'queued', cursor: 0, totalChunks: 0, pct: null })).toEqual({
         active: true,
         detail: 'Waiting for the import queue',
         label: 'Queued to import',
@@ -62,11 +60,9 @@ describe('audio import progress presentation', () => {
     })
 
     it('treats decoding with no percent yet as an indeterminate engine warm-up', () => {
-      expect(
-        describeImportProgress({ state: 'decoding', cursor: 0, totalChunks: 0, pct: null })
-      ).toEqual({
+      expect(describeImportProgress({ state: 'decoding', cursor: 0, totalChunks: 0, pct: null })).toEqual({
         active: true,
-        detail: 'Loading the transcription engine — this can take a moment.',
+        detail: 'Loading the transcription engine. This can take a moment.',
         label: 'Preparing on-device engine…',
         percent: null,
         valueText: 'Preparing on-device engine',
@@ -78,11 +74,9 @@ describe('audio import progress presentation', () => {
     // yet" without a new IPC signal, so it is conservatively folded into the same warm-up state instead
     // of rendering a determinate bar frozen at a dead-looking 0%.
     it('treats a literal 0% during decoding as the same warm-up state, not a dead determinate bar', () => {
-      expect(
-        describeImportProgress({ state: 'decoding', cursor: 0, totalChunks: 0, pct: 0 })
-      ).toEqual({
+      expect(describeImportProgress({ state: 'decoding', cursor: 0, totalChunks: 0, pct: 0 })).toEqual({
         active: true,
-        detail: 'Loading the transcription engine — this can take a moment.',
+        detail: 'Loading the transcription engine. This can take a moment.',
         label: 'Preparing on-device engine…',
         percent: null,
         valueText: 'Preparing on-device engine',
@@ -91,11 +85,9 @@ describe('audio import progress presentation', () => {
     })
 
     it('treats a literal 0% right as transcribing begins as warm-up too', () => {
-      expect(
-        describeImportProgress({ state: 'transcribing', cursor: 0, totalChunks: 0, pct: 0 })
-      ).toEqual({
+      expect(describeImportProgress({ state: 'transcribing', cursor: 0, totalChunks: 0, pct: 0 })).toEqual({
         active: true,
-        detail: 'Loading the transcription engine — this can take a moment.',
+        detail: 'Loading the transcription engine. This can take a moment.',
         label: 'Preparing on-device engine…',
         percent: null,
         valueText: 'Preparing on-device engine',
@@ -142,9 +134,7 @@ describe('audio import progress presentation', () => {
     })
 
     it('shows real decoding progress once the decoder has produced a checkpoint', () => {
-      expect(
-        describeImportProgress({ state: 'decoding', cursor: 2, totalChunks: 5, pct: 40 })
-      ).toEqual({
+      expect(describeImportProgress({ state: 'decoding', cursor: 2, totalChunks: 5, pct: 40 })).toEqual({
         active: true,
         detail: '40% transcribed · preparing the next audio segment',
         label: 'Decoding audio',
