@@ -136,7 +136,9 @@ export const VoiceReportSchema = z.discriminatedUnion('phase', [
 export type VoiceReport = z.infer<typeof VoiceReportSchema>
 
 /** A recognized question for the typed Ask router (V03 sends it). Bounded; never an action. */
-export const VoiceAskSchema = z.object({ turnId: z.string().min(1).max(64), text: z.string().min(1).max(2_000) }).strict()
+export const VoiceAskSchema = z
+  .object({ turnId: z.string().min(1).max(64), text: z.string().min(1).max(2_000) })
+  .strict()
 export type VoiceAsk = z.infer<typeof VoiceAskSchema>
 
 /** One hold turn listens for at most this long (matches the 15 s command capture cap). */
