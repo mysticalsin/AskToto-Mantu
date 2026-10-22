@@ -69,7 +69,8 @@ function setup(
   const send = vi.fn(),
     audit = vi.fn(),
     record = vi.fn(),
-    qualifying = vi.fn()
+    qualifying = vi.fn(),
+    firstVisible = vi.fn()
   const streams = options.streams ?? new Map<string, StreamHandle>()
   const handle = { abort: vi.fn() }
   const failover = vi.fn(() => options.failoverAvailable ?? false)
@@ -123,6 +124,7 @@ function setup(
     recordOperatorAsk: record,
     pathTagForSeatProvider,
     noteQualifyingUse: qualifying,
+    askTiming: { firstVisible },
     recordSuccess: vi.fn(),
     recordRateLimited: vi.fn(),
     recordExhausted: vi.fn(),
@@ -153,6 +155,7 @@ function setup(
     audit,
     record,
     qualifying,
+    firstVisible,
     streams,
     handle,
     failover,
@@ -214,6 +217,15 @@ describe('actual live completion outcomes', () => {
       vi.runAllTimers()
       expect(f.retry).not.toHaveBeenCalled()
     }
+  })
+  it('marks the first visible token to the suggestion clock once, and not before there is visible text', () => {
+    const f = setup()
+    f.handlers.onDelta('')
+    expect(f.firstVisible).not.toHaveBeenCalled()
+    f.handlers.onDelta('first words')
+    f.handlers.onDelta(' and more')
+    expect(f.firstVisible).toHaveBeenCalledTimes(1)
+    expect(f.firstVisible).toHaveBeenCalledWith(id)
   })
   it.each([
     'max_tokens',

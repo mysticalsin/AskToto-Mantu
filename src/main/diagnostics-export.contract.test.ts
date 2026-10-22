@@ -33,6 +33,10 @@ describe('diagnostics export — logs out, content never', () => {
     expect(body).toMatch(/MANIFEST\.txt/)
   })
 
+  it('includes the responsiveness report, which is counts and latencies only', () => {
+    expect(handler()).toMatch(/responsiveness-report\\\.json/)
+  })
+
   it('NEVER reaches for meetings, the brain store, the wiki mirror, or settings.json', () => {
     const body = handler()
     expect(body).not.toMatch(/resolveMeetingsFolder/)

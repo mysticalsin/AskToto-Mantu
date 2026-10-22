@@ -1,6 +1,12 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { IpcMain, IpcMainInvokeEvent } from 'electron'
 import { IPC, type PublicSettings } from '@shared/ipc'
+import { RESPONSIVENESS_IPC, ResponsivenessReportSchema } from '@shared/responsiveness-metrics'
+import {
+  askTiming,
+  createResponsivenessRecorder,
+  setResponsivenessRecorderForTest
+} from '../infra/observability/responsiveness-recorder'
 
 const store = vi.hoisted(() => ({
   setSettings: vi.fn(),
@@ -53,7 +59,9 @@ function setup(options: { auth?: boolean; picked?: string | null; writable?: boo
   })
   const pick = (): Promise<unknown> => (handlers.get(IPC.pickFolder) as Handler)(event)
   const addTeam = (): Promise<unknown> => (handlers.get(IPC.addTeamTranscriptFolder) as Handler)(event)
-  return { assertMainWindow, probeWritable, pick, addTeam }
+  const call = (channel: string, ...args: unknown[]): Promise<unknown> =>
+    Promise.resolve((handlers.get(channel) as Handler)(event, ...args))
+  return { assertMainWindow, probeWritable, pick, addTeam, call }
 }
 
 beforeEach(() => {
@@ -123,5 +131,53 @@ describe('team transcript folder add (D9-10)', () => {
     expect(await setup({ picked: null }).addTeam()).toBe(snapshot)
     expect(await setup({ auth: false }).addTeam()).toBe(snapshot)
     expect(store.setSettings).not.toHaveBeenCalled()
+  })
+})
+
+describe('responsiveness report and display receipt (G12)', () => {
+  const identity = { platform: 'darwin', arch: 'arm64', appVersion: '0.0.0-test' }
+  afterEach(() => setResponsivenessRecorderForTest(null))
+
+  function useRecorder() {
+    let t = 1_000
+    const rec = createResponsivenessRecorder({ identity, now: () => t })
+    setResponsivenessRecorderForTest(rec)
+    return { rec, advance: (ms: number) => void (t += ms) }
+  }
+
+  it('returns the report, gated on the main window and on sign-in', async () => {
+    const { rec } = useRecorder()
+    rec.recordLatency('first_partial_ms', 480)
+    const ok = setup()
+    const report = ResponsivenessReportSchema.parse(await ok.call(RESPONSIVENESS_IPC.report))
+    expect(ok.assertMainWindow).toHaveBeenCalledWith(event)
+    expect(report.entries.find((e) => e.id === 'first_partial_ms')).toMatchObject({ status: 'measured', count: 1 })
+
+    const signedOut = setup({ auth: false })
+    const empty = ResponsivenessReportSchema.parse(await signedOut.call(RESPONSIVENESS_IPC.report))
+    expect(empty.entries.every((e) => e.status === 'not_measured')).toBe(true)
+  })
+
+  it('takes a display receipt only from the main window, signed in, for a bounded ask id', async () => {
+    const { rec, advance } = useRecorder()
+    askTiming.start('ask-1', 'suggest')
+    advance(900)
+    askTiming.firstVisible('ask-1')
+    advance(40)
+
+    const signedOut = setup({ auth: false })
+    await signedOut.call(RESPONSIVENESS_IPC.displayReceipt, 'ask-1')
+    expect(rec.snapshot().counters.suggestions_displayed).toBeUndefined()
+
+    const ok = setup()
+    for (const junk of [42, '', '   ', 'x'.repeat(129), { id: 'ask-1' }, null, undefined]) {
+      await ok.call(RESPONSIVENESS_IPC.displayReceipt, junk)
+    }
+    expect(rec.snapshot().counters.suggestions_displayed).toBeUndefined()
+
+    await ok.call(RESPONSIVENESS_IPC.displayReceipt, 'ask-1')
+    expect(ok.assertMainWindow).toHaveBeenCalledWith(event)
+    expect(rec.snapshot().counters.suggestions_displayed).toBe(1)
+    expect(rec.snapshot().latencies.display_receipt_ms).toEqual([40])
   })
 })

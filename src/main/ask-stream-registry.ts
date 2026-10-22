@@ -1,3 +1,7 @@
+// G12: the timed cancel and the suggestion clocks live with the registry they release. Counts and
+// latencies only; see infra/observability/responsiveness-recorder.ts.
+export { askTiming } from './infra/observability/responsiveness-recorder'
+
 /** Abort handle of one in-flight ask, keyed by the renderer's ask id. */
 export type AskStreamRegistry = Map<string, { abort: () => void }>
 

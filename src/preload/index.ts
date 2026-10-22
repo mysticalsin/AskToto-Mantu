@@ -2,6 +2,7 @@ import { contextBridge, ipcRenderer, webUtils } from 'electron'
 import { createSpeechPackBridge } from './speech-pack'
 import { createCloudSpeechPreloadApi } from './cloud-speech'
 import { createTranscriptRevisionPreloadApi } from './transcript-revision'
+import { createMetricsPreloadApi } from './metrics'
 import { PERMISSION_HELPER_IPC, type HelperKind } from '../shared/permission-helper'
 import type { CloudSttStartResult } from '../shared/cloud-stt-start'
 import { OWNER_SESSION_IPC, type OwnerSessionStatus } from '../shared/contracts/owner-session'
@@ -37,7 +38,6 @@ import {
   type RecapExport,
   type MeetingSummary,
   type AnswerFeedback,
-  type EvalMetrics,
   type StreamDelta,
   type StreamDone,
   type StreamError,
@@ -213,6 +213,7 @@ const api = {
   ...createSpeechPackBridge({ invoke: (channel, payload) => ipcRenderer.invoke(channel, payload), subscribe: sub }),
   ...createCloudSpeechPreloadApi(ipcRenderer),
   ...createTranscriptRevisionPreloadApi(ipcRenderer),
+  ...createMetricsPreloadApi(ipcRenderer),
   getSettings: (): Promise<PublicSettings> => ipcRenderer.invoke(IPC.settingsGet),
   onSettingsChanged: (cb: () => void): Unsub => sub(IPC.settingsChanged, cb),
   /** Wave 2 — dismiss the one-shot last-failover chip after the user has seen it. */
@@ -469,7 +470,6 @@ const api = {
   onImportAudioProgress: (cb: (d: ImportAudioProgress) => void): Unsub => sub(IPC.importAudioProgress, cb),
   onImportAssetsProgress: (cb: (d: ImportAssetsProgress) => void): Unsub => sub(IPC.importAssetsProgress, cb),
   answerFeedback: (f: AnswerFeedback): Promise<void> => ipcRenderer.invoke(IPC.answerFeedback, f),
-  readMetrics: (): Promise<EvalMetrics> => ipcRenderer.invoke(IPC.metricsRead),
   exportRecapJson: (markdown: string): Promise<RecapExport> => ipcRenderer.invoke(IPC.exportRecapJson, markdown),
   /** Never saves a folder Métis cannot write to: the reason comes back for Settings to show inline. */
   pickFolder: (): Promise<MeetingsFolderPickResult<PublicSettings>> => ipcRenderer.invoke(IPC.pickFolder),

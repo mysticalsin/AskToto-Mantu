@@ -2,13 +2,24 @@ import { useEffect, useState } from 'react'
 import { AlertCircle } from 'lucide-react'
 import type { EvalMetrics } from '@shared/ipc'
 import { AgentStatus } from '../../components/AgentStatus'
+import { ResponsivenessPanel } from './ResponsivenessPanel'
 
 // Last metrics fetched this session — reusing this on remount lets a tab revisit show the previous
 // numbers instantly instead of flashing "Loading…" again, while the effect below still refreshes it.
 let lastMetrics: EvalMetrics | null = null
 
-/** Usage panel from the local audit log. Computed on-device; never sent anywhere. */
+/** Usage and responsiveness, both computed on-device and never sent anywhere. */
 export function DiagnosticsSection(): JSX.Element {
+  return (
+    <div className="flex flex-col gap-4">
+      <UsageMetrics />
+      <ResponsivenessPanel />
+    </div>
+  )
+}
+
+/** Usage panel from the local audit log. */
+function UsageMetrics(): JSX.Element {
   const [m, setM] = useState<EvalMetrics | null>(lastMetrics)
   // Distinguish a genuine load FAILURE from the still-loading state — previously a failed readMetrics()
   // set m back to null, leaving "Loading…" on screen forever with no way to recover.

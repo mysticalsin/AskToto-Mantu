@@ -15,6 +15,7 @@ import type {
   SignInResult
 } from '@shared/ipc'
 import type { ProviderId } from '@shared/providers'
+import { reportDisplayReceiptWhenPainted } from './lib/display-receipt'
 
 export function uid(): string {
   return Math.random().toString(36).slice(2) + Date.now().toString(36)
@@ -339,6 +340,10 @@ export function useAsk(): {
       if (!firstTokenSentRef.current) {
         firstTokenSentRef.current = true
         flush()
+        // Painted-or-finished, not replaced: a newer request owning idRef means this card was swapped out.
+        if (lastReqRef.current?.mode === 'suggest') {
+          reportDisplayReceiptWhenPainted(d.id, () => idRef.current === d.id || !idRef.current)
+        }
       } else if (!rafRef.current) {
         rafRef.current = requestAnimationFrame(flush)
       }

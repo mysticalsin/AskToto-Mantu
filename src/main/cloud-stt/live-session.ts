@@ -23,6 +23,7 @@ import {
   type CloudSttResolvedCreds
 } from './credentials'
 import { float32ToPcm16le } from './pcm'
+import { createFirstPartialProbe } from '../infra/observability/responsiveness-recorder'
 import {
   mapCloudFinalsToLines,
   type CloudSttLineSpeaker,
@@ -126,6 +127,8 @@ export class CloudSttLiveSession {
   private gracefulCloseTimer: ReturnType<typeof setTimeout> | null = null
   private closedStatusSent = false
   private outboundQueueOverflow = false
+  /** G12: first PCM chunk sent to first text handed on. Counts and a latency only. */
+  private firstPartial = createFirstPartialProbe()
   private reconnectWaits = new Map<
     CloudSttLineSpeaker,
     { timer: ReturnType<typeof setTimeout>; resolve: (fired: boolean) => void }
@@ -201,6 +204,7 @@ export class CloudSttLiveSession {
     const pcm = float32ToPcm16le(samples)
     try {
       track.ws.send(pcm)
+      this.firstPartial.audioSent()
     } catch {
       if (this.closed || this.closing) return
       this.reportTrackTransportFailure(track, `Cloud STT audio could not be sent (${channel}).`)
@@ -510,6 +514,7 @@ export class CloudSttLiveSession {
           scope,
           messageSequence: seq
         })
+        if (norm.interimText || norm.finals.length) this.firstPartial.textSeen()
         if (norm.interimText) this.handlers.onInterim?.(channel, norm.interimText)
         for (const line of mapCloudFinalsToLines(norm.finals, channel, {
           profile: this.opts.profile
@@ -529,6 +534,7 @@ export class CloudSttLiveSession {
         scope,
         messageSequence: seq
       })
+      if (norm.interimText || norm.finals.length) this.firstPartial.textSeen()
       if (norm.interimText) this.handlers.onInterim?.(channel, norm.interimText)
       for (const line of mapCloudFinalsToLines(norm.finals, channel, {
         profile: this.opts.profile

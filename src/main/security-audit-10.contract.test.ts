@@ -302,7 +302,8 @@ describe('AUDIT-10 — SSO-gated listening and ask side effects', () => {
 
     const cancel = sliceBetween('ipcMain.handle(IPC.askCancel', 'ipcMain.handle(IPC.askResetContext')
     expect(cancel).toMatch(/if \(!requireAuth\(\)\) return/)
-    expect(cancel.indexOf('if (!requireAuth()) return')).toBeLessThan(cancel.indexOf('streams.get(id)'))
+    // G12: the abort itself moved into askTiming.cancel(streams, id); auth still precedes it.
+    expect(cancel.indexOf('if (!requireAuth()) return')).toBeLessThan(cancel.indexOf('askTiming.cancel(streams, id)'))
   })
 
   it('session clear aborts in-flight ask streams', () => {

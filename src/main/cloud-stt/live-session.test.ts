@@ -1,5 +1,5 @@
 import { EventEmitter } from 'node:events'
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import type WebSocket from 'ws'
 import {
   CloudSttLiveSession,
@@ -12,6 +12,10 @@ import { CLOUD_STT_CREDENTIALS_MISSING } from './credentials'
 import { mapCloudFinalsToLines } from '../../shared/cloud-stt-line-map'
 import { normalizeNova3ResultsMessage } from './adapter'
 import { mainLog } from '../logger'
+import {
+  createResponsivenessRecorder,
+  setResponsivenessRecorderForTest
+} from '../infra/observability/responsiveness-recorder'
 
 class MockWs extends EventEmitter {
   static OPEN = 1
@@ -1069,5 +1073,96 @@ describe('CloudSttLiveSession', () => {
     tracks.get('you')!.ws.close()
     tracks.get('them')!.ws.close()
     await expect(stopping).resolves.toEqual({ timedOut: true })
+  })
+})
+
+describe('first partial transcript latency (G12)', () => {
+  afterEach(() => setResponsivenessRecorderForTest(null))
+
+  function nova(transcript: string, isFinal: boolean): Buffer {
+    // A final needs word timings, like the provider sends them; an interim is just the running text.
+    const alternative = isFinal
+      ? { transcript, words: [{ punctuated_word: transcript, start: 0, end: 0.4, speaker: 0, language: 'fr' }] }
+      : { transcript }
+    return Buffer.from(JSON.stringify({ type: 'Results', is_final: isFinal, channel: { alternatives: [alternative] } }))
+  }
+
+  async function startSession(onFinal: () => void = () => {}) {
+    const session = new CloudSttLiveSession(
+      {
+        provider: 'cloudflare-nova3',
+        cloudflareToken: 'test-token',
+        cloudflareAccountId: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+        gatewayId: 'default',
+        WebSocketImpl: MockWs as unknown as typeof WebSocket
+      },
+      { onFinal }
+    )
+    await expect(session.start()).resolves.toEqual({ ok: true })
+    const tracks = (session as unknown as { tracks: Map<string, { ws: MockWs }> }).tracks
+    return { session, them: tracks.get('them')!.ws }
+  }
+
+  function recorder() {
+    let t = 5_000
+    const rec = createResponsivenessRecorder({
+      identity: { platform: 'darwin', arch: 'arm64', appVersion: '0.0.0-test' },
+      now: () => t
+    })
+    setResponsivenessRecorderForTest(rec)
+    return { rec, advance: (ms: number) => void (t += ms) }
+  }
+
+  it('measures from the first PCM chunk sent to the first interim text, once', async () => {
+    const { rec, advance } = recorder()
+    const { session, them } = await startSession()
+    them.emit('message', nova('too early', false)) // text before any audio was sent proves nothing
+    session.pushFloat32('you', new Float32Array([0.1, -0.1]))
+    advance(350)
+    session.pushFloat32('you', new Float32Array([0.1, -0.1]))
+    advance(150)
+    them.emit('message', nova('bon', false))
+    advance(900)
+    them.emit('message', nova('bonjour', false))
+    expect(rec.snapshot().latencies.first_partial_ms).toEqual([500])
+    session.close()
+  })
+
+  it('counts a first final as the first text when no interim came before it', async () => {
+    const { rec, advance } = recorder()
+    const { session, them } = await startSession()
+    session.pushFloat32('you', new Float32Array([0.1]))
+    advance(700)
+    them.emit('message', nova('bonjour', true))
+    expect(rec.snapshot().latencies.first_partial_ms).toEqual([700])
+    session.close()
+  })
+
+  it('records nothing for audio that never produced text, and each session measures on its own', async () => {
+    const { rec, advance } = recorder()
+    const first = await startSession()
+    first.session.pushFloat32('you', new Float32Array([0.1]))
+    first.session.close()
+    expect(rec.snapshot().latencies).toEqual({})
+    const second = await startSession()
+    second.session.pushFloat32('you', new Float32Array([0.1]))
+    advance(200)
+    second.them.emit('message', nova('hello', false))
+    expect(rec.snapshot().latencies.first_partial_ms).toEqual([200])
+    second.session.close()
+  })
+
+  it('keeps carrying the transcript when the recorder faults', async () => {
+    const finals: unknown[] = []
+    setResponsivenessRecorderForTest({
+      beginSpan() {
+        throw new Error('synthetic recorder fault')
+      }
+    } as never)
+    const { session, them } = await startSession(() => finals.push('final'))
+    session.pushFloat32('you', new Float32Array([0.1]))
+    them.emit('message', nova('bonjour', true))
+    expect(finals).toEqual(['final'])
+    session.close()
   })
 })

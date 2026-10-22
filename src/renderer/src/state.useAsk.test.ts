@@ -143,6 +143,7 @@ import { useAsk } from './state'
 type TotoStub = {
   ask: ReturnType<typeof vi.fn>
   cancel: ReturnType<typeof vi.fn>
+  reportDisplayReceipt: ReturnType<typeof vi.fn>
   onDelta: (cb: (d: StreamDelta) => void) => () => void
   onDone: (cb: (d: StreamDone) => void) => () => void
   onMeta: (cb: (d: unknown) => void) => () => void
@@ -170,6 +171,7 @@ function installTotoStub(): TotoStub {
   const stub: TotoStub = {
     ask: vi.fn().mockResolvedValue(undefined),
     cancel: vi.fn().mockResolvedValue(undefined),
+    reportDisplayReceipt: vi.fn().mockResolvedValue(undefined),
     onDelta: (cb) => {
       deltaCb = cb
       return () => {
@@ -621,5 +623,68 @@ describe('MQA-182 — a request that produced nothing stops claiming it viewed t
 
     expect(view.result.answer?.text).toBe('The screen shows a stack trace')
     expect(view.result.answer?.usedScreen).toBe(true)
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────
+// G12 — the display receipt. A suggestion counts as displayed only when the renderer says it painted it.
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────
+describe('G12 — the renderer confirms a suggestion is on screen', () => {
+  let toto: TotoStub
+
+  beforeEach(() => {
+    host.__reset()
+    toto = installTotoStub()
+  })
+
+  /** The rAF stand-in above is a setTimeout(0): one macrotask is one frame. */
+  const nextFrame = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 5))
+
+  it('sends one receipt, for the first painted token of a suggestion, never for later tokens', async () => {
+    const view = renderAsk()
+    const id = view.result.run({ mode: 'suggest', prompt: 'ambient' })
+    await host.__settle()
+    expect(toto.reportDisplayReceipt).not.toHaveBeenCalled()
+    toto.__fireDelta({ id, text: 'Try ' })
+    await host.__settle()
+    await nextFrame()
+    toto.__fireDelta({ id, text: 'this.' })
+    await host.__settle()
+    await nextFrame()
+    expect(toto.reportDisplayReceipt).toHaveBeenCalledTimes(1)
+    expect(toto.reportDisplayReceipt).toHaveBeenCalledWith(id)
+  })
+
+  it('stays silent for every other mode', async () => {
+    const view = renderAsk()
+    const id = view.result.run({ mode: 'answer', prompt: 'a question' })
+    await host.__settle()
+    toto.__fireDelta({ id, text: 'An answer.' })
+    await host.__settle()
+    await nextFrame()
+    expect(toto.reportDisplayReceipt).not.toHaveBeenCalled()
+  })
+
+  it('sends nothing when the suggestion was replaced before the frame painted', async () => {
+    const view = renderAsk()
+    const first = view.result.run({ mode: 'suggest', prompt: 'ambient' })
+    await host.__settle()
+    toto.__fireDelta({ id: first, text: 'Try ' })
+    const second = view.result.run({ mode: 'suggest', prompt: 'newer' })
+    await host.__settle()
+    await nextFrame()
+    expect(toto.reportDisplayReceipt).not.toHaveBeenCalledWith(first)
+    expect(second).not.toBe(first)
+  })
+
+  it('never lets a failed receipt surface as an error', async () => {
+    toto.reportDisplayReceipt.mockRejectedValue(new Error('synthetic ipc failure'))
+    const view = renderAsk()
+    const id = view.result.run({ mode: 'suggest', prompt: 'ambient' })
+    await host.__settle()
+    toto.__fireDelta({ id, text: 'Try this.' })
+    await host.__settle()
+    await nextFrame()
+    expect(view.result.answer).toMatchObject({ id, text: 'Try this.' })
   })
 })

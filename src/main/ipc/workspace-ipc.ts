@@ -11,6 +11,13 @@ import { IPC, type PublicSettings } from '@shared/ipc'
 import type { MeetingsFolderPickResult, TeamFolderRefusal } from '@shared/contracts/settings-os-state'
 import { getLockedKeys, getSettings, setSettings } from '../store'
 import { readEvalMetrics, aggregateMetrics } from '../metrics'
+import { RESPONSIVENESS_IPC } from '@shared/responsiveness-ipc'
+import { boundedAnswerAskId } from '../ask-stream-registry'
+import {
+  askTiming,
+  emptyResponsivenessReport,
+  getResponsivenessRecorder
+} from '../infra/observability/responsiveness-recorder'
 import { parseRecapMarkdown, resolveMeetingsFolder } from '../transcripts'
 import { graphifyStatus, buildGraph, relatedNotes, graphHtml } from '../graphify'
 import { wikiDir } from '../brain/publish'
@@ -44,6 +51,26 @@ export function registerWorkspaceIpc(deps: WorkspaceIpcDependencies): void {
     assertMainWindow(e)
     if (!requireAuth()) return aggregateMetrics([])
     return readEvalMetrics()
+  })
+
+  // G12: the responsiveness report (first partial, useful suggestion, display receipt, cancellation, queue
+  // health, intervention counters). Counts and latencies only, kept on this device; a metric nobody has
+  // measured reads "not measured". Surfaced in Settings → About → Diagnostics.
+  ipcMain.handle(RESPONSIVENESS_IPC.report, async (e) => {
+    assertMainWindow(e)
+    if (!requireAuth()) return emptyResponsivenessReport()
+    const recorder = getResponsivenessRecorder()
+    await recorder.ready()
+    return recorder.report()
+  })
+
+  // The renderer confirms a suggestion it painted. Only a suggestion main marked as shown can be confirmed,
+  // so a forged or stale id counts for nothing.
+  ipcMain.handle(RESPONSIVENESS_IPC.displayReceipt, (e, askId: unknown) => {
+    assertMainWindow(e)
+    if (!requireAuth()) return
+    const id = boundedAnswerAskId(askId)
+    if (id) askTiming.displayed(id)
   })
 
   // Parse a recap's markdown into a structured object (decisions + action-items-with-owners) the renderer

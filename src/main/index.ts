@@ -793,7 +793,6 @@ import {
 } from './whisper-import'
 import { buildPolishPrompt, parsePolishResponse, polishBatches, type PolishLine } from './polish'
 import { detectLanguage as detectTextLanguage } from '@shared/lang-id'
-import type { TranscriptLine } from '@shared/ipc'
 import { assertBrokerSpeechSettingsPatch } from '@shared/broker-speech-settings'
 import { SpeechCaptureGrantRegistry } from './capture-permissions/speech-capture-grant'
 import { registerListenDisplayMedia } from './capture-permissions/listen-display-media'
@@ -876,7 +875,7 @@ import { runSelfTest, redirectSelfTestUserData } from './selftest'
 import { devEnv, devToolsEnabled } from './dev-env'
 import { importDustCliSession, refreshDustCliSession } from './dustcli'
 import { clearSeededDustCliSession, ensureManagedDustCli, seededDustTokenForDisconnect } from './dust-cli-chat'
-import { abortAllAskStreams, boundedAnswerAskId } from './ask-stream-registry'
+import { abortAllAskStreams, askTiming, boundedAnswerAskId } from './ask-stream-registry'
 import {
   beginDustDeviceLogin,
   pollDustDeviceLoginOnce,
@@ -949,7 +948,7 @@ import {
   releasePlaneTokenLock
 } from './mcp/planeOAuth'
 import { scheduleRebuild, purgeGraphArtifacts, acquireGraphBuildFence } from './graphify'
-import { SaveMeetingSchema, SaveNoteSchema, stripProvisionalLines } from '@shared/ipc'
+import { SaveMeetingSchema, SaveNoteSchema, stripProvisionalLines, type TranscriptLine } from '@shared/ipc'
 import {
   PROVIDERS,
   PROVIDER_IDS,
@@ -7133,7 +7132,7 @@ function registerIpc(): void {
       const logsDir = join(userData, 'logs')
       if (existsSync(logsDir)) {
         for (const f of readdirSync(logsDir)) {
-          if (/\.log$/.test(f)) copy(join(logsDir, f), f)
+          if (/\.log$|^responsiveness-report\.json$/.test(f)) copy(join(logsDir, f), f)
         }
       }
       for (const f of readdirSync(userData)) {
@@ -7531,6 +7530,7 @@ function registerIpc(): void {
     }
     try {
       const req = AskStartSchema.parse(raw)
+      askTiming.start(req.id, req.mode)
       // Brain context is main-only. Clear renderer input before any early return or mode gate so a
       // replay/fact-check/unavailable local store can never smuggle stale context into a provider prompt.
       req.brainContext = undefined
@@ -8147,6 +8147,7 @@ function registerIpc(): void {
           if (!text) return
           if (!gotToken) {
             ttftMs = Date.now() - startedAt
+            askTiming.firstVisible(req.id)
             // Tokens are flowing, so these credentials demonstrably work — clear any prior auth
             // verdict (MQA-003/MQA-004) rather than leaving a stale "broken" mark on a live provider.
             recordSuccess(provider)
@@ -8586,8 +8587,7 @@ function registerIpc(): void {
   ipcMain.handle(IPC.askCancel, (e, id: string) => {
     assertMainWindow(e)
     if (!requireAuth()) return
-    streams.get(id)?.abort()
-    streams.delete(id)
+    askTiming.cancel(streams, id)
   })
 
   // Explicit "New chat" from the renderer (History screen button / Cmd+Shift+R). The renderer clears its
