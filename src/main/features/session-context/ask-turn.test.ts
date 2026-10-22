@@ -345,3 +345,80 @@ describe('stop reasons and messages', () => {
     expect(askStartFailureMessage(new Error('provider said something private'))).toBe('Could not start the answer.')
   })
 })
+
+describe('G15: a corrected line outdates a running turn and a finished one is recorded for it', () => {
+  const correction = (text: string): CloudSpeechEvent =>
+    CloudSpeechEventSchema.parse({
+      type: 'segment',
+      captureId: '11111111-1111-4111-8111-111111111111',
+      captureGeneration: 1,
+      sequence: 99,
+      segment: {
+        stream: { generation: 1, track: 'system', epoch: 1 },
+        engine: 'deepgram-nova3',
+        index: 1,
+        revision: 2,
+        final: true,
+        text,
+        startMs: 1_000,
+        endMs: 1_500
+      }
+    })
+
+  it('drops the rest of an answer built from a line that was then corrected, and tells the renderer once', async () => {
+    const w = world()
+    const turn = need(await begin(w, 'a'))
+    const abort = w.stream('a')
+    expect(turn.send(IPC.streamDelta, { id: 'a', text: 'first chunk' })).toBe(true)
+    w.registry.ingestDelivered(FRAME, STARTED, correction('synthetic corrected opening line.'))
+    expect(turn.send(IPC.streamDelta, { id: 'a', text: 'late chunk' })).toBe(false)
+    expect(turn.send(IPC.streamDone, { id: 'a' })).toBe(false)
+    expect(w.delivered('a', IPC.streamDelta)).toBe(1)
+    expect(w.delivered('a', IPC.streamDone)).toBe(0)
+    expect(abort).toHaveBeenCalledTimes(1)
+    expect(w.errors('a')).toEqual([STALE_ANSWER_MESSAGE])
+  })
+
+  it('a finished answer is recorded against the lines it read, so a later correction reports it stale', async () => {
+    const w = world()
+    const reports: string[][] = []
+    const registry = createMeetingContextRegistry({
+      resolveScope: (_frame, startedAt) => ({
+        ownerKey: HEX,
+        scope: { tenantId: 'c'.repeat(64), userId: HEX, sessionId: `meeting-${startedAt}` }
+      }),
+      permissions: () => meetingPermissions(false),
+      onOutputsStale: (_owner, ids) => void reports.push([...ids])
+    })
+    registry.ingestDelivered(FRAME, STARTED, final(1, 'synthetic opening line.'))
+    const turns = createAskTurns({ send: () => undefined, streams: w.streams })
+    const handle = registry.acquire(FRAME, 'conversation')
+    if (!handle) throw new Error('no meeting open')
+    const turn = need(await turns.begin({ id: 'done-1', mode: 'suggest', handle }))
+    expect(turn.send(IPC.streamDelta, { id: 'done-1', text: 'a suggestion' })).toBe(true)
+    expect(reports).toEqual([])
+    expect(turn.send(IPC.streamDone, { id: 'done-1' })).toBe(true)
+    registry.ingestDelivered(FRAME, STARTED, correction('synthetic corrected opening line.'))
+    expect(reports).toEqual([['done-1']])
+  })
+
+  it('an answer that ended in an error is never recorded', async () => {
+    const reports: string[][] = []
+    const registry = createMeetingContextRegistry({
+      resolveScope: (_frame, startedAt) => ({
+        ownerKey: HEX,
+        scope: { tenantId: 'c'.repeat(64), userId: HEX, sessionId: `meeting-${startedAt}` }
+      }),
+      permissions: () => meetingPermissions(false),
+      onOutputsStale: (_owner, ids) => void reports.push([...ids])
+    })
+    registry.ingestDelivered(FRAME, STARTED, final(1, 'synthetic opening line.'))
+    const turns = createAskTurns({ send: () => undefined, streams: new Map() })
+    const handle = registry.acquire(FRAME, 'conversation')
+    if (!handle) throw new Error('no meeting open')
+    const turn = need(await turns.begin({ id: 'err-1', mode: 'answer', handle }))
+    expect(turn.send(IPC.streamError, { id: 'err-1', message: 'provider down' })).toBe(true)
+    registry.ingestDelivered(FRAME, STARTED, correction('synthetic corrected opening line.'))
+    expect(reports).toEqual([])
+  })
+})

@@ -5,7 +5,9 @@ import { SessionContext, type ContextSnapshot, type SessionOutputKind } from '@s
 import { SessionQueue } from '@shared/kernel/session-queue'
 import { sessionScopeFor, type SessionScope } from '@shared/kernel/session-scope'
 import { TranscriptLedger, TranscriptLedgerError, type TranscriptLedgerEvent } from '@shared/kernel/transcript-ledger'
+import { canUpgradeSpeakerLabel } from '@shared/speaker-names'
 import { speechSegmentToLedgerEvent } from '@shared/transcript-line-identity'
+import { CorrectionTracker, type LineDeps } from './correction-scope'
 
 type SegmentEvent = Extract<CloudSpeechEvent, { type: 'segment' }>
 
@@ -28,6 +30,12 @@ export interface MeetingContextRegistryDeps {
   onDegraded?(code: string): void
   /** Queue health (G12 `queue_wait_ms`, `queue_depth_peak`). Counts and durations only; absent until G12 is plugged in. */
   queueHealth?: QueueHealthSink
+  /**
+   * G15: a correction, retraction or relabel outdated outputs this meeting already published (their ids, recorded with
+   * `ContextHandle.recordOutput`). Fires once per output, content-free. The owner forgets nothing else: the next
+   * request reads the corrected ledger on its own.
+   */
+  onOutputsStale?(frame: FrameKey, outputIds: readonly string[]): void
   /** Monotonic milliseconds, injectable for tests. */
   now?(): number
 }
@@ -40,9 +48,12 @@ export interface QueueHealthSink {
 
 /** One ask's place in a meeting's queue: it stops when the context it was built from goes stale. */
 export interface AskJob {
-  /** Aborted when the job is outdated (stop, permissions, screen, knowledge), times out, or the meeting ends. */
+  /** Aborted when the job is outdated (stop, permissions, screen, knowledge, a corrected line), times out, or the meeting ends. */
   readonly signal: AbortSignal
-  /** Whether this job's snapshot may still publish. Same contract as `ContextHandle.check`. */
+  /**
+   * Whether this job's snapshot may still publish. Same contract as `ContextHandle.check`: a correction, retraction or
+   * relabel of a line the snapshot contained makes it stale (`LINE_CORRECTED`), and aborts `signal`.
+   */
   check(): ContextCheck
 }
 
@@ -60,8 +71,17 @@ export type ContextCheck =
 export interface ContextHandle {
   readonly meetingStartedAt: number
   readonly snapshot: ContextSnapshot
-  /** Re-reads permissions, then asks the issuing SessionContext whether this snapshot is still the one in force. */
+  /**
+   * Re-reads permissions, then asks the issuing SessionContext whether this snapshot is still the one in force. A line
+   * of the snapshot that was corrected, retracted or relabelled since makes it stale with `LINE_CORRECTED` (G15): the
+   * text it was built from is no longer the transcript.
+   */
   check(): ContextCheck
+  /**
+   * Records a finished output (a delivered answer or suggestion) against the lines this snapshot contained. When one
+   * of them is corrected later, `onOutputsStale` names the output once. Bounded; forgotten when the meeting ends.
+   */
+  recordOutput(outputId: string): void
   /**
    * Runs `work` as a job on this meeting's SessionQueue: one active job, at most `ASK_QUEUE_MAX_PENDING` waiting, a
    * deadline, and abort on any change that outdates the snapshot (a new transcript line does not). Resolves with the
@@ -112,14 +132,24 @@ export const ASK_QUEUE_MAX_PENDING = 2
 /** Default job deadline. Callers streaming an answer pass their own. */
 export const ASK_QUEUE_TIMEOUT_MS = 60_000
 
+/** Delivered outputs remembered per meeting for correction reporting; the oldest is forgotten first. */
+export const MAX_RECORDED_OUTPUTS = 64
+
 /** A real meeting commits thousands of finals; the ledger's own defaults are the reference kernel's smaller bounds. */
 export const CONTEXT_LEDGER_LIMITS = { maxEvents: 60_000, maxUtterances: 8_000 } as const
 
 const LOCAL_EPOCH = 1
 const SPEAKER_IDS = { you: 'YOU', them: 'THEM', unknown: 'SPEAKER' } as const
 
+/** One accepted job, held while it runs or waits so a correction can outdate it. */
+interface LiveJob {
+  readonly deps: LineDeps
+  invalidate(): void
+}
+
 interface MeetingContext {
   readonly startedAt: number
+  readonly frame: FrameKey
   readonly frameOwner: string
   readonly scope: MeetingScope
   readonly ledger: TranscriptLedger
@@ -130,6 +160,12 @@ interface MeetingContext {
   screenSource: string | null
   /** Jobs accepted and not yet finished (the active one plus the pending ones), for queue health. */
   inFlight: number
+  /** G15: which lines were corrected, retracted or relabelled, and when (a counter), so outputs can be outdated. */
+  readonly corrections: CorrectionTracker
+  /** Jobs accepted and not yet settled; a correction aborts the ones whose snapshot contained the line. */
+  readonly liveJobs: Set<LiveJob>
+  /** Delivered outputs and the lines they read, oldest first. */
+  readonly outputs: Map<string, LineDeps>
   readonly streamEpochs: Map<string, number>
   readonly localLines: Map<number, { utteranceId: string; speaker: 'you' | 'them' | 'unknown'; text: string }>
   /** Speaker name and language by utterance id, as the renderer reports them (a name can arrive after the line). */
@@ -140,6 +176,20 @@ interface MeetingContext {
 }
 
 const MAX_LABELS = 20_000
+
+/** The check code for a snapshot whose lines were corrected, retracted or relabelled after it was taken. */
+export const LINE_CORRECTED = 'LINE_CORRECTED'
+
+/** The utterance ids a snapshot's transcript contains (finals only; interim text never reaches a snapshot). */
+const utteranceIdsOf = (snapshot: ContextSnapshot): string[] =>
+  (snapshot.transcript.segments as ReadonlyArray<{ utteranceId?: unknown }>)
+    .map((segment) => segment.utteranceId)
+    .filter((id): id is string => typeof id === 'string')
+
+type Label = { name?: string; lang?: string }
+const labelReplaced = (previous: Label, next: Label): boolean =>
+  (!!previous.name && !!next.name && previous.name !== next.name && !canUpgradeSpeakerLabel(previous.name)) ||
+  (!!previous.lang && !!next.lang && previous.lang !== next.lang)
 
 const frameOwnerOf = (frame: FrameKey): string => `${frame.processId}:${frame.routingId}`
 const sameScope = (a: MeetingScope, b: MeetingScope): boolean =>
@@ -204,7 +254,28 @@ export function createMeetingContextRegistry(deps: MeetingContextRegistryDeps): 
       if (oldest === undefined) break
       context.labels.delete(oldest)
     }
+    // A name or language arriving for a line that had none (or a placeholder such as `Unknown speaker 2`) enriches it;
+    // one label replacing another confirmed label changes what outputs that read the line said, so it is a correction.
+    if (previous && labelReplaced(previous, next)) corrected(context, utteranceId)
     return true
+  }
+
+  /** One line of this meeting was corrected, retracted or relabelled: outdate every output that read it. */
+  const corrected = (context: MeetingContext, utteranceId: string): void => {
+    context.corrections.record(utteranceId)
+    for (const job of [...context.liveJobs]) if (context.corrections.affects(job.deps)) job.invalidate()
+    const stale: string[] = []
+    for (const [outputId, lines] of context.outputs) {
+      if (!context.corrections.affects(lines)) continue
+      stale.push(outputId)
+      context.outputs.delete(outputId)
+    }
+    if (stale.length === 0) return
+    try {
+      deps.onOutputsStale?.(context.frame, stale)
+    } catch {
+      // telling the renderer is best effort; the context already moved on
+    }
   }
 
   const observeHealth = (record: (health: QueueHealthSink) => void): void => {
@@ -229,14 +300,31 @@ export function createMeetingContextRegistry(deps: MeetingContextRegistryDeps): 
     }
   }
 
+  /** `checkFor`, plus G15: stale once a line the snapshot contained was corrected since. */
+  const checkWith = (context: MeetingContext, snapshot: ContextSnapshot, lines: LineDeps) => (): ContextCheck => {
+    const base = checkFor(context, snapshot)()
+    if (base.state === 'stale') return base
+    return context.corrections.affects(lines) ? { state: 'stale', code: LINE_CORRECTED } : base
+  }
+
   const enqueue = <T>(
     context: MeetingContext,
     kind: SessionOutputKind,
     work: (job: AskJob) => PromiseLike<T> | T,
+    lines: LineDeps,
     options?: EnqueueOptions
   ): Promise<T> => {
     const now = deps.now ?? Date.now
     const queuedAt = now()
+    // The job reads the transcript its handle was built from, so a correction since then already outdates it.
+    const outdated = new AbortController()
+    const rejection = new Promise<never>((_resolve, reject) => {
+      outdated.signal.addEventListener('abort', () => reject(outdated.signal.reason), { once: true })
+    })
+    rejection.catch(() => undefined)
+    const live: LiveJob = { deps: lines, invalidate: () => outdated.abort(new ContractError('TASK_INVALIDATED')) }
+    context.liveJobs.add(live)
+    if (context.corrections.affects(lines)) live.invalidate()
     context.inFlight += 1
     // A refused submit never joins the queue, so it is not a depth the queue reached.
     if (context.inFlight <= ASK_QUEUE_MAX_PENDING + 1)
@@ -247,14 +335,32 @@ export function createMeetingContextRegistry(deps: MeetingContextRegistryDeps): 
         (snapshot, signal) => {
           const waited = Math.max(0, now() - queuedAt)
           observeHealth((health) => health.recordLatency('queue_wait_ms', waited))
-          return work({ signal, check: checkFor(context, snapshot) })
+          // Outdated while it waited for its turn: it never starts.
+          if (outdated.signal.aborted) throw outdated.signal.reason
+          const check = checkWith(context, snapshot, lines)
+          return Promise.race([
+            Promise.resolve(work({ signal: AbortSignal.any([signal, outdated.signal]), check })),
+            rejection
+          ])
         },
         options
       )
       .then((result) => result.value)
       .finally(() => {
         context.inFlight -= 1
+        context.liveJobs.delete(live)
       })
+  }
+
+  const recordOutput = (context: MeetingContext, outputId: string, lines: LineDeps): void => {
+    if (!context.session.active) return
+    context.outputs.delete(outputId)
+    context.outputs.set(outputId, lines)
+    while (context.outputs.size > MAX_RECORDED_OUTPUTS) {
+      const oldest = context.outputs.keys().next().value
+      if (oldest === undefined) break
+      context.outputs.delete(oldest)
+    }
   }
 
   const close = (meetingStartedAt: number): void => {
@@ -264,6 +370,8 @@ export function createMeetingContextRegistry(deps: MeetingContextRegistryDeps): 
     if (byFrame.get(context.frameOwner) === meetingStartedAt) byFrame.delete(context.frameOwner)
     context.queue.dispose()
     context.session.stop()
+    context.liveJobs.clear()
+    context.outputs.clear()
   }
 
   const open = (frame: FrameKey, meetingStartedAt: number): MeetingContext | null => {
@@ -283,11 +391,19 @@ export function createMeetingContextRegistry(deps: MeetingContextRegistryDeps): 
     for (const other of [...contexts.keys()]) close(other)
     try {
       const session = new SessionContext({ scope: scope.scope, permissions: deps.permissions(), mode: 'meeting' })
+      // The ledger reports corrections before this context exists; the holder is read only when one fires.
+      const holder: { context?: MeetingContext } = {}
       const context: MeetingContext = {
         startedAt: meetingStartedAt,
+        frame: { processId: frame.processId, routingId: frame.routingId },
         frameOwner: frameOwnerOf(frame),
         scope,
-        ledger: new TranscriptLedger(scope.scope, CONTEXT_LEDGER_LIMITS),
+        ledger: new TranscriptLedger(scope.scope, {
+          ...CONTEXT_LEDGER_LIMITS,
+          onCorrection: (correction) => {
+            if (holder.context) corrected(holder.context, correction.utteranceId)
+          }
+        }),
         session,
         // A live conversation keeps talking while an answer streams; that moves the transcript, not the question.
         queue: new SessionQueue(session, {
@@ -297,6 +413,9 @@ export function createMeetingContextRegistry(deps: MeetingContextRegistryDeps): 
         }),
         screenSource: null,
         inFlight: 0,
+        corrections: new CorrectionTracker(),
+        liveJobs: new Set(),
+        outputs: new Map(),
         streamEpochs: new Map(),
         localLines: new Map(),
         labels: new Map(),
@@ -304,6 +423,7 @@ export function createMeetingContextRegistry(deps: MeetingContextRegistryDeps): 
         publishCount: 0,
         degraded: false
       }
+      holder.context = context
       contexts.set(meetingStartedAt, context)
       byFrame.set(context.frameOwner, meetingStartedAt)
       return context
@@ -433,11 +553,14 @@ export function createMeetingContextRegistry(deps: MeetingContextRegistryDeps): 
       } catch {
         return null
       }
+      // What this snapshot's prompt is built from: a later correction to any of these lines outdates its output.
+      const lines = context.corrections.capture(utteranceIdsOf(snapshot))
       return {
         meetingStartedAt: context.startedAt,
         snapshot,
-        check: checkFor(context, snapshot),
-        enqueue: (work, options) => enqueue(context, kind, work, options)
+        check: checkWith(context, snapshot, lines),
+        enqueue: (work, options) => enqueue(context, kind, work, lines, options),
+        recordOutput: (outputId) => recordOutput(context, outputId, lines)
       }
     },
 

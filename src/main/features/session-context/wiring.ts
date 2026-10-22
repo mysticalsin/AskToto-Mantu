@@ -34,6 +34,11 @@ export interface MeetingContextsDeps {
   onMeetingEnd(listener: (startedAt: number) => void): () => void
   /** Metadata-only ledger refusal code. */
   onDegraded(code: string): void
+  /**
+   * G15: tells the renderer frame that owns a meeting which of its already-delivered outputs a corrected line outdated.
+   * Ids only, never text. A throwing sender is contained by the registry.
+   */
+  sendOutputsStale?(frame: { processId: number; routingId: number }, outputIds: readonly string[]): void
   /** G12 queue-health recorder (`queue_wait_ms`, `queue_depth_peak`). Typed seam: absent until G12 lands here. */
   queueHealth?: QueueHealthSink
 }
@@ -64,7 +69,8 @@ export function bindMeetingContexts(deps: MeetingContextsDeps): MeetingContexts 
     }),
     permissions: () => meetingPermissions(deps.privateView()),
     onDegraded: deps.onDegraded,
-    queueHealth: deps.queueHealth
+    queueHealth: deps.queueHealth,
+    onOutputsStale: (frame, outputIds) => deps.sendOutputsStale?.(frame, outputIds)
   })
   deps.ownerSession.onRevoked((ref) => registry.closeFrame(ref.frameOwner))
   deps.onMeetingEnd((startedAt) => registry.close(startedAt))

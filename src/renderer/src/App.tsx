@@ -1278,7 +1278,7 @@ export function App(): JSX.Element {
 
   const cancelledRef = useRef(false) // set when the user explicitly stops/cancels an answer
   // record a completed Ask turn into conversation memory (for follow-ups), see useConversationMemory
-  useConversationMemory(ask.answer, suggest.answer, settings?.askFollowUpMemory, {
+  useConversationMemory(ask.answer, suggest, settings?.askFollowUpMemory, {
     history: historyRef,
     copilotHistory: copilotHistoryRef,
     lastTurnAt: lastTurnAtRef,

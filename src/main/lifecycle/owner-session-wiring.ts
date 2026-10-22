@@ -1,10 +1,11 @@
-import { app, type IpcMain, type IpcMainInvokeEvent } from 'electron'
+import { app, webFrameMain, type IpcMain, type IpcMainInvokeEvent } from 'electron'
 import { createMainTranscriptRevision } from '../features/meetings/main-transcript-revision'
 import { bindMeetingContexts, type MeetingContexts } from '../features/session-context/wiring'
 import { bindTranscriptCheckpointStore } from '../features/meetings/transcript-checkpoint-binding'
 import { bindMeetingEndClosure, bindOwnerRevocationClosure } from '../features/meetings/session-closure'
 import { onDraftMeetingFinalizing } from '../infra/storage/draft-transcript-write-state'
 import { createLanguageChangeAudit } from '../ipc/cloud-speech-language-audit'
+import { createOutputsStalePush } from '../ipc/push-outputs-stale'
 import { registerOwnerSessionIpc } from '../ipc/register-owner-session'
 import type { AuthorizeSender } from '../ipc/sender-auth'
 import { authSessionGeneration, authStatus, requireAuth } from '../auth'
@@ -92,6 +93,8 @@ export function createOwnerSessionWiring(deps: OwnerSessionWiringDeps): OwnerSes
     },
     onMeetingEnd: onDraftMeetingFinalizing,
     onDegraded: (code) => mainLog.warn('[session-context] ledger degraded', code),
+    // G15: a corrected line tells the meeting's frame which delivered outputs it outdated (ids only).
+    sendOutputsStale: createOutputsStalePush((processId, routingId) => webFrameMain.fromId(processId, routingId)),
     // G14 queue health lands in the G12 responsiveness recorder, resolved on every use (it is created lazily).
     queueHealth: {
       recordLatency: (id, ms) => getResponsivenessRecorder().recordLatency(id, ms),

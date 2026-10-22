@@ -39,6 +39,24 @@ const event = CloudSpeechEventSchema.parse({
   }
 })
 
+/** The same segment, revised: the provider corrected a final it had already delivered. */
+const revised = CloudSpeechEventSchema.parse({
+  type: 'segment',
+  captureId: '11111111-1111-4111-8111-111111111111',
+  captureGeneration: 1,
+  sequence: 2,
+  segment: {
+    stream: { generation: 1, track: 'system', epoch: 1 },
+    engine: 'deepgram-nova3',
+    index: 1,
+    revision: 2,
+    final: true,
+    text: 'synthetic corrected line',
+    startMs: 1_000,
+    endMs: 1_500
+  }
+})
+
 const owner = (over: Partial<DeliveredSpeechOwner> = {}): DeliveredSpeechOwner => ({
   binding: { processId: 12, routingId: 3 },
   captureContext: { listenStartedAt: STARTED },
@@ -154,5 +172,26 @@ describe('bindMeetingContexts', () => {
     w.contexts.onSegmentDelivered(owner(), event)
     await w.contexts.registry.acquire(FRAME, 'conversation')!.enqueue(() => 'ran')
     expect(peaks).toEqual([1])
+  })
+
+  it('reports the outputs a corrected line outdates to the frame that owns the meeting, by id only (G15)', () => {
+    const sendOutputsStale = vi.fn()
+    const w = setup({ sendOutputsStale })
+    w.contexts.onSegmentDelivered(owner(), event)
+    w.contexts.registry.acquire(FRAME, 'conversation')!.recordOutput('ask-1')
+    w.contexts.onSegmentDelivered(owner(), revised)
+    expect(sendOutputsStale).toHaveBeenCalledTimes(1)
+    expect(sendOutputsStale).toHaveBeenCalledWith(FRAME, ['ask-1'])
+  })
+
+  it('never lets a throwing renderer notification reach the delivery path', () => {
+    const w = setup({
+      sendOutputsStale: () => {
+        throw new Error('window gone')
+      }
+    })
+    w.contexts.onSegmentDelivered(owner(), event)
+    w.contexts.registry.acquire(FRAME, 'conversation')!.recordOutput('ask-1')
+    expect(() => w.contexts.onSegmentDelivered(owner(), revised)).not.toThrow()
   })
 })

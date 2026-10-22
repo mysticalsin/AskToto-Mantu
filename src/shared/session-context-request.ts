@@ -45,7 +45,15 @@ export const askContext = (
  * This is the one place a line crosses toward main, and it feeds the ledger, never an ask. Relay segments reach
  * main directly and are never forwarded.
  */
-export const SESSION_CONTEXT_IPC = { appendLine: 'session-context:appendLine' } as const
+export const SESSION_CONTEXT_IPC = {
+  appendLine: 'session-context:appendLine',
+  /** Main to renderer (G15): answers or suggestions already delivered whose transcript lines were since corrected. */
+  outputsStale: 'session-context:outputsStale'
+} as const
+
+/** The content-free payload of `outputsStale`: the run ids of the outputs a correction outdated. Never any text. */
+export const OutputsStaleSchema = z.object({ ids: z.array(z.string().min(1).max(200)).min(1).max(64) }).strict()
+export type OutputsStale = z.output<typeof OutputsStaleSchema>
 
 const StartedAtSchema = z.number().int().positive().safe()
 const LineTimeSchema = z.number().int().nonnegative().safe()

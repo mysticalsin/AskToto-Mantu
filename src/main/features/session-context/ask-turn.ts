@@ -111,7 +111,7 @@ export function createAskTurns(deps: AskTurnsDeps): AskTurns {
     if (reason !== 'cancelled') deps.send(IPC.streamError, { id: entry.id, message: MESSAGES[reason] })
   }
 
-  const turnFor = (entry: Entry, job: AskJob): AskTurn => ({
+  const turnFor = (entry: Entry, job: AskJob, handle: ContextHandle): AskTurn => ({
     send(channel, payload) {
       if (entry.state !== 'running') return false
       if (job.check().state === 'stale') {
@@ -119,6 +119,8 @@ export function createAskTurns(deps: AskTurnsDeps): AskTurns {
         return false
       }
       deps.send(channel, payload)
+      // A delivered answer is remembered against the lines it read, so a later correction can name it (G15).
+      if (channel === IPC.streamDone) handle.recordOutput(entry.id)
       if (channel === IPC.streamDone || channel === IPC.streamError) finish(entry)
       return true
     }
@@ -149,7 +151,7 @@ export function createAskTurns(deps: AskTurnsDeps): AskTurns {
                 entry.state = 'running'
                 job.signal.addEventListener('abort', () => stop(entry, stopReasonOf(job.signal.reason)), { once: true })
                 if (job.check().state === 'stale') return stop(entry, 'stale')
-                settleBegin(turnFor(entry, job))
+                settleBegin(turnFor(entry, job, handle))
               }),
             { timeoutMs: mode === 'suggest' ? SUGGEST_JOB_TIMEOUT_MS : ANSWER_JOB_TIMEOUT_MS }
           )
