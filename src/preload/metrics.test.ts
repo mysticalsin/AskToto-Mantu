@@ -23,8 +23,11 @@ describe('metrics preload bridge', () => {
   })
 
   it('is spread into the window.toto bridge, and the inline readMetrics it replaced is gone', () => {
+    // index.ts composes the self-contained feature bridges through feature-apis.ts (V02), which spreads this one.
     const { text } = readModuleSource(__dirname, './index')
-    expect(text).toMatch(/\.\.\.createMetricsPreloadApi\(ipcRenderer\)/)
+    expect(text).toMatch(/\.\.\.createFeaturePreloadApis\(ipcRenderer\)/)
     expect(text).not.toMatch(/readMetrics:/)
+    const features = readModuleSource(__dirname, './feature-apis').text
+    expect(features).toMatch(/\.\.\.createMetricsPreloadApi\(ipc\)/)
   })
 })
