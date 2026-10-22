@@ -6,6 +6,7 @@ import { createLanguageChangeAudit, languageChangeAuditRecord } from './cloud-sp
 const ref = OwnerSessionRefSchema.parse({
   v: 1,
   ownerKey: 'ab'.repeat(32),
+  tenantKey: 'cd'.repeat(32),
   authGeneration: 3,
   sessionId: '123e4567-e89b-42d3-a456-426614174000',
   frameOwner: '11:2',

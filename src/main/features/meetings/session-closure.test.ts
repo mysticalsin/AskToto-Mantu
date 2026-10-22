@@ -29,6 +29,7 @@ const SESSION = '00000000-0000-4000-8000-000000000001'
 const ref = (over: Partial<OwnerSessionRef> = {}): OwnerSessionRef => ({
   v: 1,
   ownerKey: 'a'.repeat(64),
+  tenantKey: 'b'.repeat(64),
   authGeneration: 1,
   sessionId: SESSION,
   frameOwner: '12:3',
@@ -98,6 +99,7 @@ function realOwnerAuthority(identity: string | null = 'owner-a') {
   let nextSession = 0
   const authority = createOwnerSessionAuthority({
     identityId: () => state.identity,
+    tenantId: () => 'tenant-a',
     authGeneration: () => state.authGeneration,
     currentContextRevision: () => state.contextRevision,
     salt: () => Buffer.alloc(32, 9),

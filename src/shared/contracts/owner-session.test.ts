@@ -10,6 +10,7 @@ import {
 const validRef = {
   v: 1,
   ownerKey: 'ab'.repeat(32),
+  tenantKey: 'cd'.repeat(32),
   authGeneration: 3,
   sessionId: '123e4567-e89b-42d3-a456-426614174000',
   frameOwner: '12:3',
@@ -36,6 +37,16 @@ describe('OwnerSessionRefSchema', () => {
     expect(OwnerSessionRefSchema.safeParse({ ...validRef, ownerKey: 'AB'.repeat(32) }).success).toBe(false)
     expect(OwnerSessionRefSchema.safeParse({ ...validRef, ownerKey: 'a'.repeat(63) }).success).toBe(false)
     expect(OwnerSessionRefSchema.safeParse({ ...validRef, ownerKey: 'user@example.com' }).success).toBe(false)
+  })
+
+  it('requires a tenantKey that is 64 lowercase hex and never a raw tenant id', () => {
+    const { tenantKey: _tenantKey, ...withoutTenant } = validRef
+    expect(OwnerSessionRefSchema.safeParse(withoutTenant).success).toBe(false)
+    expect(OwnerSessionRefSchema.safeParse({ ...validRef, tenantKey: 'CD'.repeat(32) }).success).toBe(false)
+    expect(OwnerSessionRefSchema.safeParse({ ...validRef, tenantKey: 'c'.repeat(63) }).success).toBe(false)
+    expect(
+      OwnerSessionRefSchema.safeParse({ ...validRef, tenantKey: '72f988bf-86f1-41af-91ab-2d7cd011db47' }).success
+    ).toBe(false)
   })
 
   it('validates frameOwner as processId:routingId', () => {

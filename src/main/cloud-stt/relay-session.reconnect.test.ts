@@ -462,6 +462,7 @@ describe('speech.language.change audit hook (WP02 catalog, S13 path)', () => {
     const original = OwnerSessionRefSchema.parse({
       v: 1,
       ownerKey: 'ab'.repeat(32),
+      tenantKey: 'cd'.repeat(32),
       authGeneration: 1,
       sessionId: OLD_ID,
       frameOwner: '11:2',

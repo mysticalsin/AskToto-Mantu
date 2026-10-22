@@ -15,6 +15,7 @@ function setup() {
   const state = { identity: 'person@example.com' as string | null, auth: 5, ctx: 11 }
   const authority = createOwnerSessionAuthority({
     identityId: () => state.identity,
+    tenantId: () => 'tenant-a',
     authGeneration: () => state.auth,
     currentContextRevision: () => state.ctx,
     salt: () => Buffer.alloc(32, 1),

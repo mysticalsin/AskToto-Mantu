@@ -7,6 +7,7 @@ vi.mock('../auth', () => ({ authStatus: vi.fn(), authSessionGeneration: vi.fn() 
 import {
   createOwnerSessionAuthority,
   deriveOwnerKey,
+  deriveTenantKey,
   loadOwnerKeySalt,
   type OwnerKeySaltCrypto,
   type OwnerKeySaltIo
@@ -21,6 +22,7 @@ const frameE = { processId: 16, routingId: 7 }
 function setup(uuidOverride?: () => string) {
   const state = {
     identity: 'person@example.com' as string | null,
+    tenant: 'tenant-a' as string | null,
     gen: 1,
     rev: 10,
     salt: Buffer.alloc(32, 9) as Buffer | null
@@ -36,6 +38,7 @@ function setup(uuidOverride?: () => string) {
   let n = 0
   const authority = createOwnerSessionAuthority({
     identityId: () => state.identity,
+    tenantId: () => state.tenant,
     authGeneration: () => state.gen,
     currentContextRevision: () => state.rev,
     salt: () => state.salt,
@@ -202,6 +205,43 @@ describe('owner-session authority', () => {
     expect(first.ownerKey).toMatch(/^[0-9a-f]{64}$/)
     expect(first.ownerKey).not.toContain('person')
     expect(first.ownerKey).toBe(deriveOwnerKey(Buffer.alloc(32, 9), 'person@example.com'))
+  })
+
+  it('tenantKey is a salted hash of the verified tenant, never the raw id, and differs from ownerKey', () => {
+    const { state, authority } = setup()
+    const first = mustMint(authority, frameA, 10)
+    expect(first.tenantKey).toMatch(/^[0-9a-f]{64}$/)
+    expect(first.tenantKey).not.toContain('tenant')
+    expect(first.tenantKey).toBe(deriveTenantKey(Buffer.alloc(32, 9), 'tenant-a'))
+    expect(first.tenantKey).not.toBe(first.ownerKey)
+    expect(deriveTenantKey(Buffer.alloc(32, 9), 'person@example.com')).not.toBe(
+      deriveOwnerKey(Buffer.alloc(32, 9), 'person@example.com')
+    )
+    state.rev = 11
+    expect(mustMint(authority, frameA, 11).tenantKey).toBe(first.tenantKey)
+    state.tenant = 'tenant-b'
+    expect(mustMint(authority, frameB, 11).tenantKey).not.toBe(first.tenantKey)
+  })
+
+  it('mints null when the verified tenant is unknown', () => {
+    const { state, authority } = setup()
+    state.tenant = null
+    expect(authority.mint(frameA, 10)).toBeNull()
+    state.tenant = ''
+    expect(authority.mint(frameA, 10)).toBeNull()
+  })
+
+  it('refuses a ref whose tenant changed under the same identity and does not reuse a live ref across tenants', () => {
+    const { state, authority } = setup()
+    const ref = mustMint(authority)
+    expect(authority.validate(ref, frameA)).toEqual({ ok: true })
+    state.tenant = 'tenant-b'
+    expect(authority.validate(ref, frameA)).toEqual({ ok: false, reason: 'wrong-owner' })
+    expect(authority.current(frameA)).toBeNull()
+    const next = mustMint(authority)
+    expect(next.sessionId).not.toBe(ref.sessionId)
+    expect(next.tenantKey).not.toBe(ref.tenantKey)
+    expect(authority.validate({ ...ref, tenantKey: 'f'.repeat(64) }, frameA)).toEqual({ ok: false, reason: 'unknown' })
   })
 
   it('currentOwnerKey is the derived key for the signed-in identity, and null when signed out or unsalted', () => {

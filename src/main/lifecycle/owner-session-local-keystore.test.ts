@@ -29,6 +29,7 @@ vi.mock('node:fs/promises', () => ({
 }))
 vi.mock('../auth', () => ({
   authSessionGeneration: () => 1,
+  authTenantId: () => 'tenant-a',
   authStatus: () => ({ signedIn: true, email: 'qa@example.invalid' })
 }))
 

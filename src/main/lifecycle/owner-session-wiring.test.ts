@@ -183,6 +183,7 @@ function world(identity: string | null = 'owner-a') {
   let session = 0
   const authority = createOwnerSessionAuthority({
     identityId: () => state.identity,
+    tenantId: () => 'tenant-a',
     authGeneration: () => state.authGeneration,
     currentContextRevision: () => state.contextRevision,
     salt: () => Buffer.alloc(32, 9),

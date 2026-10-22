@@ -4,6 +4,8 @@ export interface OwnerSessionRef {
   readonly v: 1
   /** HMAC-SHA256 hex, Main-derived, never an email. */
   readonly ownerKey: string
+  /** HMAC-SHA256 hex of the verified sign-in tenant (Main-derived, never the raw tenant id). */
+  readonly tenantKey: string
   readonly authGeneration: number
   /** Per sign-in uuid. */
   readonly sessionId: string
@@ -31,6 +33,7 @@ export const OwnerSessionRefSchema: z.ZodType<OwnerSessionRef, z.ZodTypeDef, unk
   .object({
     v: z.literal(1),
     ownerKey: z.string().regex(/^[0-9a-f]{64}$/),
+    tenantKey: z.string().regex(/^[0-9a-f]{64}$/),
     authGeneration: nonNegativeSafeInt,
     sessionId: z.string().uuid(),
     frameOwner: FrameOwnerSchema,

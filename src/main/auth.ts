@@ -679,9 +679,9 @@ export function requireAuth(): boolean {
   return !s.configured || s.signedIn
 }
 /** Main-owned auth identity generation. It advances whenever the authenticated session is saved or cleared. */
-export function authSessionGeneration(): number {
-  return speechAuthSessionEpoch
-}
+export const authSessionGeneration = (): number => speechAuthSessionEpoch
+/** The signed-in session's Entra tenant id, lowercased, or null. Call after `authStatus()` so expiry has run. */
+export const authTenantId = (): string | null => session?.tid?.trim().toLowerCase() || null
 export const captureAuthSessionBoundary = () => speechAuthLeaseController.captureSessionBoundary(requireAuth)
 speechAuthLeaseController = new SpeechAuthLeaseController({
   prepareSession: loadSession,

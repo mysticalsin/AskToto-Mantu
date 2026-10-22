@@ -45,6 +45,7 @@ export function validRef(overrides: Partial<OwnerSessionRef> = {}): OwnerSession
   return Object.freeze({
     v: 1,
     ownerKey: 'a'.repeat(64),
+    tenantKey: 'b'.repeat(64),
     authGeneration: 5,
     sessionId: '00000000-0000-4000-8000-000000000001',
     frameOwner: '12:3',

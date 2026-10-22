@@ -77,6 +77,7 @@ describe('authorizeSender', () => {
   it('returns the current OwnerSessionRef for the top main frame', () => {
     const authority = createOwnerSessionAuthority({
       identityId: () => 'person@example.com',
+      tenantId: () => 'tenant-a',
       authGeneration: () => 5,
       currentContextRevision: () => 11,
       salt: () => Buffer.alloc(32, 1),

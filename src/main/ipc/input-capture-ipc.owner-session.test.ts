@@ -31,6 +31,7 @@ const commandStartRequest = {
 const ref: OwnerSessionRef = Object.freeze({
   v: 1,
   ownerKey: 'a'.repeat(64),
+  tenantKey: 'b'.repeat(64),
   authGeneration: 5,
   sessionId: '00000000-0000-4000-8000-000000000001',
   frameOwner: '12:3',
@@ -316,6 +317,7 @@ describe('input-capture IPC owner-session admission', () => {
     let nextId = 0
     const ownerAuthority = createOwnerSessionAuthority({
       identityId: () => 'person@example.com',
+      tenantId: () => 'tenant-a',
       authGeneration: () => context.authSessionGeneration,
       currentContextRevision: () => context.contextRevision,
       salt: () => Buffer.alloc(32, 9),

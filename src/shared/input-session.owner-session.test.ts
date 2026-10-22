@@ -13,6 +13,7 @@ describe('input-session owner-session contract adoption', () => {
     const parsed = OwnerSessionRefSchema.safeParse({
       v: 1,
       ownerKey: 'cd'.repeat(32),
+      tenantKey: 'ef'.repeat(32),
       authGeneration: 0,
       sessionId: '123e4567-e89b-42d3-a456-426614174000',
       frameOwner: '4:9',

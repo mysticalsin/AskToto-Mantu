@@ -249,6 +249,7 @@ describe('relay revision adapter', () => {
     const signedIn: OwnerSessionRef = {
       v: 1,
       ownerKey: 'a'.repeat(64),
+      tenantKey: 'b'.repeat(64),
       authGeneration: 1,
       sessionId: '00000000-0000-4000-8000-000000000001',
       frameOwner: '12:3',

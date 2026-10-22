@@ -4,7 +4,7 @@ import { dirname, join } from 'node:path'
 import { app, safeStorage, webContents } from 'electron'
 import { OwnerSessionRefSchema } from '@shared/contracts/owner-session'
 import type { OwnerSessionRef, OwnerSessionRevokeReason } from '@shared/contracts/owner-session'
-import { authSessionGeneration, authStatus } from '../auth'
+import { authSessionGeneration, authStatus, authTenantId } from '../auth'
 
 /** Structural stand-in for Electron.WebFrameMain so tests can use plain objects. */
 export interface FrameLike {
@@ -30,6 +30,8 @@ export interface OwnerSessionAuthority {
 
 export interface OwnerSessionAuthorityDeps {
   identityId(): string | null
+  /** The verified sign-in tenant id (Entra `tid`), or null while signed out or when it is unknown. */
+  tenantId(): string | null
   authGeneration(): number
   currentContextRevision(): number
   salt(): Buffer | null
@@ -39,6 +41,7 @@ export interface OwnerSessionAuthorityDeps {
 }
 
 const KEY_CONTEXT = 'metis.owner-key.v1\0'
+const TENANT_KEY_CONTEXT = 'metis.tenant-key.v1\0'
 const SALT_BYTES = 32
 const REVOKED_CAP = 256
 
@@ -49,10 +52,18 @@ export function deriveOwnerKey(salt: Buffer, identityId: string): string {
     .digest('hex')
 }
 
+/** HMAC-SHA256(salt, context + tenant id), lowercase hex. A different context from the owner key, so the two never collide. */
+export function deriveTenantKey(salt: Buffer, tenantId: string): string {
+  return createHmac('sha256', salt)
+    .update(TENANT_KEY_CONTEXT + tenantId)
+    .digest('hex')
+}
+
 function sameRef(a: OwnerSessionRef, b: OwnerSessionRef): boolean {
   return (
     a.v === b.v &&
     a.ownerKey === b.ownerKey &&
+    a.tenantKey === b.tenantKey &&
     a.authGeneration === b.authGeneration &&
     a.sessionId === b.sessionId &&
     a.frameOwner === b.frameOwner &&
@@ -84,6 +95,12 @@ export function createOwnerSessionAuthority(deps: OwnerSessionAuthorityDeps): Ow
     const identity = deps.identityId()
     const salt = deps.salt()
     return identity && salt ? deriveOwnerKey(salt, identity) : null
+  }
+
+  const currentTenantKey = (): string | null => {
+    const tenant = deps.tenantId()
+    const salt = deps.salt()
+    return tenant && salt ? deriveTenantKey(salt, tenant) : null
   }
 
   const remember = (sessionId: string): void => {
@@ -132,6 +149,8 @@ export function createOwnerSessionAuthority(deps: OwnerSessionAuthorityDeps): Ow
     mint(frame, contextRevision) {
       const ownerKey = currentOwnerKey()
       if (!ownerKey) return null
+      const tenantKey = currentTenantKey()
+      if (!tenantKey) return null
       const webContentsId = deps.webContentsIdOf(frame)
       if (webContentsId === null) return null
       if (!Number.isSafeInteger(frame.processId) || !Number.isSafeInteger(frame.routingId)) return null
@@ -142,6 +161,7 @@ export function createOwnerSessionAuthority(deps: OwnerSessionAuthorityDeps): Ow
       if (
         existing &&
         existing.ref.ownerKey === ownerKey &&
+        existing.ref.tenantKey === tenantKey &&
         existing.ref.authGeneration === authGeneration &&
         existing.ref.contextRevision === contextRevision
       ) {
@@ -159,6 +179,7 @@ export function createOwnerSessionAuthority(deps: OwnerSessionAuthorityDeps): Ow
         OwnerSessionRefSchema.parse({
           v: 1,
           ownerKey,
+          tenantKey,
           authGeneration,
           sessionId,
           frameOwner,
@@ -180,6 +201,7 @@ export function createOwnerSessionAuthority(deps: OwnerSessionAuthorityDeps): Ow
       if (!entry) return null
       const ownerKey = currentOwnerKey()
       if (!ownerKey || entry.ref.ownerKey !== ownerKey) return null
+      if (entry.ref.tenantKey !== currentTenantKey()) return null
       if (entry.ref.authGeneration !== deps.authGeneration()) return null
       return entry.ref
     },
@@ -191,6 +213,7 @@ export function createOwnerSessionAuthority(deps: OwnerSessionAuthorityDeps): Ow
       if (deps.authGeneration() !== ref.authGeneration) return { ok: false, reason: 'stale-auth' }
       const ownerKey = currentOwnerKey()
       if (!ownerKey || ownerKey !== ref.ownerKey) return { ok: false, reason: 'wrong-owner' }
+      if (currentTenantKey() !== ref.tenantKey) return { ok: false, reason: 'wrong-owner' }
       if (`${frame.processId}:${frame.routingId}` !== ref.frameOwner) return { ok: false, reason: 'wrong-frame' }
       if (deps.currentContextRevision() !== ref.contextRevision) return { ok: false, reason: 'stale-context' }
       return { ok: true }
@@ -282,6 +305,7 @@ export function createMainOwnerSessionAuthority(currentContextRevision: () => nu
       const email = status.signedIn && typeof status.email === 'string' ? status.email.trim().toLowerCase() : ''
       return email.length > 0 ? email : null
     },
+    tenantId: () => (authStatus().signedIn ? authTenantId() : null),
     authGeneration: () => authSessionGeneration(),
     currentContextRevision,
     salt: () => salt,
