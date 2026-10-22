@@ -234,6 +234,45 @@ describe('G20: production cleanup against a real profile folder', () => {
     expect(existsSync(join(userData, '.brain', 'index.json'))).toBe(true)
   })
 
+  it('a sign-in that lands before the executor reaches the auth files keeps the new session (superseded)', async () => {
+    await seedProfile()
+    const { runCredentialCleanup } = await import('./credential-cleanup')
+    const { productionClearers } = await import('./credential-clearers')
+    // The session that ended was generation 5; a new sign-in has already made it 6 by the time the clearers run.
+    const receipt = await runCredentialCleanup(
+      'signOut',
+      productionClearers({ authGeneration: { atTrigger: 5, current: () => 6 } })
+    )
+    expect(receipt.failed).toBe(0)
+    expect(receipt.results.find((r) => r.credential === 'msal-cache')?.outcome).toBe('superseded')
+    expect(receipt.results.find((r) => r.credential === 'auth-session')?.outcome).toBe('superseded')
+    expect(present('auth-session.bin')).toBe(true)
+    expect(present('msal-cache.bin')).toBe(true)
+    // Credentials that are not the live session are still cleared.
+    expect(present('google-session.bin')).toBe(false)
+  })
+
+  it('re-checks before each auth file: a sign-in landing between them saves the second', async () => {
+    await seedProfile()
+    const { runCredentialCleanup } = await import('./credential-cleanup')
+    const { productionClearers } = await import('./credential-clearers')
+    let reads = 0
+    // The first check (before msal-cache) still sees generation 5; every later one sees the new session.
+    const current = (): number => (++reads === 1 ? 5 : 6)
+    await runCredentialCleanup('signOut', productionClearers({ authGeneration: { atTrigger: 5, current } }))
+    expect(present('msal-cache.bin')).toBe(false)
+    expect(present('auth-session.bin')).toBe(true)
+  })
+
+  it('with no newer session the auth files are removed as before', async () => {
+    await seedProfile()
+    const { runCredentialCleanup } = await import('./credential-cleanup')
+    const { productionClearers } = await import('./credential-clearers')
+    await runCredentialCleanup('signOut', productionClearers({ authGeneration: { atTrigger: 5, current: () => 5 } }))
+    expect(present('msal-cache.bin')).toBe(false)
+    expect(present('auth-session.bin')).toBe(false)
+  })
+
   it('an account switch removes every credential the previous owner supplied and nothing of their saved data', async () => {
     await seedProfile()
     const { runCredentialCleanup } = await import('./credential-cleanup')

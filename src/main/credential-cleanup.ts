@@ -17,8 +17,12 @@
 import { credentialsFor, type CredentialId, type CredentialTrigger } from '@shared/credential-inventory'
 import { auditLog } from './logger'
 
-/** `refused` means a stored value could not be read to decide what to remove (a denied read), not that removal broke. */
-export type CredentialClearOutcome = 'cleared' | 'nothing' | 'failed' | 'refused'
+/**
+ * `refused` means a stored value could not be read to decide what to remove (a denied read). `superseded` means a newer
+ * sign-in replaced the session whose end triggered the cleanup, so its files now belong to the new session and were
+ * left alone. Neither is a failure of the cleanup itself.
+ */
+export type CredentialClearOutcome = 'cleared' | 'nothing' | 'failed' | 'refused' | 'superseded'
 export type CredentialClearer = () => CredentialClearOutcome | Promise<CredentialClearOutcome>
 export type CredentialClearers = Readonly<Partial<Record<CredentialId, CredentialClearer>>>
 

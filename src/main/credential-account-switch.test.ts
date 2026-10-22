@@ -150,6 +150,7 @@ describe('G20: the lifecycle facade', () => {
     const { createCredentialLifecycle } = await import('./credential-lifecycle')
     const events: string[] = []
     const lifecycle = createCredentialLifecycle({
+      generation: () => 1,
       cleanup: async (trigger) => {
         events.push(`cleanup:${trigger}`)
         return { failed: 0 }
@@ -170,6 +171,7 @@ describe('G20: the lifecycle facade', () => {
     const { createCredentialLifecycle } = await import('./credential-lifecycle')
     const after = vi.fn()
     const lifecycle = createCredentialLifecycle({
+      generation: () => 1,
       cleanup: async () => {
         throw new Error('synthetic-boom')
       },
@@ -182,5 +184,23 @@ describe('G20: the lifecycle facade', () => {
     await lifecycle.onSignedIn(after)
     expect(after).toHaveBeenCalledTimes(1)
     await expect(lifecycle.onProfileReset()).resolves.toBeUndefined()
+  })
+
+  it('captures the auth session generation when the session ends, not when the cleanup runs', async () => {
+    const { createCredentialLifecycle } = await import('./credential-lifecycle')
+    let generation = 5
+    const seen: Array<number | undefined> = []
+    const lifecycle = createCredentialLifecycle({
+      generation: () => generation,
+      cleanup: async (_trigger, context) => {
+        seen.push(context?.generation)
+        return { failed: 0 }
+      },
+      reconcile: async () => 'same-owner'
+    })
+    lifecycle.onSessionCleared()
+    generation = 6 // a sign-in lands before the queued cleanup runs
+    await lifecycle.flush()
+    expect(seen).toEqual([5])
   })
 })

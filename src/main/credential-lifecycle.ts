@@ -11,8 +11,16 @@
 import type { CredentialTrigger } from '@shared/credential-inventory'
 import type { OwnerReconcileOutcome } from './credential-account-switch'
 
+/** What a cleanup run needs to know about the moment it was triggered. */
+export interface CredentialCleanupContext {
+  /** The auth session generation when the session ended; a later generation means a new sign-in has landed. */
+  readonly generation: number
+}
+
 export interface CredentialLifecycleDeps {
-  cleanup(trigger: CredentialTrigger): Promise<{ failed: number }>
+  /** The current auth session generation (auth.ts authSessionGeneration). */
+  generation(): number
+  cleanup(trigger: CredentialTrigger, context?: CredentialCleanupContext): Promise<{ failed: number }>
   reconcile(): Promise<OwnerReconcileOutcome>
 }
 
@@ -37,7 +45,9 @@ export function createCredentialLifecycle(deps: CredentialLifecycleDeps): Creden
   }
   return {
     onSessionCleared() {
-      pending = pending.then(() => quietly(() => deps.cleanup('signOut')))
+      // Captured now, not when the queued run starts: a sign-in landing in between must not lose its session files.
+      const context: CredentialCleanupContext = { generation: deps.generation() }
+      pending = pending.then(() => quietly(() => deps.cleanup('signOut', context)))
     },
     flush: () => pending,
     async onSignedIn(after) {

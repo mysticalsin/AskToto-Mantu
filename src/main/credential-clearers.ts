@@ -83,13 +83,29 @@ function changedBy(patch: Partial<Settings>): boolean {
   return Object.entries(patch).some(([key, value]) => JSON.stringify(current[key]) !== JSON.stringify(value))
 }
 
-async function removeFiles(id: CredentialId): Promise<CredentialClearOutcome> {
+async function removeFiles(id: CredentialId, superseded?: () => boolean): Promise<CredentialClearOutcome> {
   const names = await profileFiles(id)
-  for (const name of names) await rm(join(app.getPath('userData'), name), { force: true })
-  return settled((await profileFiles(id)).length === 0, names.length > 0)
+  let removed = 0
+  for (const name of names) {
+    // Checked before every removal: a sign-in that landed since the session ended owns these files now.
+    if (superseded?.()) return 'superseded'
+    await rm(join(app.getPath('userData'), name), { force: true })
+    removed += 1
+  }
+  return settled((await profileFiles(id)).length === 0, removed > 0)
 }
 
-export function productionClearers(): CredentialClearers {
+export interface ProductionClearerOptions {
+  /**
+   * Set for a sign-out cleanup: the auth session generation when the session ended, and the live one. The session
+   * files (auth-session.bin, msal-cache.bin) are removed only while no newer session exists.
+   */
+  readonly authGeneration?: { readonly atTrigger: number; readonly current: () => number }
+}
+
+export function productionClearers(options: ProductionClearerOptions = {}): CredentialClearers {
+  const gen = options.authGeneration
+  const superseded = gen ? (): boolean => gen.current() !== gen.atTrigger : undefined
   const operatorEntries = (['operator-licence', 'operator-reporting-token', 'operator-ingest-secret'] as const).map(
     credentialEntry
   )
@@ -137,10 +153,11 @@ export function productionClearers(): CredentialClearers {
       clearSonioxApiKey() // throws when the file survives; the executor records that as failed
       return 'cleared'
     },
-    'msal-cache': () => removeFiles('msal-cache'),
-    'auth-session': () => removeFiles('auth-session'),
+    'msal-cache': () => removeFiles('msal-cache', superseded),
+    'auth-session': () => removeFiles('auth-session', superseded),
     'legacy-google-session': () => removeFiles('legacy-google-session'),
     'speech-auth-lease': () => {
+      if (superseded?.()) return 'superseded' // the new session's lease is not the one that ended
       invalidateSpeechAuthLease()
       return 'cleared'
     },
