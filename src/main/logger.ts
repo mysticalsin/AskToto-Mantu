@@ -174,6 +174,7 @@ export type AuditEvent =
   | 'transcript.renamed'
   | 'transcript.recap_edited'
   | 'transcript.recovered'
+  | 'transcript.temp_swept'
   | 'transcript.debrief'
   | 'transcript.imported'
   // Speaker Intelligence (Phases A/B): a Teams-transcript name backfill actually resolved >=1 name.

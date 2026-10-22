@@ -5,6 +5,7 @@ import type { TranscriptLine } from '@shared/transcript-line'
 import { draftFilename } from '../../infra/storage/draft-transcript-write-state'
 import type { StorageGateway } from '../../infra/storage/gateway'
 import { storageAt } from '../../infra/storage/meetings-storage'
+import { sweepOrphanSavedTemps } from '../../infra/storage/orphan-temp-sweep'
 import {
   appendIndexRow,
   decodeSavedMeetingAsync,
@@ -194,6 +195,13 @@ async function promoteJournalOnlyMeeting(
 
 /** Launch recovery: finish journaled saves, drop drafts whose meeting was already saved, then promote true orphans. */
 export async function recoverOrphanDrafts(settings: Settings): Promise<{ recovered: number }> {
+  // A save killed between its temp write and its rename leaves `<meeting>.md.<hex>.tmp`; recovery rebuilds the
+  // meeting from the draft or journal, so the stale temp is dead weight (and a stray copy of the transcript).
+  try {
+    await sweepOrphanSavedTemps(resolveMeetingsFolder(settings))
+  } catch {
+    // best effort: the sweep never blocks launch recovery
+  }
   await launchResume?.(settings).catch(() => undefined)
   const savedDrafts = new Set<string>()
   await removeSavedMeetingDrafts(settings, savedDrafts)
