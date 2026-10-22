@@ -258,6 +258,7 @@ function makeHarness() {
     followup: { clear: vi.fn() },
     coaching: { clear: vi.fn() },
     booking: { clear: vi.fn() },
+    refreshEntityNames: vi.fn(),
     showSpec: true,
     mode: 'meeting',
     autosaveWarn: false,

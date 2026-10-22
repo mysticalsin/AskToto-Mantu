@@ -1,5 +1,7 @@
 import type { RecallReadResult, TranscriptLine } from '@shared/ipc'
 import type { RecapStatus } from '@shared/recap-status'
+import type { RendererView } from '@shared/renderer-view'
+import type { LatestRequestGate } from './latest-request'
 
 /** The saved-meeting snapshot App holds while Review shows a past meeting (read once from recall:read). */
 export type PastMeeting = {
@@ -56,4 +58,16 @@ export function withGeneratedRecap(prev: PastMeeting, action: { text: string; re
 /** The snapshot after the person saved an edit to the notes. */
 export function withEditedRecap(prev: PastMeeting, recap: string): PastMeeting {
   return { ...prev, recap, recapEdited: true }
+}
+
+/** Whether an open that has just been read should still be applied: it is the latest open, and the person is
+ *  still on the view they asked from (a download that finishes after they went elsewhere must not pull them
+ *  back into a meeting they no longer want). */
+export function openedMeetingStillWanted(
+  gate: LatestRequestGate,
+  token: number,
+  startView: RendererView,
+  currentView: RendererView
+): boolean {
+  return gate.isLatest(token) && currentView === startView
 }

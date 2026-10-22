@@ -79,6 +79,7 @@ function ConfirmSheetDialog({
       type="button"
       onClick={() => onChoose(choice, request.id)}
       className={className}
+      data-metis-meeting-start={request.startsMeeting && choice !== 'cancel' ? '' : undefined}
     >
       {icon}
       {label}

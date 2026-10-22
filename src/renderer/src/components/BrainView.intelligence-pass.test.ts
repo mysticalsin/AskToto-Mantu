@@ -2,9 +2,11 @@ import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { INTELLIGENCE_PASS_AUTO_START } from '@shared/intelligence-pass'
+import { readModuleSource } from '../../../test-helpers/module-source'
 
 const brainView = readFileSync(resolve(__dirname, 'BrainView.tsx'), 'utf8')
-const recallView = readFileSync(resolve(__dirname, 'RecallView.tsx'), 'utf8')
+// The Intelligence status bar moved out of RecallView into history/GraphBar (Q08).
+const recallView = readModuleSource(__dirname, './history/GraphBar').text
 
 describe('BrainView Intelligence Update wiring', () => {
   it('shows the Update Intelligence button and starts the pass on click', () => {

@@ -5,7 +5,6 @@ import {
   FileDown,
   FileText,
   Network,
-  ExternalLink,
   ChevronLeft,
   Trash2,
   Pencil,
@@ -14,14 +13,8 @@ import {
   Lock
 } from 'lucide-react'
 import { TextButton } from './ui'
-import { AgentStatus, InlineOrb } from './AgentStatus'
-import { WorkProgressMeter } from './WorkProgressMeter'
-import { describeMeetingIndexProgress } from './work-progress'
-import { IntelligenceUpdateButton } from './IntelligenceUpdateButton'
-import { runIntelligenceUpdateClick } from '../lib/intelligence-update'
+import { AgentStatus } from './AgentStatus'
 import { beginHistoryRequest, type HistoryRequest } from '../lib/history-trace'
-import { brainStatusError, brainStatusIsWorking } from './brain-status-refresh'
-import { INTELLIGENCE_STATUS_UNAVAILABLE } from '@shared/intelligence-pass'
 import { accelLabel } from '../lib/keys'
 import { ImportQueueSection } from './ImportQueueSection'
 import { UpcomingSection } from './UpcomingSection'
@@ -29,11 +22,17 @@ import { useImportQueue } from './useImportQueue'
 import { RowDownloadButton, RowIcon, RowStatusChip, useRecallHydration } from './history/RowStatusChip'
 import { openOnRow, type RowHydration } from './history/hydration'
 import { DegradedBanner } from './history/DegradedBanner'
+import { GraphBar } from './history/GraphBar'
+import { Related } from './history/Related'
+import { fetchHistory, type HistoryItem } from './history/list-fetch'
+import { tabStopFile } from './history/list-keyboard'
+import { useRelistOnFocus } from './history/relist'
+import { useRowKeyboard } from './history/use-row-keyboard'
 import { armSlowNotice, degradedBanner, listBody, nextListPhase, type ListPhase } from './history/list-status'
-import type { MeetingSummary, RecallHit, GraphStatus, GraphRelated } from '@shared/ipc'
+import { RECALL_SEARCH_MAX_CHARS, searchCapNotice } from '@shared/recall-search'
+import type { MeetingSummary, RecallHit } from '@shared/ipc'
 
 import {
-  countLabel,
   formatDurationMin,
   meetingIndexStatus,
   meetingTime,
@@ -50,219 +49,6 @@ export {
   type MeetingIndexStatus
 } from './history/recall-view-helpers'
 
-// ---------------------------------------------------------------------------
-// Knowledge-graph status bar — unchanged from original
-// ---------------------------------------------------------------------------
-
-function formatLastIndexedAt(at?: number): string {
-  if (!at || !Number.isFinite(at) || at <= 0) return ''
-  return new Date(at).toLocaleString(undefined, {
-    month: 'short',
-    day: 'numeric',
-    hour: 'numeric',
-    minute: '2-digit'
-  })
-}
-
-function GraphBar({
-  onOpenSettings,
-  onDashboardOpen
-}: {
-  onOpenSettings?: () => void
-  /** Called once the full Mantu Intelligence dashboard window actually opened successfully. */
-  onDashboardOpen?: () => void
-}): JSX.Element | null {
-  // Mantu Intelligence — the meeting brain (people, accounts, deals, win/loss reasons, graph).
-  // Replaces the old graphify note-graph as the "open graph" surface in History.
-  const [brain, setBrain] = useState<import('@shared/brain').BrainStatus | null>(null)
-  const [busy, setBusy] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-  const [statusError, setStatusError] = useState<string | null>(null)
-  // Distinguishes the deferred "no-provider" error (fixable via Settings → AI) from any other backfill
-  // failure (network blip, etc.) — only the former gets an Open Settings action below.
-  const [noProvider, setNoProvider] = useState(false)
-  const applyStatus = (st: import('@shared/brain').BrainStatus | null): void => {
-    setBrain(st)
-    setStatusError(st ? null : INTELLIGENCE_STATUS_UNAVAILABLE)
-    if (st?.intelligenceIndex?.running) setError(null)
-  }
-  useEffect(() => {
-    void window.toto
-      .brainStatus()
-      .then(applyStatus)
-      .catch(() => setStatusError(INTELLIGENCE_STATUS_UNAVAILABLE))
-  }, [])
-
-  // Historical batches and newly saved/imported meetings both update in main. Keep a lightweight status
-  // poll alive while this panel is visible: a live job can start after this component mounted, and a
-  // permanent 5s idle poll is cheaper and more reliable than a filesystem watcher over OneDrive.
-  const liveRunning = !!brain?.live?.running
-  const preparing = !!brain?.backfill?.preparing
-  const brainWorking = brainStatusIsWorking(brain) || busy
-  useEffect(() => {
-    const iv = setInterval(
-      () => {
-        void window.toto
-          .brainStatus()
-          .then(applyStatus)
-          .catch(() => setStatusError(INTELLIGENCE_STATUS_UNAVAILABLE))
-      },
-      brainWorking ? 1000 : 5000
-    )
-    return () => clearInterval(iv)
-  }, [brainWorking])
-
-  const backfill = async (): Promise<void> => {
-    setBusy(true)
-    setError(null)
-    setNoProvider(false)
-    try {
-      const { error: clickError } = await runIntelligenceUpdateClick(() => window.toto.brainBackfill())
-      if (clickError) {
-        setError(clickError)
-        setNoProvider(/provider/i.test(clickError))
-        return
-      }
-      applyStatus(await window.toto.brainStatus())
-    } catch {
-      setStatusError(INTELLIGENCE_STATUS_UNAVAILABLE)
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  const openDashboard = async (): Promise<void> => {
-    const r = await window.toto.brainOpenDashboard().catch((e) => ({ ok: false, error: String(e) }))
-    if (!r.ok) setError(r.error || 'Could not open Mantu Intelligence.')
-    else onDashboardOpen?.()
-  }
-
-  const backfilling = !!brain?.backfill?.running || preparing
-  const livePending = brain?.live?.pending ?? 0
-  const backfillFailed = brain?.backfill?.failed ?? 0
-  const indexProgress = brain?.backfill ? describeMeetingIndexProgress(brain.backfill) : null
-  const lastIndexed = formatLastIndexedAt(brain?.lastIndexedAt)
-  const updating = brainWorking
-  const displayError = error || statusError || brainStatusError(brain)
-  return (
-    <div className="rounded-xl border border-[var(--color-hair-soft)] bg-white/[0.03] px-3 py-2">
-      <div className="flex items-center justify-between gap-2">
-        <div className="min-w-0 flex-1 text-[11px] text-[color:var(--color-ink-2)]">
-          <div className="flex items-center gap-1.5">
-            <Network size={12} className="shrink-0 text-[var(--color-accent)]" />
-            {displayError ? (
-              <span className="text-[var(--color-danger)]">{displayError}</span>
-            ) : updating ? (
-              <span aria-atomic="true" aria-live="polite">
-                {backfilling && indexProgress
-                  ? indexProgress.label
-                  : liveRunning
-                    ? `Updating Intelligence from ${livePending} new meeting${livePending === 1 ? '' : 's'}…`
-                    : 'Updating…'}
-              </span>
-            ) : backfillFailed > 0 && indexProgress ? (
-              <span className="text-[var(--color-danger)]" role="alert">
-                {indexProgress.label}. Retry Update Intelligence after checking AI settings.
-              </span>
-            ) : brain && brain.meetings > 0 ? (
-              <>
-                Intelligence · {countLabel(brain.meetings, 'meeting')} · {countLabel(brain.people, 'person', 'people')}{' '}
-                · {countLabel(brain.accounts, 'account')}
-                {brain.deals > 0 ? ` · ${countLabel(brain.deals, 'deal')}` : ''}
-              </>
-            ) : (
-              'Mantu Intelligence: build a brain from your meetings.'
-            )}
-          </div>
-          {lastIndexed && !displayError && !updating && (
-            <div className="mt-0.5 text-[10px] text-[color:var(--color-ink-3)]">Last indexed {lastIndexed}</div>
-          )}
-          {updating && (
-            <div className="mt-1.5 flex items-center gap-2">
-              <InlineOrb kind="searching" />
-              {backfilling && indexProgress && (
-                <WorkProgressMeter
-                  active
-                  ariaLabel="Mantu Intelligence meeting index progress"
-                  className="min-w-0 flex-1"
-                  percent={indexProgress.percent}
-                  valueText={indexProgress.valueText}
-                />
-              )}
-            </div>
-          )}
-        </div>
-        <div className="flex shrink-0 items-center gap-1">
-          {noProvider && onOpenSettings && <TextButton onClick={onOpenSettings}>Open Settings</TextButton>}
-          <IntelligenceUpdateButton
-            variant="text"
-            updating={updating}
-            disabled={busy}
-            onClick={() => void backfill()}
-          />
-          <TextButton onClick={() => void openDashboard()} title="Open the Mantu Intelligence dashboard">
-            <ExternalLink size={11} /> Mantu Intelligence
-          </TextButton>
-        </div>
-      </div>
-    </div>
-  )
-}
-
-// ---------------------------------------------------------------------------
-// Inline connections panel — unchanged from original
-// ---------------------------------------------------------------------------
-
-function Related({ file, onOpen }: { file: string; onOpen: (file: string) => void }): JSX.Element {
-  const [data, setData] = useState<GraphRelated | null>(null)
-  useEffect(() => {
-    let alive = true
-    window.toto
-      .graphifyRelated(file)
-      .then((r) => alive && setData(r))
-      .catch(() => {})
-    return () => {
-      alive = false
-    }
-  }, [file])
-
-  if (!data) return <div className="px-2 py-1 text-[11px] text-[color:var(--color-ink-3)]">Loading connections…</div>
-  if (!data.ok)
-    return <div className="px-2 py-1 text-[11px] text-[color:var(--color-ink-3)]">{data.error || 'No graph yet.'}</div>
-  if (data.topics.length === 0 && data.notes.length === 0)
-    return <div className="px-2 py-1 text-[11px] text-[color:var(--color-ink-3)]">No connections found yet.</div>
-
-  return (
-    <div className="flex flex-col gap-1.5 px-2 py-1.5">
-      {data.topics.length > 0 && (
-        <div className="flex flex-wrap gap-1">
-          {data.topics.map((t) => (
-            <span
-              key={t}
-              className="truncate max-w-full rounded-full bg-[var(--color-accent-soft)] px-2 py-0.5 text-[10px] font-medium text-[color:var(--color-accent-text)]"
-            >
-              {t}
-            </span>
-          ))}
-        </div>
-      )}
-      {data.notes.map((n) => (
-        <button
-          key={n.file}
-          type="button"
-          onClick={() => onOpen(n.file)}
-          className="no-drag focus-ring flex flex-col gap-0.5 rounded-lg px-2 py-1 text-left hover:bg-white/[0.06]"
-        >
-          <span className="truncate text-[12px] text-[color:var(--color-ink)]">{n.title}</span>
-          {n.via.length > 0 && (
-            <span className="truncate text-[10px] text-[color:var(--color-ink-3)]">via {n.via.join(', ')}</span>
-          )}
-        </button>
-      ))}
-    </div>
-  )
-}
-
 // Cap the first paint of the meeting list to the most recent N — a daily user can accumulate hundreds of
 // saved meetings, and rendering all of them (grouped, per-row) on every keystroke in the search box (which
 // re-renders before the debounced IPC search even replaces `items`) visibly stutters. The "Show all"
@@ -278,6 +64,7 @@ const INITIAL_RENDER_CAP = 100
 export const MeetingRow = memo(function MeetingRow({
   meeting,
   isSelected,
+  isTabStop = true,
   isActive,
   isDeleting,
   isEditing,
@@ -301,6 +88,8 @@ export const MeetingRow = memo(function MeetingRow({
 }: {
   meeting: MeetingSummary | RecallHit
   isSelected: boolean
+  /** The one row whose buttons are Tab stops (roving tabindex); Up/Down move between rows. Default: every row. */
+  isTabStop?: boolean
   isActive: boolean
   isDeleting: boolean
   /** This row's inline rename input is open. */
@@ -333,6 +122,7 @@ export const MeetingRow = memo(function MeetingRow({
   onCancelEdit: () => void
 }): JSX.Element {
   const m = meeting
+  const tab = isTabStop ? undefined : -1
   const hit = 'snippet' in m ? (m as RecallHit) : null
   // One string for both the pointer tooltip and the accessible name — the dot is this row's only
   // per-meeting surface of the failure reason, so the two must never drift apart.
@@ -379,6 +169,9 @@ export const MeetingRow = memo(function MeetingRow({
           <>
             <button
               type="button"
+              data-meeting-row={m.file}
+              data-not-downloaded={m.notDownloaded ? 'true' : undefined}
+              tabIndex={isTabStop ? 0 : -1}
               onClick={() => onSelect(m.file)}
               onDoubleClick={() => (m.notDownloaded ? onDownload : onOpen)(m.file)}
               className="no-drag focus-ring flex min-w-0 flex-1 items-center gap-2 rounded-lg px-2 py-1.5 text-left hover:bg-white/[0.06]"
@@ -456,6 +249,7 @@ export const MeetingRow = memo(function MeetingRow({
             <button
               type="button"
               aria-label="Rename meeting"
+              tabIndex={tab}
               title="Rename"
               disabled={isRenaming}
               onClick={() => onStartEdit(m.file, m.title)}
@@ -468,6 +262,7 @@ export const MeetingRow = memo(function MeetingRow({
             <button
               type="button"
               aria-label="Show connections"
+              tabIndex={tab}
               aria-expanded={isOpen}
               title="Connections"
               onClick={() => onToggleConnections(m.file)}
@@ -481,6 +276,7 @@ export const MeetingRow = memo(function MeetingRow({
             <button
               type="button"
               aria-label="Export meeting copy"
+              tabIndex={tab}
               title="Export copy (.md)"
               onClick={() => onExport(m.file)}
               className="no-drag focus-ring grid h-7 w-7 shrink-0 place-items-center rounded-full text-[color:var(--color-ink-3)] transition-colors hover:bg-white/[0.06] hover:text-[color:var(--color-ink)]"
@@ -492,6 +288,7 @@ export const MeetingRow = memo(function MeetingRow({
             <button
               type="button"
               aria-label="Delete meeting"
+              tabIndex={tab}
               title="Delete"
               disabled={isDeleting}
               onClick={() => onTrash(m.file, m.title)}
@@ -589,7 +386,9 @@ export function RecallView({
   // delay the search IPC call itself already waited for below), so every keystroke's re-render groups
   // against this stable value instead of re-running groupByLocalDate synchronously on each keystroke.
   const [debouncedQ, setDebouncedQ] = useState('')
-  const [items, setItems] = useState<(MeetingSummary | RecallHit)[]>([])
+  const [items, setItems] = useState<HistoryItem[]>([])
+  /** How many meetings the current search matched in all (main returns at most the top few). */
+  const [matchTotal, setMatchTotal] = useState(0)
   /** The list request's phase (list-status.ts): bounded loading, slow, failed or answered. */
   const [phase, setPhase] = useState<ListPhase>('loading')
   /** Bumped by the degraded banner's Retry to re-run the fetch effect below for the same query. */
@@ -670,6 +469,32 @@ export function RecallView({
     setRowErrors((prev) => ({ ...prev, [file]: message }))
   }, [])
 
+  /** Open the selected file (or the first item as a fallback) — in-app recap when wired, else OS-open. */
+  const openMeeting = useCallback(
+    (f: string, reportError?: (message: string) => void): void => {
+      if (onOpenMeeting) {
+        onOpenMeeting(f, reportError)
+        return
+      }
+      // shell.openPath (behind recallOpen) resolves to an empty string on success, or an error message
+      // on failure — that was the only signal a caller could get, and it went un-awaited, so a failure
+      // (missing file, no default handler for .md, etc.) was a silent no-op. Surface it on the row, same
+      // as a rename/delete failure.
+      void window.toto.recallOpen(f).then((err) => {
+        if (err) flagRowError(f, err)
+      })
+    },
+    [onOpenMeeting, flagRowError]
+  )
+  const downloadMeeting = useCallback(
+    (f: string): void => openOnRow(f, { clear: clearRowError, flag: flagRowError }, openMeeting),
+    [clearRowError, flagRowError, openMeeting]
+  )
+  const selectFile = useCallback((file: string): void => setSelectedFile(file), [])
+  const { rowKeyDown, focusAfterRemoval } = useRowKeyboard(listRef, selectFile, (file, notDownloaded) =>
+    (notDownloaded ? downloadMeeting : openMeeting)(file)
+  )
+
   // Meetings are always saved; deletion is the user's to undo that. The main process pops a native,
   // unmissable confirm dialog before actually deleting (single click here is unambiguous — no "did that
   // register?" two-click pattern), then removes the .md + its index row.
@@ -687,7 +512,7 @@ export function RecallView({
         return next
       })
       if (r.ok) {
-        listRef.current?.focus()
+        focusAfterRemoval(file) // before the row unmounts, so focus never falls through to <body>
         setItems((xs) => xs.filter((x) => x.file !== file))
         setSelectedFile((s) => (s === file ? null : s))
         setOpen((o) => (o === file ? null : o))
@@ -695,7 +520,7 @@ export function RecallView({
         flagRowError(file, r.error || 'Could not delete meeting.')
       }
     },
-    [flagRowError]
+    [flagRowError, focusAfterRemoval]
   )
   // Fire-and-forget wrapper matching MeetingRow's sync onTrash prop — kept stable via useCallback so the
   // memoized row doesn't re-render just because this component re-rendered.
@@ -718,7 +543,6 @@ export function RecallView({
     },
     [flagRowError]
   )
-  const selectFile = useCallback((file: string): void => setSelectedFile(file), [])
   const toggleConnections = useCallback((file: string): void => setOpen((o) => (o === file ? null : file)), [])
 
   // Rename: fix an auto-generated title after the fact. Opens an inline input pre-filled with the
@@ -791,14 +615,17 @@ export function RecallView({
   const refreshList = useCallback((): void => {
     const query = qRef.current.trim()
     const seq = ++fetchSeqRef.current
-    const p = query ? window.toto.recallSearch(query) : window.toto.recallList()
-    p.then((l) => {
-      if (seq !== fetchSeqRef.current) return
-      setItems(l)
-      // This answer superseded whatever request was still out, so it also ends that request's spinner.
-      setPhase((current) => nextListPhase(current, 'answered'))
-    }).catch(() => {})
+    fetchHistory(query)
+      .then((l) => {
+        if (seq !== fetchSeqRef.current) return
+        setItems(l.items)
+        setMatchTotal(l.total)
+        // This answer superseded whatever request was still out, so it also ends that request's spinner.
+        setPhase((current) => nextListPhase(current, 'answered'))
+      })
+      .catch(() => {})
   }, [])
+  useRelistOnFocus(refreshList, () => qRef.current.trim() === '') // a meeting synced while History stayed open
   const hydrations = useRecallHydration(refreshList) // a finished download re-lists, so its row shows the meeting
 
   const {
@@ -834,22 +661,23 @@ export function RecallView({
       const seq = ++fetchSeqRef.current
       const query = q.trim()
       const request = query ? null : beginHistoryRequest()
-      const p = query ? window.toto.recallSearch(query) : window.toto.recallList(request?.trace)
-      p.then((l) => {
-        request?.resolved()
-        // fetchSeqRef guards against refreshList's post-import fetch (or another run of this same effect)
-        // resolving out of order; `stale` additionally covers this effect's own cleanup (q changed again
-        // before this particular run resolved).
-        if (!stale && seq === fetchSeqRef.current) {
-          setItems(l)
-          setDebouncedQ(q)
-          if (request) {
-            unpaintedRequestRef.current?.discarded()
-            unpaintedRequestRef.current = request
-          }
-        } else request?.discarded()
-        if (!stale) setPhase((current) => nextListPhase(current, 'answered'))
-      })
+      fetchHistory(query, request?.trace)
+        .then((l) => {
+          request?.resolved()
+          // fetchSeqRef guards against refreshList's post-import fetch (or another run of this same effect)
+          // resolving out of order; `stale` additionally covers this effect's own cleanup (q changed again
+          // before this particular run resolved).
+          if (!stale && seq === fetchSeqRef.current) {
+            setItems(l.items)
+            setMatchTotal(l.total)
+            setDebouncedQ(q)
+            if (request) {
+              unpaintedRequestRef.current?.discarded()
+              unpaintedRequestRef.current = request
+            }
+          } else request?.discarded()
+          if (!stale) setPhase((current) => nextListPhase(current, 'answered'))
+        })
         .catch(() => {
           request?.failed()
           // A failure superseded by refreshList's newer answer is not a failed list.
@@ -881,27 +709,6 @@ export function RecallView({
 
   useEffect(() => () => unpaintedRequestRef.current?.discarded(), [])
 
-  /** Open the selected file (or the first item as a fallback) — in-app recap when wired, else OS-open. */
-  const openMeeting = useCallback(
-    (f: string, reportError?: (message: string) => void): void => {
-      if (onOpenMeeting) {
-        onOpenMeeting(f, reportError)
-        return
-      }
-      // shell.openPath (behind recallOpen) resolves to an empty string on success, or an error message
-      // on failure — that was the only signal a caller could get, and it went un-awaited, so a failure
-      // (missing file, no default handler for .md, etc.) was a silent no-op. Surface it on the row, same
-      // as a rename/delete failure.
-      void window.toto.recallOpen(f).then((err) => {
-        if (err) flagRowError(f, err)
-      })
-    },
-    [onOpenMeeting, flagRowError]
-  )
-  const downloadMeeting = useCallback(
-    (f: string): void => openOnRow(f, { clear: clearRowError, flag: flagRowError }, openMeeting),
-    [clearRowError, flagRowError, openMeeting]
-  )
   const openSelected = (): void => {
     // While a debounced search is still in flight, `items` still holds the PREVIOUS query's results —
     // don't fall back to items[0] until it actually reflects the current query text. An explicit
@@ -933,6 +740,17 @@ export function RecallView({
     return capped
   }, [allGroups, showAll, totalCount])
 
+  // Roving tabindex: the selected row (else the first shown) is the list's one Tab stop.
+  const tabStop = useMemo(
+    () =>
+      tabStopFile(
+        groups.flatMap(([, rows]) => rows.map((row) => row.file)),
+        selectedFile
+      ),
+    [groups, selectedFile]
+  )
+  // A search answer holds only the best matches: say so when more meetings matched than are shown.
+  const capNotice = debouncedQ ? searchCapNotice(items.length, matchTotal) : null
   const body = listBody(phase, totalCount)
   const banner = useMemo(() => degradedBanner(phase, items), [phase, items])
 
@@ -968,6 +786,7 @@ export function RecallView({
               if (e.key === 'Enter' && !e.nativeEvent.isComposing && q === debouncedQ) openSelected()
             }}
             placeholder="Ask or search anything"
+            maxLength={RECALL_SEARCH_MAX_CHARS}
             spellCheck={false}
             aria-label="Search past meetings"
             className="no-drag font-body flex-1 bg-transparent text-[13px] text-[color:var(--color-ink)] placeholder:text-[color:var(--color-ink-3)]"
@@ -1013,7 +832,12 @@ export function RecallView({
       {banner && <DegradedBanner banner={banner} onRetry={retryList} />}
 
       {/* ── DATE-GROUPED MEETING LIST ───────────────────────────────────── */}
-      <div ref={listRef} tabIndex={-1} className="scroll-thin min-h-0 flex-1 overflow-y-auto pr-1">
+      <div
+        ref={listRef}
+        tabIndex={-1}
+        onKeyDown={rowKeyDown}
+        className="scroll-thin min-h-0 flex-1 overflow-y-auto pr-1"
+      >
         {body === 'spinner' ? (
           <div className="py-2">
             <AgentStatus kind="searching" size="inline" caption />
@@ -1024,6 +848,7 @@ export function RecallView({
           </div>
         ) : (
           <>
+            {capNotice && <div className="px-1 pt-2 text-[11px] text-[color:var(--color-ink-3)]">{capNotice}</div>}
             {groups.map(([date, meetingsForDate]) => (
               <div key={date}>
                 {/* Date group header */}
@@ -1034,6 +859,7 @@ export function RecallView({
                     key={m.file}
                     meeting={m}
                     isSelected={selectedFile === m.file}
+                    isTabStop={m.file === tabStop}
                     isActive={activeFile === m.file}
                     isDeleting={deletingFiles.has(m.file)}
                     isEditing={editingFile === m.file}

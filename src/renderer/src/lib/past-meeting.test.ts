@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest'
+import { createLatestGate } from './latest-request'
 import {
+  openedMeetingStillWanted,
   pastMeetingMarkers,
   reviewMarkerProps,
   withEditedRecap,
@@ -50,5 +52,27 @@ describe('past meeting snapshot markers (Q07)', () => {
       recapEdited: false
     })
     expect(withGeneratedRecap(meeting, { text: 'Notes', recapStatus: 'incomplete' }).recapEdited).toBe(true)
+  })
+})
+
+describe('openedMeetingStillWanted', () => {
+  it('applies the latest open that started and finished on the same view', () => {
+    const gate = createLatestGate()
+    const token = gate.begin()
+    expect(openedMeetingStillWanted(gate, token, 'history', 'history')).toBe(true)
+  })
+
+  it('drops an open that a newer open replaced', () => {
+    const gate = createLatestGate()
+    const slow = gate.begin()
+    gate.begin()
+    expect(openedMeetingStillWanted(gate, slow, 'history', 'history')).toBe(false)
+  })
+
+  it('drops an open whose view was left while it was in flight', () => {
+    const gate = createLatestGate()
+    const token = gate.begin()
+    expect(openedMeetingStillWanted(gate, token, 'history', 'answer')).toBe(false)
+    expect(openedMeetingStillWanted(gate, token, 'brain', 'brain')).toBe(true)
   })
 })

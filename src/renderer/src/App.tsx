@@ -39,7 +39,9 @@ import { useAsk, useAutoResize, useSettings, useAuth, type AnswerState } from '.
 import { useWindowDrag } from './lib/window-drag'
 import { noteCrashContext } from './lib/crash-context'
 import { useTransitionView } from './lib/history-transition'
-import { NavigationGuardService, type NavigationGuardRequest } from './lib/navigation-guard'
+import { NavigationGuardService, unsavedRecapRequest, type NavigationGuardRequest } from './lib/navigation-guard'
+import { createLatestGate } from './lib/latest-request'
+import { useBrainEntityNames } from './lib/entity-names'
 import {
   AUTO_HIDE_GRACE_MS,
   REVEAL_DWELL_MS,
@@ -111,6 +113,7 @@ import { useUpdateReadySubscription, type UpdateReadyState } from './lib/update-
 import { DEFAULT_SHORTCUTS, ASK_MEMORY_IDLE_MS } from '@shared/ipc'
 import { isSummaryOnlyProfile, resolveEnterpriseLiveProfile } from '@shared/enterprise-live-profile'
 import {
+  openedMeetingStillWanted,
   pastMeetingMarkers,
   reviewMarkerProps,
   withEditedRecap,
@@ -414,8 +417,8 @@ export function App(): JSX.Element {
 
   const onQuestionRef = useRef<(l: TranscriptLine) => void>(() => {})
   // Canonical people/account names for the ASR entity-casing bias (see lib/entity-casing.ts). Fetched
-  // below (once on mount, refreshed after a meeting saves); declared here so useListen can read it.
-  const [entityNames, setEntityNames] = useState<string[]>([])
+  // below (on mount, after a meeting saves and when one starts); declared here so useListen can read it.
+  const { names: entityNames, refresh: refreshEntityNames } = useBrainEntityNames()
   const listen = useListen(
     (l) => onQuestionRef.current(l),
     settings?.asrCorrections,
@@ -585,18 +588,7 @@ export function App(): JSX.Element {
   // Refresh the entity-casing name list once on mount, and again whenever a meeting finishes saving —
   // the best available "the brain might have new names" signal (extraction itself runs async in main
   // after the save, so this is a best-effort refresh, not a guarantee the very latest meeting is in it).
-  useEffect(() => {
-    let alive = true
-    void window.toto
-      .brainEntityNames()
-      .then((r) => {
-        if (alive) setEntityNames(r.names)
-      })
-      .catch(() => {})
-    return () => {
-      alive = false
-    }
-  }, [savedPath])
+  useEffect(() => refreshEntityNames(), [savedPath, refreshEntityNames])
   const [saveError, setSaveError] = useState<string | null>(null)
   const [saveAttempts, setSaveAttempts] = useState(0)
   // The auto-save ladder is spent — no further attempt is scheduled. saveAttempts alone can't say this:
@@ -1005,25 +997,22 @@ export function App(): JSX.Element {
   // onTogglePanel). Only fires the confirm when Review is actually open AND dirty; every other view-switch
   // (History, Settings, and the hotkey dispatch below) used to skip this check entirely and navigate away
   // ungated, silently dropping the edit.
-  const confirmReviewNavigation = useCallback(async (): Promise<boolean> => {
-    if (viewRef.current !== 'review' || !reviewDirtyRef.current.dirty) return true
-    const choice = await navigationGuard.request({
-      title: 'Save recap changes?',
-      message:
-        'You have unsaved edits in this recap. Save them before leaving, discard them, or cancel to keep editing.',
-      saveLabel: 'Save',
-      discardLabel: 'Discard',
-      cancelLabel: 'Cancel',
-      destructive: true
-    })
-    if (choice === 'cancel') return false
-    if (choice === 'save') return reviewDirtyRef.current.save ? reviewDirtyRef.current.save() : false
-    return true
-  }, [navigationGuard])
+  // `startsMeeting`: the choice leads straight into a new meeting, so the sheet's Save and Discard buttons
+  // mint the meeting-start activation (the click on the Bar's record button may be older than its 5 s grant).
+  const confirmReviewNavigation = useCallback(
+    async (startsMeeting = false): Promise<boolean> => {
+      if (viewRef.current !== 'review' || !reviewDirtyRef.current.dirty) return true
+      const choice = await navigationGuard.request(unsavedRecapRequest(startsMeeting))
+      if (choice === 'cancel') return false
+      if (choice === 'save') return reviewDirtyRef.current.save ? reviewDirtyRef.current.save() : false
+      return true
+    },
+    [navigationGuard]
+  )
   const guardReviewNav = useCallback(
-    (proceed: () => void): void => {
+    (proceed: () => void, startsMeeting = false): void => {
       void (async () => {
-        if (!(await confirmReviewNavigation())) return
+        if (!(await confirmReviewNavigation(startsMeeting))) return
         proceed()
       })()
     },
@@ -2279,6 +2268,7 @@ export function App(): JSX.Element {
       setSaveAttempts(0)
       setSaveGaveUp(false)
       listen.clear()
+      refreshEntityNames() // names renamed in the brain since the last save reach this session's ASR casing
       suggest.clear()
       followup.clear() // a new meeting is about to be viewed — a stale draft from whatever was reviewed
       // before must never carry over and render/send as this meeting's follow-up (see followup's own
@@ -2314,6 +2304,7 @@ export function App(): JSX.Element {
       listen.clear,
       listen.start,
       ask.cancel,
+      refreshEntityNames,
       suggest.clear,
       retireSpeculativeMeeting,
       followup.clear,
@@ -2478,8 +2469,8 @@ export function App(): JSX.Element {
 
   const toggleListen = useCallback(() => {
     if (listen.listening) void endReview()
-    else startListen()
-  }, [listen.listening, endReview, startListen])
+    else guardReviewNav(startListen, true) // a new meeting unmounts Review: ask before dropping an unsaved recap edit
+  }, [listen.listening, endReview, startListen, guardReviewNav])
 
   // Persist a meeting's transcript immediately (used when a session is abandoned without a recap — e.g.
   // "New meeting" or reset — so a started meeting is never lost). Idempotent per meeting via savedRef.
@@ -3134,20 +3125,27 @@ export function App(): JSX.Element {
 
   // Open a saved meeting from History as a read-only recap (Cluely recap detail) via the recall:read IPC.
   // A caller that shows the failure itself (a History row's explicit download) passes `reportError`.
+  const pastOpenGate = useMemo(createLatestGate, [])
   const openPastMeeting = useCallback(
     async (file: string, reportError?: (message: string) => void) => {
       setOpenMeetingError(null)
       followup.clear() // the viewed meeting is about to change — a stale draft from whatever was reviewed
       // before must never carry over and render/send as THIS meeting's follow-up (see followup's own
       // declaration comment above; this is the CRITICAL cross-meeting leak's primary repro path).
+      // Last open wins: a cloud-only download that finishes after the person picked another meeting, or went
+      // to another view, must not pull them back (the same ordering guard Review keeps for savedPath).
+      const token = pastOpenGate.begin()
+      const startView = viewRef.current
       const r = await window.toto.recallRead(file)
+      const wanted = openedMeetingStillWanted(pastOpenGate, token, startView, viewRef.current)
       if (!r.ok) {
         // recallRead already returns an exact, actionable message (not found / undecryptable on this
         // device / invalid name) — surface it instead of leaving the click looking completely dead.
         if (reportError) reportError(r.error || 'Could not open that meeting.')
-        else setOpenMeetingError(r.error || 'Could not open that meeting.')
+        else if (wanted) setOpenMeetingError(r.error || 'Could not open that meeting.')
         return
       }
+      if (!wanted) return
       setOpenMeetingError(null)
       setPastMeeting({
         file,
@@ -3165,7 +3163,7 @@ export function App(): JSX.Element {
       setView('review')
       setCollapsed(false)
     },
-    [followup.clear]
+    [followup.clear, pastOpenGate]
   )
 
   // Cluely "Resume session": re-enter the meeting live, seeding the copilot's multi-turn memory with the
@@ -3719,7 +3717,7 @@ export function App(): JSX.Element {
         winsToggle={spotlightRefReady ? { on: includeWins, onToggle: setIncludeWins } : undefined}
         onGenerateFollowup={generateFollowup}
         onGenerateRecap={
-          pm
+          pm && pm.lines.length > 0 // nothing to summarize without transcript lines: no button, not a silent no-op
             ? () => {
                 if (requireProvider('summary')) generateSavedRecap(pm.file, pm.lines, pm.recap)
               }

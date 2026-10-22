@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { NavigationGuardService } from './navigation-guard'
+import { NavigationGuardService, unsavedRecapRequest } from './navigation-guard'
 
 describe('NavigationGuardService', () => {
   it('reveals before publishing a pending decision and resolves Save / Discard / Cancel asynchronously', async () => {
@@ -32,9 +32,9 @@ describe('NavigationGuardService', () => {
       const reveal = vi.fn()
       const service = new NavigationGuardService(reveal)
       let settled = false
-      const decision = service
-        .request({ title: 'Dirty recap', message: 'Choose before leaving.' })
-        .then(() => { settled = true })
+      const decision = service.request({ title: 'Dirty recap', message: 'Choose before leaving.' }).then(() => {
+        settled = true
+      })
 
       await vi.advanceTimersByTimeAsync(30_000)
 
@@ -63,5 +63,19 @@ describe('NavigationGuardService', () => {
     service.choose('save')
     await expect(second).resolves.toBe('save')
     expect(service.current()).toBeNull()
+  })
+})
+
+describe('unsavedRecapRequest', () => {
+  it('is the three-way sheet with a destructive Discard, and marks a meeting start only when asked', () => {
+    expect(unsavedRecapRequest()).toMatchObject({
+      title: 'Save recap changes?',
+      saveLabel: 'Save',
+      discardLabel: 'Discard',
+      cancelLabel: 'Cancel',
+      destructive: true,
+      startsMeeting: false
+    })
+    expect(unsavedRecapRequest(true).startsMeeting).toBe(true)
   })
 })

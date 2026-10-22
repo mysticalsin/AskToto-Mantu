@@ -355,3 +355,58 @@ describe('MQA-216 — a missing endpoint URL is never reported as an org policy 
     })
   }
 })
+
+// Q08 (D3-6) — the Bar's listen toggle was the one exit from Review that started a new meeting without the
+// "Save recap changes?" prompt, so an unsaved recap edit was dropped when Review unmounted.
+describe("Q08 — toggleListen guards Review's unsaved recap before starting", () => {
+  const body = code(blockBetween('const toggleListen = useCallback(', 'const saveMeetingNow = useCallback('))
+
+  it('starts a meeting only through guardReviewNav, and still stops through endReview', () => {
+    expect(body).toMatch(/guardReviewNav\(\s*startListen\s*,\s*true\s*\)/)
+    expect(body).not.toMatch(/else startListen\(\)/)
+    expect(body).toMatch(/endReview\(\)/)
+  })
+
+  it('tells the confirm sheet it starts a meeting, so its buttons mint a fresh start activation', () => {
+    const guard = code(
+      blockBetween('const confirmReviewNavigation = useCallback(', 'const approveReviewNav = useCallback(')
+    )
+    expect(guard).toMatch(/startsMeeting/)
+  })
+})
+
+// Q08 (D4-9, D4-21, D8-12).
+describe('Q08 — openPastMeeting uses the latest-request gate', () => {
+  const body = code(blockBetween('const openPastMeeting = useCallback(', 'const resumePastMeeting = useCallback('))
+
+  it('takes a token before the read and checks it, and the view, after it', () => {
+    expect(source).toMatch(/from '\.\/lib\/latest-request'/)
+    const begin = body.indexOf('.begin()')
+    const read = body.indexOf('window.toto.recallRead(')
+    expect(begin).toBeGreaterThan(-1)
+    expect(read).toBeGreaterThan(begin)
+    expect(body).toMatch(/openedMeetingStillWanted\(/)
+  })
+
+  it("applies a result only after that check, but still reports a row's own failure", () => {
+    const check = body.indexOf('openedMeetingStillWanted(')
+    expect(body.indexOf('setPastMeeting(')).toBeGreaterThan(check)
+    expect(body.indexOf("setView('review')")).toBeGreaterThan(check)
+    expect(body).toMatch(/if \(reportError\) reportError\(/)
+  })
+})
+
+describe('Q08 — Generate recap is offered only when there is a transcript to summarize', () => {
+  it('passes onGenerateRecap only for a past meeting with lines', () => {
+    const prop = code(blockBetween('onGenerateRecap={', 'onRetryRecap={'))
+    expect(prop).toMatch(/pm\.lines\.length > 0/)
+  })
+})
+
+describe('Q08 — the ASR name list also refreshes when a meeting starts', () => {
+  it('startListen refreshes the brain entity names', () => {
+    expect(source).toMatch(/from '\.\/lib\/entity-names'/)
+    const body = code(blockBetween('const startListen = useCallback(', 'const maybeFireRecap = useCallback('))
+    expect(body).toMatch(/refreshEntityNames\(\)/)
+  })
+})

@@ -13,6 +13,9 @@ export type NavigationGuardRequest = {
   /** Three-way: styles Discard as destructive. Confirm: styles the action as destructive and focuses Cancel,
    *  so Return never confirms a destructive consequence the person did not deliberately choose. */
   destructive?: boolean
+  /** The choice leads straight into a new meeting: the sheet's action buttons carry the meeting-start marker, so
+   *  a trusted click on one mints the start activation (the Bar's click may be older than the 5 s grant). */
+  startsMeeting?: boolean
 }
 
 /** Input for a two-button confirmation: a one- or two-word verb title for the action, Cancel for the other. */
@@ -111,4 +114,17 @@ export async function confirmAction(service: NavigationGuardService, input: Conf
     destructive: input.destructive
   })
   return choice === 'save'
+}
+
+/** The sheet that guards leaving Review with an unsaved recap edit; `startsMeeting` when the exit is a new meeting. */
+export function unsavedRecapRequest(startsMeeting = false): Omit<NavigationGuardRequest, 'id'> {
+  return {
+    startsMeeting,
+    title: 'Save recap changes?',
+    message: 'You have unsaved edits in this recap. Save them before leaving, discard them, or cancel to keep editing.',
+    saveLabel: 'Save',
+    discardLabel: 'Discard',
+    cancelLabel: 'Cancel',
+    destructive: true
+  }
 }
