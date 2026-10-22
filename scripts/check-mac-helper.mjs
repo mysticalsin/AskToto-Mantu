@@ -4,7 +4,7 @@
 // OCR). Mirrors check-llama-sidecar.mjs: loud exit 1 with the fix, no partial pass.
 // Usage: node scripts/check-mac-helper.mjs <mac|win>   (win exits 0 — the helper is mac-only)
 import { accessSync, constants, existsSync } from 'node:fs'
-import { execFileSync } from 'node:child_process'
+import { execFileSync, spawnSync } from 'node:child_process'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { assertMacHelperSpeechUsage } from './lib/mac-helper-privacy.mjs'
@@ -62,5 +62,17 @@ try {
 } catch (error) {
   console.error(`[check-mac-helper] ${error?.message ?? error}`)
   process.exit(1)
+}
+// A helper older than the voice hold chord (V01) answers `watch-modifiers` with "unknown command". Its usage line
+// (printed on a bare run, exit 1) must name every subcommand the app spawns.
+const usage = spawnSync(binary, [], { encoding: 'utf8', timeout: 10_000 })
+for (const subcommand of ['watch-modifiers']) {
+  if (!String(usage.stderr ?? '').includes(subcommand)) {
+    console.error(
+      `mac helper sidecar at ${binary} does not list the ${subcommand} subcommand in its usage line; it was built from an older main.swift.\n` +
+        'Rebuild it: node scripts/build-mac-helper.mjs'
+    )
+    process.exit(1)
+  }
 }
 console.log(`[check-mac-helper] ok (${arches.join(', ')})`)

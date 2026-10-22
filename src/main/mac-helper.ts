@@ -21,6 +21,10 @@
  *     process start time and executable realpath so PID reuse cannot be mistaken for ownership.
  *   - `stall-watch`: long-running, one per boot, samples main when `run-alive.json` stops changing;
  *     infra/observability/stall-sampler.ts owns its arguments and protocol.
+ *   - `watch-modifiers`: long-running (V01). Polls which modifier keys are down and a counter of other key and
+ *     mouse presses, and prints `m <mask> <seq>` only on change. Permission-free (no event tap), and the protocol
+ *     carries no key identity. src/main/voice/chord-watcher.ts owns the child; src/shared/voice/modifier-mask.ts
+ *     owns the line format.
  *   - `code-identity` / `bundle-copies`: one-shot, read-only signing identity and installed-copy census for
  *     the Screen Recording diagnosis (capture-permissions/). Neither touches the permissions database.
  *
@@ -125,6 +129,25 @@ export function macStatFlagsSpawnSpec(): { command: string; args: string[] } | n
 export function macProcInfoSpawnSpec(pid: number): { command: string; args: string[] } | null {
   if (!macHelperPresent()) return null
   return { command: macHelperPath(), args: ['proc-info', String(pid)] }
+}
+
+const WATCH_MODIFIERS_DEFAULT_INTERVAL_MS = 40
+const WATCH_MODIFIERS_MIN_INTERVAL_MS = 20
+const WATCH_MODIFIERS_MAX_INTERVAL_MS = 200
+
+/** Argv for `watch-modifiers`. The interval is clamped to the range the helper accepts; a non-integer falls back to
+ *  the default. Exported so a unit test can assert it without a helper binary. */
+export function watchModifiersArgs(intervalMs: number = WATCH_MODIFIERS_DEFAULT_INTERVAL_MS): string[] {
+  const interval = Number.isInteger(intervalMs)
+    ? Math.min(WATCH_MODIFIERS_MAX_INTERVAL_MS, Math.max(WATCH_MODIFIERS_MIN_INTERVAL_MS, intervalMs))
+    : WATCH_MODIFIERS_DEFAULT_INTERVAL_MS
+  return ['watch-modifiers', '--interval-ms', String(interval)]
+}
+
+/** Spawn spec for the long-running voice hold-chord helper, or null when the helper isn't available. */
+export function macWatchModifiersSpawnSpec(intervalMs?: number): { command: string; args: string[] } | null {
+  if (!macHelperPresent()) return null
+  return { command: macHelperPath(), args: watchModifiersArgs(intervalMs) }
 }
 
 /** Read-only `code-identity` (M2-0429): the static signature of an app bundle or binary. */

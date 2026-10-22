@@ -75,6 +75,15 @@
 //                     this app may send Apple Events to <bundle-id> (AEDeterminePermissionToAutomateTarget with
 //                     askUserIfNeeded=false): "unknown" when the user has not been asked yet or the target is
 //                     not running. Accessibility is probed in-process by Electron, so it is not here.
+//   watch-modifiers [--interval-ms N]  Long-running, permission-free (V01, the voice hold chord). Polls two idle
+//                     state queries every N ms (default 40, clamped to 20-200): which modifier keys are down
+//                     (CGEventSource.flagsState, device-dependent bits kept so Right Command differs from Left)
+//                     and a wrapping counter of other key-down, mouse-down and scroll events
+//                     (CGEventSource.counterForEventType). It prints ONE line `m <mask> <seq>` only when either
+//                     changed, plus one on start, and exits when its parent dies. There is no event tap, no
+//                     global monitor and no Input Monitoring request, and the protocol has no field for a key
+//                     code: a key press only moves the counter. src/shared/voice/modifier-mask.ts owns the
+//                     line format and the bit values below.
 import AppKit
 import Darwin
 import Security
@@ -115,6 +124,98 @@ func watchFrontmost() -> Never {
     ) { note in
         emitFrontmost(note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication)
     }
+    RunLoop.main.run()
+    exit(0)
+}
+
+// MARK: - watch-modifiers
+
+// Bit values of the `m <mask> <seq>` protocol. Mirrored in src/shared/voice/modifier-mask.ts (MODIFIER_BITS) and
+// pinned by src/main/voice/chord-helper.contract.test.ts.
+let modLeftControl = 1
+let modRightControl = 2
+let modLeftOption = 4
+let modRightOption = 8
+let modLeftCommand = 16
+let modRightCommand = 32
+let modLeftShift = 64
+let modRightShift = 128
+let modFn = 256
+let modUnsided = 512
+
+// Device-dependent flag bits (IOKit NX_DEVICE*KEYMASK). They ride in the low bits of the flags word and say which
+// physical side is down. The device-independent CGEventFlags masks say that a family is down at all.
+let nxDeviceLeftControl: UInt64 = 0x1
+let nxDeviceLeftShift: UInt64 = 0x2
+let nxDeviceRightShift: UInt64 = 0x4
+let nxDeviceLeftCommand: UInt64 = 0x8
+let nxDeviceRightCommand: UInt64 = 0x10
+let nxDeviceLeftOption: UInt64 = 0x20
+let nxDeviceRightOption: UInt64 = 0x40
+let nxDeviceRightControl: UInt64 = 0x2000
+
+/// Reduces a raw CGEventFlags word to the protocol mask. A family reported as down with neither device bit gets
+/// `modUnsided`, which never matches a sided chord: if this macOS does not expose sides, the chord simply never
+/// fires (fail closed) and the owner spike catches it. Caps Lock and the numeric-pad flag are ignored.
+func modifierMask(rawFlags: UInt64) -> Int {
+    var mask = 0
+    var unsided = false
+    func family(_ independent: CGEventFlags, left: UInt64, right: UInt64, leftBit: Int, rightBit: Int) {
+        guard rawFlags & independent.rawValue != 0 else { return }
+        let leftDown = rawFlags & left != 0
+        let rightDown = rawFlags & right != 0
+        if leftDown { mask |= leftBit }
+        if rightDown { mask |= rightBit }
+        if !leftDown && !rightDown { unsided = true }
+    }
+    family(.maskControl, left: nxDeviceLeftControl, right: nxDeviceRightControl, leftBit: modLeftControl, rightBit: modRightControl)
+    family(.maskAlternate, left: nxDeviceLeftOption, right: nxDeviceRightOption, leftBit: modLeftOption, rightBit: modRightOption)
+    family(.maskCommand, left: nxDeviceLeftCommand, right: nxDeviceRightCommand, leftBit: modLeftCommand, rightBit: modRightCommand)
+    family(.maskShift, left: nxDeviceLeftShift, right: nxDeviceRightShift, leftBit: modLeftShift, rightBit: modRightShift)
+    if rawFlags & CGEventFlags.maskSecondaryFn.rawValue != 0 { mask |= modFn }
+    if unsided { mask |= modUnsided }
+    return mask
+}
+
+/// One wrapping sum of the "something else was pressed" counters. Only the fact that it moved is used.
+func otherInputCounter() -> UInt32 {
+    let state = CGEventSourceStateID.combinedSessionState
+    let types: [CGEventType] = [.keyDown, .leftMouseDown, .rightMouseDown, .otherMouseDown, .scrollWheel]
+    return types.reduce(UInt32(0)) { $0 &+ CGEventSource.counterForEventType(state, eventType: $1) }
+}
+
+func watchModifiers(_ options: [String]) -> Never {
+    var intervalMs = 40
+    var index = 0
+    while index < options.count {
+        guard options[index] == "--interval-ms", index + 1 < options.count, let value = Int(options[index + 1]) else {
+            fail("usage: metis-mac-helper watch-modifiers [--interval-ms N]")
+        }
+        intervalMs = min(200, max(20, value))
+        index += 2
+    }
+    // Exit the moment the launching process dies: this only prints on change, so a hard-killed main would
+    // otherwise leave it polling until its next write hits a closed pipe.
+    let parent = getppid()
+    let parentWatch = DispatchSource.makeProcessSource(identifier: parent, eventMask: .exit, queue: .main)
+    parentWatch.setEventHandler { exit(0) }
+    parentWatch.resume()
+    if getppid() != parent { exit(0) }
+    var last: (Int, UInt32)? = nil
+    func poll() {
+        let mask = modifierMask(rawFlags: CGEventSource.flagsState(.combinedSessionState).rawValue)
+        let seq = otherInputCounter()
+        if last == nil || last!.0 != mask || last!.1 != seq {
+            last = (mask, seq)
+            print("m \(mask) \(seq)")
+            fflush(stdout)
+        }
+    }
+    poll()
+    let timer = DispatchSource.makeTimerSource(queue: .main)
+    timer.schedule(deadline: .now() + .milliseconds(intervalMs), repeating: .milliseconds(intervalMs), leeway: .milliseconds(10))
+    timer.setEventHandler { poll() }
+    timer.resume()
     RunLoop.main.run()
     exit(0)
 }
@@ -794,11 +895,13 @@ func runTccStatus(_ options: [String]) -> Never {
 
 let arguments = CommandLine.arguments
 guard arguments.count >= 2 else {
-    fail("usage: metis-mac-helper <watch-frontmost|ocr|transcribe|screen-metrics|stat-flags|proc-info|supervise|stall-watch|code-identity|bundle-copies|tcc-status> [path|-]")
+    fail("usage: metis-mac-helper <watch-frontmost|ocr|transcribe|screen-metrics|stat-flags|proc-info|supervise|stall-watch|code-identity|bundle-copies|tcc-status|watch-modifiers> [path|-]")
 }
 switch arguments[1] {
 case "watch-frontmost":
     watchFrontmost()
+case "watch-modifiers":
+    watchModifiers(Array(arguments.dropFirst(2)))
 case "ocr":
     runOcr(inputPath: arguments.count >= 3 ? arguments[2] : "-")
 case "transcribe":

@@ -22,6 +22,8 @@ import {
   parseCodeIdentity,
   parseBundleCopies,
   macTccStatusSpawnSpec,
+  macWatchModifiersSpawnSpec,
+  watchModifiersArgs,
   parseTccStatus,
   getTccStatus,
   type OcrResult
@@ -338,5 +340,35 @@ describe('tcc-status (G10 — read-only Input Monitoring and Automation probes)'
     expect(swift).toMatch(/CGPreflightListenEventAccess\(\)/)
     expect(swift).toMatch(/AEDeterminePermissionToAutomateTarget\([^\r\n]*, false\)/)
     expect(swift).not.toMatch(/CGRequestListenEventAccess|AXIsProcessTrustedWithOptions/)
+  })
+})
+
+describe('watch-modifiers (V01 — the voice hold chord helper)', () => {
+  it('spawn spec names the subcommand and a bounded poll interval', () => {
+    const spec = macWatchModifiersSpawnSpec()
+    if (existsSync(macHelperPath())) {
+      expect(spec).toEqual({ command: macHelperPath(), args: ['watch-modifiers', '--interval-ms', '40'] })
+      expect(macWatchModifiersSpawnSpec(100)?.args).toEqual(['watch-modifiers', '--interval-ms', '100'])
+    } else {
+      expect(spec).toBeNull()
+    }
+  })
+
+  it('clamps the interval to the 20-200 ms range the helper accepts, and falls back on non-integers', () => {
+    expect(watchModifiersArgs(40)).toEqual(['watch-modifiers', '--interval-ms', '40'])
+    expect(watchModifiersArgs(1)[2]).toBe('20')
+    expect(watchModifiersArgs(5_000)[2]).toBe('200')
+    expect(watchModifiersArgs(Number.NaN)[2]).toBe('40')
+    expect(watchModifiersArgs(33.7)[2]).toBe('40')
+  })
+
+  it('degrades to null where the helper cannot exist', () => {
+    const originalPlatform = process.platform
+    try {
+      Object.defineProperty(process, 'platform', { value: 'win32', configurable: true })
+      expect(macWatchModifiersSpawnSpec()).toBeNull()
+    } finally {
+      Object.defineProperty(process, 'platform', { value: originalPlatform, configurable: true })
+    }
   })
 })

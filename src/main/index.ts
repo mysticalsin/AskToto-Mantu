@@ -174,8 +174,7 @@ import {
   localPrimaryEligibleFor,
   pickPrimaryProvider,
   allowCrossProviderFailover,
-  resolveRoutingMode,
-  localRuntimeBinaryPresent
+  resolveRoutingMode
 } from './llm/local-routing'
 import {
   CLI_PROVIDER_IDS,
@@ -593,6 +592,7 @@ import { buildPrewarmMessages } from './llm/prewarm'
 import { listModels as listLocalModels, isDownloaded as localModelDownloaded } from './llm/local-models'
 import { ensureLocalModel, localModelDownloadState } from './llm/local-model-download'
 import { createScreenPreprocess, type ScreenPreprocess } from './screen-preprocess'
+import { createVoiceChordWiring } from './voice/chord-wiring'
 import { startForegroundWatcher } from './foreground-watcher'
 import { createStopAll } from './infra/process/stop-all'
 import { installExitPaths } from './lifecycle/exit-paths'
@@ -859,7 +859,8 @@ import {
   windowsScreenStatus
 } from './platform-perms'
 import { collectVisionStream, runScreenCaptureCheck } from './screen-capture-check'
-import { VISION_CHECK_PROMPT, VISION_CHECK_SYSTEM, isApiVisionCandidate } from '@shared/screen-capture-check'
+import { VISION_CHECK_PROMPT, VISION_CHECK_SYSTEM } from '@shared/screen-capture-check'
+import { visionCheckContextFromSettings } from './screen-check-context'
 import {
   listMeetingsNeedingRecap,
   recallRead,
@@ -1552,7 +1553,15 @@ const meetingMicCaptureAuthority = new MeetingMicCaptureAuthority({
     }
   }
 })
+// V01 global hold chord: no helper process and no key monitoring unless voice actions are on (QA builds, or opted in).
+const voiceChord = createVoiceChordWiring({
+  qaIdentityBuild: QA_IDENTITY_BUILD,
+  requireAuth,
+  meetingReserved: () => inputSessionAuthority.hasMeetingReservation,
+  onboardingExclusive: onboardingExclusiveLive
+})
 const inputSessionLifecycleController = new InputSessionLifecycleController({
+  onHardStop: (reason) => voiceChord.onInputSessionStop(reason),
   ownerSession: ownerSessionLifecycle,
   inputSessionAuthority,
   meetingStartActivationAuthority,
@@ -4714,34 +4723,6 @@ function prewarmCapture(): void {
   })
 }
 
-function visionCheckContextFromSettings(): import('@shared/screen-capture-check').VisionCheckContext {
-  const s = getSettings()
-  let localWeightsReady = false
-  try {
-    localWeightsReady = localModelDownloaded(s.localLlm.modelId) && localRuntimeBinaryPresent()
-  } catch {
-    localWeightsReady = false
-  }
-  const provider = s.provider
-  const visionOk = provider === 'dust' ? dustSelectedAgentVision(s.providerModels['dust']) : PROVIDERS[provider].vision
-  const configured =
-    provider === 'local'
-      ? false
-      : PROVIDERS[provider].kind === 'cli'
-        ? !!s.cliConnected[provider]
-        : getApiKey(provider).length > 0 &&
-          (provider !== 'dust' || !!s.dustWorkspaceId) &&
-          (!requiresUserBaseUrl(provider) || !!providerBaseUrl(provider, s))
-  const allowed = narrowAllowedForCapability(s, getAllowedProviders(), 'askChat', [...CLI_PROVIDER_IDS, 'local'])
-  const orgOk = !allowed || allowed.includes(provider)
-  return {
-    localWeightsReady,
-    localEnabled: s.localLlm.enabled,
-    apiVisionReady: isApiVisionCandidate(provider, visionOk, configured && orgOk),
-    activeProvider: provider
-  }
-}
-
 /** Isolated vision ask for the Settings self-check. Never askStart, never overlay chat, never a teammate push. */
 function askVisionForScreenCheck(backend: 'local' | 'api', image: string): Promise<{ text: string; label: string }> {
   const s = getSettings()
@@ -5116,6 +5097,7 @@ const stopAllSidecars = createStopAll(
     { name: 'whisper-import-host', stop: () => void stopWhisperHost().catch(() => undefined) },
     { name: 'parakeet-host', stop: () => killParakeetHostForQuit() },
     { name: 'speaker-embedding-host', stop: () => killSpeakerEmbeddingHostForQuit() },
+    { name: 'voice-chord', stop: () => voiceChord.stop() },
     { name: 'local-runtime', stop: () => localRuntime.stop() },
     { name: 'fm-runtime', stop: () => fmRuntime.stop() }
   ],
@@ -7004,6 +6986,7 @@ function registerIpc(): void {
     // intent. The warm rides hovering the Capture button (Bar.tsx), the moment intent is signalled.
     prewarmCli() // warm the CLI binary cache so the first CLI ask doesn't stall on a login-shell lookup
     refreshScreenPreprocess() // start background screen pre-analysis if eligible now that we're signed in
+    voiceChord.onSignedIn()
     return status
   })
   ipcMain.handle(IPC.authSignOut, async (e) => {
@@ -9239,6 +9222,7 @@ if (!app.requestSingleInstanceLock()) {
       installInputPowerLifecycleHooks()
       installScreenObservationLifecycle(powerMonitor, screenObservation, mainLog) // lock and sleep drop pending captures
       installDisplayRemovalRevocation(screen, screenObservation, mainLog) // a removed display drops its captures
+      voiceChord.start()
       const bootWork = createBootWork() // M2-0031: non-first-paint fs work starts after the first show, under the pool cap
       bootWorkGate = bootWork
       configureSidecarRegistry(createSidecarRegistry(app.getPath('userData')))

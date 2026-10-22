@@ -57,6 +57,11 @@ export interface InputSessionLifecycleControllerDependencies {
   setRecordingPowerSaveBlock(on: boolean): void
   parakeetRelease(): Promise<unknown>
   releaseSpeakerEmbedding(owner: 'live'): Promise<unknown>
+  /**
+   * Observer of every hard stop, called last. It is for consumers that only stop their own work on a boundary
+   * (the voice hold-chord helper). It must not throw; a throw is swallowed so it can never leave teardown half-done.
+   */
+  onHardStop?(reason: InputSessionStopReason): void
 }
 
 export class InputSessionLifecycleController {
@@ -94,6 +99,11 @@ export class InputSessionLifecycleController {
       // Same synchronous turn as the teardown above, so no segment can slip in between. Runs even when a
       // teardown step throws: a failed native release must not leave owner sessions open.
       this.revokeOwnerSessions(reason)
+      try {
+        this.deps.onHardStop?.(reason)
+      } catch {
+        /* an observer failing must not undo or mask the teardown above */
+      }
     }
   }
 

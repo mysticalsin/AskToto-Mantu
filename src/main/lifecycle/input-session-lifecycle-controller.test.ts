@@ -49,6 +49,8 @@ interface FixtureOptions {
   rejectNativeReleases?: boolean
   /** Enables the owner-session dependency; 'throws' makes revokeAll throw, 'getter-throws' makes the getter throw. */
   ownerSession?: 'live' | 'throws' | 'getter-throws'
+  /** Wires the optional hard-stop observer; 'throws' makes it throw. */
+  onHardStop?: 'live' | 'throws'
 }
 
 type OwnerRevokeReason = import('@shared/contracts/owner-session').OwnerSessionRevokeReason
@@ -196,7 +198,15 @@ function setup(options: FixtureOptions = {}) {
     setTrayRecording,
     setRecordingPowerSaveBlock,
     parakeetRelease,
-    releaseSpeakerEmbedding
+    releaseSpeakerEmbedding,
+    ...(options.onHardStop
+      ? {
+          onHardStop: (reason: InputSessionStopReason) => {
+            events.push(`observer:${reason}`)
+            if (options.onHardStop === 'throws') throw new Error('synthetic observer failure')
+          }
+        }
+      : {})
   })
 
   return {
@@ -802,5 +812,25 @@ describe('InputSessionLifecycleController owner-session revocation', () => {
     const fixture = setup({ reservation: 654, activeSpeakerStartedAt: 654 })
     expect(() => fixture.controller.hardStopInputSession('sign-out')).not.toThrow()
     expect(fixture.ownerRevokeAll).not.toHaveBeenCalled()
+  })
+})
+
+describe('InputSessionLifecycleController hard-stop observer', () => {
+  it('tells the observer about every boundary, after the teardown and the owner-session revocation', () => {
+    const fixture = setup({ ownerSession: 'live', onHardStop: 'live' })
+    fixture.controller.hardStopInputSession('sign-out')
+    const observed = fixture.events.indexOf('observer:sign-out')
+    expect(observed).toBeGreaterThan(-1)
+    expect(observed).toBeGreaterThan(fixture.events.indexOf('input-hard-stop:sign-out'))
+    expect(observed).toBeGreaterThan(fixture.events.indexOf('owner-revoke-all:sign-out'))
+    fixture.controller.hardStopInputSession('window-hidden')
+    expect(fixture.events).toContain('observer:window-hidden')
+  })
+
+  it('an observer that throws neither masks the teardown nor reaches the caller', () => {
+    const fixture = setup({ ownerSession: 'live', onHardStop: 'throws' })
+    expect(() => fixture.controller.hardStopInputSession('shutdown')).not.toThrow()
+    expect(fixture.events).toContain('owner-revoke-all:quit')
+    expect(fixture.events).toContain('observer:shutdown')
   })
 })

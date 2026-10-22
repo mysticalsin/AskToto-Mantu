@@ -206,6 +206,23 @@ for c in d["copies"]:
 assert any(c["path"].endswith("/Finder.app") for c in d["copies"]), d
 '; then pass "bundle-copies lists path + version for every copy LaunchServices knows"; else fail "bundle-copies Finder JSON: $out"; fi
 
+# --- watch-modifiers (V01; the voice hold chord, permission-free polling) ---------------------------
+err="$("$helper" 2>&1 >/dev/null)"
+case "$err" in *usage:*watch-modifiers*) pass "usage lists watch-modifiers" ;; *) fail "usage lists watch-modifiers: $err" ;; esac
+"$helper" watch-modifiers --interval-ms abc >/dev/null 2>&1; code=$?
+expect_exit "watch-modifiers rejects a non-numeric interval" 1 "$code"
+"$helper" watch-modifiers --bogus 1 >/dev/null 2>&1; code=$?
+expect_exit "watch-modifiers rejects an unknown option" 1 "$code"
+"$helper" watch-modifiers --interval-ms >/dev/null 2>&1; code=$?
+expect_exit "watch-modifiers rejects an option without a value" 1 "$code"
+"$helper" watch-modifiers --interval-ms 40 >"$work/wm.out" 2>"$work/wm.err" &
+wm_pid=$!
+sleep 0.5
+kill "$wm_pid" 2>/dev/null; wait "$wm_pid" 2>/dev/null
+first="$(head -n 1 "$work/wm.out")"
+if printf '%s\n' "$first" | grep -Eq '^m [0-9]{1,4} [0-9]{1,10}$'; then pass "watch-modifiers prints one well-formed initial line"; else fail "watch-modifiers first line: '$first' ($(cat "$work/wm.err"))"; fi
+if [ "$(grep -Evc '^m [0-9]{1,4} [0-9]{1,10}$' "$work/wm.out")" = "0" ]; then pass "watch-modifiers prints only protocol lines (no key identity)"; else fail "watch-modifiers stray output: $(cat "$work/wm.out")"; fi
+
 if [ "$failures" -eq 0 ]; then echo "all helper tests passed"; exit 0; fi
 echo "$failures helper test(s) failed"
 exit 1
