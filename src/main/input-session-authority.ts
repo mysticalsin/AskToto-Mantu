@@ -39,17 +39,26 @@ export class InputSessionAuthority {
   #token: () => string
   #now: () => number
   #onRevoked?: (owner: TrustedInputOwner, lease: InputSessionLease, reason: InputSessionStopReason) => void
+  #onHardStop?: (reason: InputSessionStopReason) => void
+  #onMeetingReserved?: () => void
 
   constructor(
     options: {
       token?: () => string
       now?: () => number
       onRevoked?: (owner: TrustedInputOwner, lease: InputSessionLease, reason: InputSessionStopReason) => void
+      /** Every hardStop, with or without an active lease (sign-out, lock, suspend, quit reach a voice turn that
+       *  has no lease yet). Never fires for a meeting reservation or an arbitration preempt. */
+      onHardStop?: (reason: InputSessionStopReason) => void
+      /** After an accepted meeting reservation; an interactive lease was already revoked synchronously. */
+      onMeetingReserved?: () => void
     } = {}
   ) {
     this.#token = options.token ?? (() => randomBytes(24).toString('hex'))
     this.#now = options.now ?? Date.now
     this.#onRevoked = options.onRevoked
+    this.#onHardStop = options.onHardStop
+    this.#onMeetingReserved = options.onMeetingReserved
   }
 
   start(owner: TrustedInputOwner, raw: unknown): InputSessionResult {
@@ -59,6 +68,14 @@ export class InputSessionAuthority {
     if (!parsed.success) return { ok: false, reason: 'invalid_request' }
     if (this.#active && !this.#sameContext(this.#active.owner, owner)) this.hardStop('owner-replaced')
     if (this.#meetingReserved) return { ok: false, reason: 'meeting_reserved' }
+    // An explicit push-to-talk command (a hardware-minted voice turn) beats an ambient lease. Nothing preempts an
+    // explicit lease, and no other source preempts anything.
+    if (
+      this.#active?.lease.activation === 'ambient' &&
+      parsed.data.source === 'push-to-talk' &&
+      parsed.data.purpose === 'command'
+    )
+      this.#revokeActive('arbitration-preempted')
     if (this.#active) return { ok: false, reason: 'busy' }
     const now = this.#now()
     const sessionId = this.#token()
@@ -130,9 +147,14 @@ export class InputSessionAuthority {
       return false
     // This is called only after the main meeting identity acceptor admits a transition. Revoke interactive
     // lease authority synchronously, then atomically replace any previous metadata reservation.
-    this.hardStop('owner-replaced')
+    this.#revokeActive('owner-replaced')
     this.#meetingReserved = true
     this.#meetingStartedAt = startedAt
+    try {
+      this.#onMeetingReserved?.()
+    } catch {
+      /* the reservation stands even if an observer fails */
+    }
     return true
   }
 
@@ -155,6 +177,15 @@ export class InputSessionAuthority {
 
   /** Hard stop invalidates admission synchronously and notifies the exact renderer lease owner. */
   hardStop(reason: InputSessionStopReason): void {
+    this.#revokeActive(reason)
+    try {
+      this.#onHardStop?.(reason)
+    } catch {
+      /* authority stays revoked even if an observer fails */
+    }
+  }
+
+  #revokeActive(reason: InputSessionStopReason): void {
     const active = this.#active
     this.#active = undefined
     if (active) {

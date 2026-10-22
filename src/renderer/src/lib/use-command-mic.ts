@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { acquireInteractiveMic, type InputMicAdmission } from './input-mic-admission'
+import { COMMAND_SPEECH_MAX_SECONDS } from '@shared/command-speech'
 import { COMMAND_SPEECH_WORKLET_SRC } from './command-speech-worklet-src'
 
 export type CommandMicStatus = 'idle' | 'starting' | 'listening' | 'finalizing' | 'done' | 'error'
@@ -15,6 +16,8 @@ export type CommandMicStopReason =
 
 export type CommandMicSnapshot = { status: CommandMicStatus; reason?: CommandMicStopReason }
 export type CommandMicOptions = { maxDurationMs?: number; finalizationMs?: number }
+/** `push-to-talk` is a voice turn whose activation main minted from the held chord; no click is involved. */
+export type CommandMicStartOptions = { source?: 'deliberate-talk' | 'push-to-talk' }
 type ControllerOptions = CommandMicOptions & { onSnapshot?: (snapshot: CommandMicSnapshot) => void }
 
 type ActiveCapture = {
@@ -41,6 +44,8 @@ type ActiveCapture = {
 }
 
 const DEFAULT_MAX_DURATION_MS = 8_000
+/** The hard cap main enforces; a caller (the voice turn) may ask for up to this much, never more. */
+export const COMMAND_MIC_HARD_MAX_DURATION_MS = COMMAND_SPEECH_MAX_SECONDS * 1_000
 const DEFAULT_FINALIZATION_MS = 1_500
 const COMMAND_MIC_CONSTRAINTS: MediaStreamConstraints = {
   audio: { autoGainControl: true, channelCount: 1, echoCancellation: true, noiseSuppression: true }
@@ -64,7 +69,7 @@ export class CommandMicController {
 
   constructor(private readonly options: ControllerOptions = {}) {
     this.maxDurationMs = Math.min(
-      DEFAULT_MAX_DURATION_MS,
+      COMMAND_MIC_HARD_MAX_DURATION_MS,
       Math.max(1, Math.floor(options.maxDurationMs ?? DEFAULT_MAX_DURATION_MS))
     )
     this.finalizationMs = Math.max(0, Math.floor(options.finalizationMs ?? DEFAULT_FINALIZATION_MS))
@@ -74,7 +79,8 @@ export class CommandMicController {
     return this.snapshot
   }
 
-  async start(): Promise<void> {
+  async start(startOptions: CommandMicStartOptions = {}): Promise<void> {
+    const inputSource = startOptions.source ?? 'deliberate-talk'
     if (this.disposed || this.active || this.snapshot.status === 'starting') return
     const generation = ++this.generation
     const abort = new AbortController()
@@ -92,11 +98,13 @@ export class CommandMicController {
     try {
       const availability = await window.toto.commandMicAvailability()
       if (!availability.ok) throw new Error(availability.reason)
-      if (!(await window.toto.commandMicActivationReady())) {
+      // A voice turn has no click to observe: main minted the activation from the held chord and consumes it
+      // when the push-to-talk lease is requested below, refusing it if it is missing.
+      if (inputSource !== 'push-to-talk' && !(await window.toto.commandMicActivationReady())) {
         const currentAvailability = await window.toto.commandMicAvailability().catch(() => availability)
         throw new Error(currentAvailability.ok ? 'activation_required' : currentAvailability.reason)
       }
-      capture = await acquireInteractiveMic(COMMAND_MIC_CONSTRAINTS, 'command', 'deliberate-talk', abort.signal)
+      capture = await acquireInteractiveMic(COMMAND_MIC_CONSTRAINTS, 'command', inputSource, abort.signal)
       sessionId = capture.admission.sessionId
       if (this.disposed || generation !== this.generation || capture.admission.revoked) throw new Error('cancelled')
       context = new AudioContext()
@@ -178,7 +186,8 @@ export class CommandMicController {
       this.publish({ status: 'listening' })
     } catch (error) {
       if (this.admissionAbort === abort) this.admissionAbort = null
-      const reason = error instanceof Error ? error.message : ''
+      const message = error instanceof Error ? error.message : ''
+      const reason = /^Microphone admission denied: unauthorized$/.test(message) ? 'unauthorized' : message
       if (startedInMain && sessionId) void window.toto.commandSpeechCancel(sessionId).catch(() => {})
       const active = this.active
       if (active?.generation === generation) this.release(active)

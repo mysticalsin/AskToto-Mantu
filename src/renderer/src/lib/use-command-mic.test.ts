@@ -22,7 +22,7 @@ type TrackFixture = MediaStreamTrack & {
   stop: ReturnType<typeof vi.fn>
 }
 type TestController = {
-  start(): Promise<void>
+  start(options?: { source?: 'push-to-talk' | 'deliberate-talk' }): Promise<void>
   finish(expectedGeneration?: number): Promise<void>
   cancel(): Promise<void>
   dispose(): void
@@ -77,8 +77,8 @@ function deferred<T>(fallback: T): Deferred<T> {
   }
 }
 
-function start(controller: TestController): Promise<void> {
-  return controller.start()
+function start(controller: TestController, options?: { source?: 'push-to-talk' | 'deliberate-talk' }): Promise<void> {
+  return controller.start(options)
 }
 
 type HarnessOptions = {
@@ -453,14 +453,14 @@ function createHarness(options: HarnessOptions = {}) {
         else listener.handleEvent(new Event('devicechange'))
       }
     },
-    async createController() {
+    async createController(maxDurationMs = 8_000) {
       vi.resetModules()
       const { CommandMicController } = await import('./use-command-mic')
-      const controller = new CommandMicController({ maxDurationMs: 8_000 }) as TestController
+      const controller = new CommandMicController({ maxDurationMs }) as TestController
       const originalStart = controller.start.bind(controller)
       const originalFinish = controller.finish.bind(controller)
       const originalCancel = controller.cancel.bind(controller)
-      controller.start = () => trackTask(originalStart())
+      controller.start = (options) => trackTask(originalStart(options))
       controller.finish = (expectedGeneration) => trackTask(originalFinish(expectedGeneration))
       controller.cancel = () => trackTask(originalCancel())
       controllers.push(controller)
@@ -862,5 +862,62 @@ describe('bounded command microphone capture', () => {
     expect(controller.getSnapshot()).toEqual({ status: 'error', reason: 'recognition_unavailable' })
     expect(env.stoppedTrackCount).toBe(2)
     expect(env.stopInputSession).toHaveBeenCalledTimes(2)
+  })
+})
+
+describe('voice turn capture started from a main-pushed begin', () => {
+  it('a push-to-talk start skips the click-activation pre-check and asks main for a push-to-talk command lease', async () => {
+    const env = createHarness()
+    env.activationReady = false
+    const controller = await env.createController(15_000)
+    await start(controller, { source: 'push-to-talk' })
+
+    expect(controller.getSnapshot()).toEqual({ status: 'listening' })
+    expect(env.startInputSession).toHaveBeenCalledExactlyOnceWith(
+      { source: 'push-to-talk', purpose: 'command', activation: 'explicit' },
+      context
+    )
+    await controller.cancel()
+  })
+
+  it('the default start is unchanged: a deliberate-talk lease that needs the Start click', async () => {
+    const env = createHarness()
+    env.activationReady = false
+    const controller = await env.createController()
+    await start(controller)
+    expect(controller.getSnapshot()).toEqual({ status: 'error', reason: 'activation_required' })
+    expect(env.startInputSession).not.toHaveBeenCalled()
+
+    env.activationReady = true
+    await start(controller)
+    expect(env.startInputSession).toHaveBeenCalledExactlyOnceWith(
+      { source: 'deliberate-talk', purpose: 'command', activation: 'explicit' },
+      context
+    )
+    await controller.cancel()
+  })
+
+  it('a main refusal of the hardware activation reads as activation_required and opens no microphone', async () => {
+    const env = createHarness()
+    const controller = await env.createController(15_000)
+    env.startInputSession.mockRejectedValueOnce(new Error('unauthorized'))
+    await start(controller, { source: 'push-to-talk' })
+
+    expect(controller.getSnapshot()).toEqual({ status: 'error', reason: 'activation_required' })
+    expect(env.getUserMedia).not.toHaveBeenCalled()
+  })
+
+  it('stops at fifteen seconds when given the voice cap, and clamps anything longer', async () => {
+    const env = createHarness()
+    const finish = env.deferFinish()
+    const controller = await env.createController(60_000)
+    await start(controller, { source: 'push-to-talk' })
+
+    await vi.advanceTimersByTimeAsync(14_999)
+    expect(env.commandSpeechFinish).not.toHaveBeenCalled()
+    await vi.advanceTimersByTimeAsync(1)
+    await vi.waitFor(() => expect(env.commandSpeechFinish).toHaveBeenCalledOnce())
+    finish.resolve({ ok: true })
+    await vi.waitFor(() => expect(controller.getSnapshot()).toEqual({ status: 'done' }))
   })
 })

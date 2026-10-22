@@ -1,10 +1,12 @@
+import { COMMAND_SPEECH_MAX_SECONDS } from '@shared/command-speech'
 import type { TrustedInputOwner } from '@shared/input-session'
 
 export const COMMAND_SPEECH_SAMPLE_RATE = 16_000
-export const COMMAND_SPEECH_MAX_SAMPLES = COMMAND_SPEECH_SAMPLE_RATE * 8
+export const COMMAND_SPEECH_MAX_SAMPLES = COMMAND_SPEECH_SAMPLE_RATE * COMMAND_SPEECH_MAX_SECONDS
 export const COMMAND_SPEECH_MAX_FRAME_SAMPLES = 2_048
 export const COMMAND_SPEECH_MAX_FRAMES = Math.ceil(COMMAND_SPEECH_MAX_SAMPLES / COMMAND_SPEECH_MAX_FRAME_SAMPLES)
-const COMMAND_SPEECH_MAX_AGE_MS = 10_000
+/** The cap plus two seconds for the final seal and the last frames still in flight. */
+const COMMAND_SPEECH_MAX_AGE_MS = COMMAND_SPEECH_MAX_SECONDS * 1_000 + 2_000
 const COMMAND_SPEECH_FINALIZATION_TIMEOUT_MS = 125_000
 
 export type CommandSpeechResult =
@@ -34,6 +36,8 @@ export class CommandSpeechCapture {
       transcribe: (samples: Float32Array) => Promise<string>
       ingestTranscript: (text: string) => void
       onExpired?: (sessionId: string) => void
+      /** Every finish outcome, exactly what the renderer is told, after any transcript was ingested. */
+      onFinished?: (sessionId: string, result: CommandSpeechResult) => void
       now?: () => number
     }
   ) {}
@@ -103,6 +107,16 @@ export class CommandSpeechCapture {
   }
 
   async finish(owner: TrustedInputOwner, sessionId: string, frameCount: number): Promise<CommandSpeechResult> {
+    const result = await this.#finish(owner, sessionId, frameCount)
+    try {
+      this.options.onFinished?.(sessionId, result)
+    } catch {
+      /* an observer never changes what the renderer is told */
+    }
+    return result
+  }
+
+  async #finish(owner: TrustedInputOwner, sessionId: string, frameCount: number): Promise<CommandSpeechResult> {
     const capture = this.#capture
     if (!capture || capture.sessionId !== sessionId || !this.#sameOwner(capture.owner, owner))
       return { ok: false, reason: 'stale' }

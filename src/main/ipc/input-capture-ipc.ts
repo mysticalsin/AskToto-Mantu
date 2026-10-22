@@ -21,10 +21,11 @@ interface WindowLike {
 
 type CommandMicAvailabilityLike = { ok: true } | { ok: false; reason: string }
 
+/** Deliberately no mint-from-hardware here: only main's voice session may mint a hardware activation. */
 interface ActivationAuthorityLike<Frame> {
   mint(frame: Frame): boolean
-  hasPending(frame: Frame): boolean
-  consume(frame: Frame): boolean
+  hasPending(frame: Frame, kind?: 'click' | 'hardware'): boolean
+  consume(frame: Frame, kind?: 'click' | 'hardware'): boolean
   revokeAll(): void
 }
 
@@ -94,13 +95,15 @@ export function registerInputCaptureIpc<Frame, Samples>(deps: InputCaptureIpcDep
     },
     currentContext: deps.currentInputSessionContext,
     captureAuthBoundary: deps.captureAuthSessionBoundary,
-    authorizeCommandStart: (event, owner) => {
+    authorizeCommandStart: (event, _owner, source) => {
       if (!deps.commandMicAvailability().ok) return false
       const frame = deps.commandMicActivationFrameFromEvent(event)
+      // A voice turn (push-to-talk) consumes only a grant main minted from the held chord; the panel's
+      // Start click consumes only its own click grant. The two never substitute for each other.
       return (
         !!frame &&
         deps.commandMicOwner(frame, deps.currentInputSessionContext()) !== null &&
-        deps.commandMicActivationAuthority.consume(frame)
+        deps.commandMicActivationAuthority.consume(frame, source === 'push-to-talk' ? 'hardware' : 'click')
       )
     }
   })

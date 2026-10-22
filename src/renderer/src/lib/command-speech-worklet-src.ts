@@ -1,9 +1,10 @@
+import { COMMAND_SPEECH_MAX_SECONDS } from '@shared/command-speech'
 import { PCM_16K_RESAMPLER_SRC } from './pcm-format'
 
 export const COMMAND_SPEECH_WORKLET_SRC = `
 const SAMPLE_RATE = 16000
 const FRAME_SAMPLES = 2048
-const MAX_SAMPLES = SAMPLE_RATE * 8
+const MAX_SAMPLES = SAMPLE_RATE * ${COMMAND_SPEECH_MAX_SECONDS}
 const Pcm16kResampler = ${PCM_16K_RESAMPLER_SRC}
 class CommandSpeechWorklet extends AudioWorkletProcessor {
   constructor() {

@@ -1,8 +1,12 @@
 import type { TrustedInputOwner } from '@shared/input-session'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { COMMAND_SPEECH_MAX_SECONDS } from '@shared/command-speech'
+import { COMMAND_SPEECH_WORKLET_SRC } from '../renderer/src/lib/command-speech-worklet-src'
 import {
   COMMAND_SPEECH_MAX_FRAME_SAMPLES,
+  COMMAND_SPEECH_MAX_FRAMES,
   COMMAND_SPEECH_MAX_SAMPLES,
+  COMMAND_SPEECH_SAMPLE_RATE,
   CommandSpeechCapture,
   type CommandSpeechResult
 } from './command-speech-capture'
@@ -64,8 +68,11 @@ describe('CommandSpeechCapture', () => {
     expect(capture.start(owner, sessionId)).toEqual({ ok: true })
   }
 
-  it('caps capture at eight seconds of 16 kHz mono', () => {
-    expect(COMMAND_SPEECH_MAX_SAMPLES).toBe(128_000)
+  it('caps capture at fifteen seconds of 16 kHz mono, with every limit derived from that one constant', () => {
+    expect(COMMAND_SPEECH_MAX_SECONDS).toBe(15)
+    expect(COMMAND_SPEECH_MAX_SAMPLES).toBe(COMMAND_SPEECH_SAMPLE_RATE * COMMAND_SPEECH_MAX_SECONDS)
+    expect(COMMAND_SPEECH_MAX_SAMPLES).toBe(240_000)
+    expect(COMMAND_SPEECH_MAX_FRAMES).toBe(Math.ceil(COMMAND_SPEECH_MAX_SAMPLES / COMMAND_SPEECH_MAX_FRAME_SAMPLES))
     expect(capture.start(owner, sessionId)).toEqual({ ok: true })
     let sequence = 0
     let total = 0
@@ -73,12 +80,16 @@ describe('CommandSpeechCapture', () => {
       expect(capture.frame(owner, sessionId, sequence++, fill(COMMAND_SPEECH_MAX_FRAME_SAMPLES))).toEqual({ ok: true })
       total += COMMAND_SPEECH_MAX_FRAME_SAMPLES
     }
-    expect(sequence).toBe(62)
+    expect(sequence).toBe(117)
     const remainder = COMMAND_SPEECH_MAX_SAMPLES - total
-    expect(remainder).toBe(1_024)
+    expect(remainder).toBe(384)
     expect(capture.frame(owner, sessionId, sequence++, fill(remainder))).toEqual({ ok: true })
     expect(capture.frame(owner, sessionId, sequence++, fill(1))).toEqual({ ok: false, reason: 'invalid' })
     expect(capture.frame(owner, sessionId, sequence++, fill(1))).toEqual({ ok: false, reason: 'stale' })
+  })
+
+  it('the renderer worklet seals at the same cap as main', () => {
+    expect(COMMAND_SPEECH_WORKLET_SRC).toContain(`const MAX_SAMPLES = SAMPLE_RATE * ${COMMAND_SPEECH_MAX_SECONDS}`)
   })
 
   it('rejects stale, replayed and out-of-range frames', () => {
@@ -202,9 +213,11 @@ describe('CommandSpeechCapture', () => {
     expect(ingestTranscript).toHaveBeenCalledWith('open notes')
   })
 
-  it('expires an idle capture after ten seconds and calls onExpired', () => {
+  it('expires an idle capture two seconds after the cap and calls onExpired', () => {
     expect(capture.start(owner, sessionId)).toEqual({ ok: true })
-    advance(10_000)
+    advance(COMMAND_SPEECH_MAX_SECONDS * 1_000 + 1_999)
+    expect(onExpired).not.toHaveBeenCalled()
+    advance(1)
     expect(onExpired).toHaveBeenCalledWith(sessionId)
     expect(capture.frame(owner, sessionId, 0, fill(8))).toEqual({ ok: false, reason: 'stale' })
     expect(capture.start(owner, sessionId)).toEqual({ ok: true })
@@ -227,5 +240,62 @@ describe('CommandSpeechCapture', () => {
     expect(capture.start(owner, sessionId)).toEqual({ ok: false, reason: 'stale' })
     current = true
     expect(capture.start(owner, sessionId)).toEqual({ ok: true })
+  })
+
+  describe('onFinished', () => {
+    const makeWith = (onFinished: (sessionId: string, result: CommandSpeechResult) => void) =>
+      new CommandSpeechCapture({ isCurrent, transcribe, ingestTranscript, onExpired, onFinished, now: () => clock })
+
+    it('reports a successful recognition once, after the transcript was ingested', async () => {
+      const seen: Array<[string, CommandSpeechResult]> = []
+      const reporting = makeWith((id, result) => {
+        expect(ingestTranscript).toHaveBeenCalledTimes(1)
+        seen.push([id, result])
+      })
+      transcribe.mockImplementationOnce(async () => 'open notes')
+      expect(reporting.start(owner, sessionId)).toEqual({ ok: true })
+      expect(reporting.frame(owner, sessionId, 0, fill(64))).toEqual({ ok: true })
+      expect(await reporting.finish(owner, sessionId, 1)).toEqual({ ok: true })
+      expect(seen).toEqual([[sessionId, { ok: true }]])
+      reporting.cancelAll()
+    })
+
+    it('reports no_speech, recognition_unavailable and a stale finish with the same result the renderer gets', async () => {
+      const seen: CommandSpeechResult[] = []
+      const reporting = makeWith((_id, result) => void seen.push(result))
+      transcribe.mockImplementationOnce(async () => ' ')
+      reporting.start(owner, sessionId)
+      reporting.frame(owner, sessionId, 0, fill(8))
+      expect(await reporting.finish(owner, sessionId, 1)).toEqual({ ok: false, reason: 'no_speech' })
+      transcribe.mockImplementationOnce(async () => {
+        throw new Error('model missing')
+      })
+      reporting.start(owner, sessionId)
+      reporting.frame(owner, sessionId, 0, fill(8))
+      expect(await reporting.finish(owner, sessionId, 1)).toEqual({ ok: false, reason: 'recognition_unavailable' })
+      current = false
+      reporting.start(owner, sessionId)
+      current = true
+      reporting.start(owner, sessionId)
+      current = false
+      expect(await reporting.finish(owner, sessionId, 0)).toEqual({ ok: false, reason: 'stale' })
+      expect(seen).toEqual([
+        { ok: false, reason: 'no_speech' },
+        { ok: false, reason: 'recognition_unavailable' },
+        { ok: false, reason: 'stale' }
+      ])
+      reporting.cancelAll()
+    })
+
+    it('a throwing observer never changes what the renderer is told', async () => {
+      const reporting = makeWith(() => {
+        throw new Error('observer failed')
+      })
+      transcribe.mockImplementationOnce(async () => 'open notes')
+      reporting.start(owner, sessionId)
+      reporting.frame(owner, sessionId, 0, fill(8))
+      expect(await reporting.finish(owner, sessionId, 1)).toEqual({ ok: true })
+      reporting.cancelAll()
+    })
   })
 })

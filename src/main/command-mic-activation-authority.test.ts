@@ -126,6 +126,88 @@ describe('CommandMicActivationAuthority', () => {
   })
 })
 
+describe('CommandMicActivationAuthority hardware activation (voice turn)', () => {
+  let s: CommandMicActivationState
+  let t: number
+  beforeEach(() => {
+    s = baseState()
+    t = 1_000
+  })
+  const make = (ttlMs?: number) => new CommandMicActivationAuthority({ state: () => s, now: () => t, ttlMs })
+
+  it('mintFromHardware then a hardware consume succeeds exactly once', () => {
+    const auth = make()
+    expect(auth.mintFromHardware(frame)).toBe(true)
+    expect(auth.hasPending(frame, 'hardware')).toBe(true)
+    expect(auth.consume(frame, 'hardware')).toBe(true)
+    expect(auth.consume(frame, 'hardware')).toBe(false)
+  })
+
+  it('a hardware grant is invisible to the click path and a click grant is invisible to the hardware path', () => {
+    const auth = make()
+    expect(auth.mintFromHardware(frame)).toBe(true)
+    expect(auth.hasPending(frame)).toBe(false)
+    expect(auth.consume(frame)).toBe(false)
+    expect(auth.consume(frame, 'hardware')).toBe(true)
+
+    expect(auth.mint(frame)).toBe(true)
+    expect(auth.hasPending(frame, 'hardware')).toBe(false)
+    expect(auth.consume(frame, 'hardware')).toBe(false)
+    expect(auth.consume(frame)).toBe(true)
+  })
+
+  it('a second hardware mint for the same turn does not stack grants', () => {
+    const auth = make()
+    expect(auth.mintFromHardware(frame)).toBe(true)
+    expect(auth.mintFromHardware(frame)).toBe(true)
+    expect(auth.consume(frame, 'hardware')).toBe(true)
+    expect(auth.consume(frame, 'hardware')).toBe(false)
+  })
+
+  it('refuses a hidden, signed-out or unavailable state, a subframe and a stale url', () => {
+    for (const patch of [
+      { isWindowVisible: false },
+      { isAuthenticated: false },
+      { isParakeetSelected: false }
+    ] as Array<Partial<CommandMicActivationState>>) {
+      s = { ...baseState(), ...patch }
+      const auth = make()
+      expect(auth.mintFromHardware(frame)).toBe(false)
+      expect(auth.hasPending(frame, 'hardware')).toBe(false)
+    }
+    s = baseState()
+    const auth = make()
+    expect(auth.mintFromHardware({ ...frame, isTopFrame: false })).toBe(false)
+    expect(auth.mintFromHardware({ ...frame, url: 'app://metis/other.html' })).toBe(false)
+  })
+
+  it('expires after the ttl and dies with a new auth generation, like a click grant', () => {
+    const auth = make(100)
+    expect(auth.mintFromHardware(frame)).toBe(true)
+    t += 100
+    expect(auth.consume(frame, 'hardware')).toBe(false)
+
+    t = 1_000
+    const rotated = make()
+    expect(rotated.mintFromHardware(frame)).toBe(true)
+    s = { ...s, context: { authSessionGeneration: 6, contextRevision: 11 } }
+    expect(rotated.consume(frame, 'hardware')).toBe(false)
+  })
+
+  it('revokeHardware drops only hardware grants; revokeAll drops both', () => {
+    const auth = make()
+    expect(auth.mint(frame)).toBe(true)
+    expect(auth.mintFromHardware(frame)).toBe(true)
+    auth.revokeHardware()
+    expect(auth.hasPending(frame, 'hardware')).toBe(false)
+    expect(auth.hasPending(frame)).toBe(true)
+    expect(auth.mintFromHardware(frame)).toBe(true)
+    auth.revokeAll()
+    expect(auth.hasPending(frame)).toBe(false)
+    expect(auth.hasPending(frame, 'hardware')).toBe(false)
+  })
+})
+
 describe('commandMicOwner', () => {
   const context = { authSessionGeneration: 5, contextRevision: 11 }
 

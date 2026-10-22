@@ -168,3 +168,107 @@ describe('InputSessionAuthority', () => {
     expect(sessions.meetingStartedAt).toBeNull()
   })
 })
+
+describe('explicit push-to-talk versus ambient interactive leases', () => {
+  const ptt = { source: 'push-to-talk', purpose: 'command', activation: 'explicit' } as const
+  const wake = { source: 'wake', purpose: 'conversation', activation: 'ambient' } as const
+
+  function recording() {
+    const revoked: string[] = []
+    let token = 0
+    const sessions = new InputSessionAuthority({
+      now: () => 1,
+      token: () => (++token).toString(16).padStart(48, '0'),
+      onRevoked: (_o, _l, reason) => revoked.push(reason)
+    })
+    return { sessions, revoked }
+  }
+
+  it('an explicit push-to-talk start preempts an active ambient lease and is notified as arbitration-preempted', () => {
+    const { sessions, revoked } = recording()
+    const ambient = sessions.start(owner, wake)
+    expect(ambient.ok).toBe(true)
+    const explicit = sessions.start(owner, ptt)
+    expect(explicit.ok).toBe(true)
+    expect(revoked).toEqual(['arbitration-preempted'])
+    expect(sessions.activeLease?.source).toBe('push-to-talk')
+  })
+
+  it('an explicit lease is never preempted: a second explicit start and an ambient start are refused busy', () => {
+    const { sessions, revoked } = recording()
+    expect(sessions.start(owner, ptt).ok).toBe(true)
+    expect(sessions.start(owner, ptt)).toEqual({ ok: false, reason: 'busy' })
+    expect(sessions.start(owner, wake)).toEqual({ ok: false, reason: 'busy' })
+    expect(revoked).toEqual([])
+    expect(sessions.activeLease?.source).toBe('push-to-talk')
+  })
+
+  it('only push-to-talk preempts: a deliberate-talk start still fails closed behind an ambient lease', () => {
+    const { sessions, revoked } = recording()
+    expect(sessions.start(owner, wake).ok).toBe(true)
+    expect(sessions.start(owner, { source: 'deliberate-talk', purpose: 'command', activation: 'explicit' })).toEqual({
+      ok: false,
+      reason: 'busy'
+    })
+    expect(revoked).toEqual([])
+  })
+
+  it('a meeting reservation still wins over push-to-talk and no lease is created', () => {
+    const { sessions } = recording()
+    expect(sessions.reserveMeeting(500)).toBe(true)
+    expect(sessions.start(owner, ptt)).toEqual({ ok: false, reason: 'meeting_reserved' })
+    expect(sessions.activeLease).toBeNull()
+  })
+
+  it('does not preempt an ambient lease for a push-to-talk start that is not a command (stays busy)', () => {
+    const { sessions } = recording()
+    expect(sessions.start(owner, wake).ok).toBe(true)
+    expect(sessions.start(owner, { source: 'push-to-talk', purpose: 'dictation', activation: 'explicit' })).toEqual({
+      ok: false,
+      reason: 'busy'
+    })
+  })
+})
+
+describe('InputSessionAuthority observers for the voice session', () => {
+  it('onHardStop fires for every hard stop, with or without an active lease', () => {
+    const reasons: string[] = []
+    const sessions = new InputSessionAuthority({ onHardStop: (reason) => reasons.push(reason) })
+    sessions.hardStop('screen-locked')
+    sessions.start(owner, { source: 'push-to-talk', purpose: 'command', activation: 'explicit' })
+    sessions.hardStop('sign-out')
+    expect(reasons).toEqual(['screen-locked', 'sign-out'])
+  })
+
+  it('onHardStop is not reached for an arbitration preempt, which the preempted lease already reports', () => {
+    const reasons: string[] = []
+    const sessions = new InputSessionAuthority({ onHardStop: (reason) => reasons.push(reason) })
+    sessions.start(owner, { source: 'wake', purpose: 'conversation', activation: 'ambient' })
+    sessions.start(owner, { source: 'push-to-talk', purpose: 'command', activation: 'explicit' })
+    expect(reasons).toEqual([])
+  })
+
+  it('onMeetingReserved fires after an accepted reservation and not for a refused one', () => {
+    let calls = 0
+    const sessions = new InputSessionAuthority({ onMeetingReserved: () => void calls++ })
+    expect(sessions.reserveMeeting(-5)).toBe(false)
+    expect(calls).toBe(0)
+    expect(sessions.reserveMeeting(500)).toBe(true)
+    expect(calls).toBe(1)
+  })
+
+  it('an observer that throws never leaves authority un-revoked', () => {
+    const sessions = new InputSessionAuthority({
+      onHardStop: () => {
+        throw new Error('observer failed')
+      },
+      onMeetingReserved: () => {
+        throw new Error('observer failed')
+      }
+    })
+    sessions.start(owner, { source: 'push-to-talk', purpose: 'command', activation: 'explicit' })
+    expect(() => sessions.reserveMeeting(500)).not.toThrow()
+    expect(sessions.activeLease).toBeNull()
+    expect(sessions.hasMeetingReservation).toBe(true)
+  })
+})

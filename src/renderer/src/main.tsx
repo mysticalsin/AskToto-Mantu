@@ -6,6 +6,7 @@ import { App } from './App'
 import { useAutoResize } from './state'
 import { crashReport } from './lib/crash-context'
 import { createCrashReportLimiter, createReloadBudget, installGlobalCrashHandlers } from './lib/renderer-crash-guard'
+import { installVoiceTurnCapture } from './lib/voice-turn-capture'
 
 /**
  * The boundary's fallback replaces the ENTIRE App tree — including App's useAutoResize instance, the
@@ -95,6 +96,13 @@ installGlobalCrashHandlers(
   (report) => void window.toto.reportCrash(report).catch(() => {}),
   createCrashReportLimiter()
 )
+
+// Voice actions: headless, opens nothing until main pushes a hold-to-talk turn. A missing bridge never blocks boot.
+try {
+  installVoiceTurnCapture()
+} catch {
+  /* voice actions are optional */
+}
 
 createRoot(document.getElementById('root') as HTMLElement).render(
   <React.StrictMode>

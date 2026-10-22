@@ -3,6 +3,7 @@ import { createSpeechPackBridge } from './speech-pack'
 import { createCloudSpeechPreloadApi } from './cloud-speech'
 import { createTranscriptRevisionPreloadApi } from './transcript-revision'
 import { createMetricsPreloadApi } from './metrics'
+import { createVoiceActionsPreloadApi } from './voice-actions'
 import { PERMISSION_HELPER_IPC, type HelperKind } from '../shared/permission-helper'
 import type { CloudSttStartResult } from '../shared/cloud-stt-start'
 import { OWNER_SESSION_IPC, type OwnerSessionStatus } from '../shared/contracts/owner-session'
@@ -214,6 +215,7 @@ const api = {
   ...createCloudSpeechPreloadApi(ipcRenderer),
   ...createTranscriptRevisionPreloadApi(ipcRenderer),
   ...createMetricsPreloadApi(ipcRenderer),
+  ...createVoiceActionsPreloadApi(ipcRenderer),
   getSettings: (): Promise<PublicSettings> => ipcRenderer.invoke(IPC.settingsGet),
   onSettingsChanged: (cb: () => void): Unsub => sub(IPC.settingsChanged, cb),
   /** Wave 2 — dismiss the one-shot last-failover chip after the user has seen it. */

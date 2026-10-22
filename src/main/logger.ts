@@ -389,6 +389,8 @@ export type AuditEvent =
   | 'meeting.journal.degraded'
   // Metadata-only: launch recovery, purge and retention of the live meeting journal (outcome enum + counts), never content.
   | 'meeting.journal.recovery'
+  // V02: one voice turn (phase and machine reason only, never speech, text, a title or a query).
+  | 'voice.turn'
   | 'task.recovered'
   | 'task.effect_uncertain'
   | 'task.dispatch_denied'

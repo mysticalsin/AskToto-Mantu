@@ -19,7 +19,11 @@ export interface CommandMicActivationState {
   readonly context: InputSessionContext
 }
 
+/** `click` is minted from the preload's trusted button click; `hardware` only by main's voice session. */
+export type CommandMicActivationKind = 'click' | 'hardware'
+
 interface Grant {
+  readonly kind: CommandMicActivationKind
   readonly webContentsId: number
   readonly frameId: string
   readonly url: string
@@ -42,6 +46,41 @@ export class CommandMicActivationAuthority {
   }
 
   mint(frame: CommandMicActivationFrame): boolean {
+    return this.#mint(frame, 'click')
+  }
+
+  /**
+   * Main-only, never reachable from an IPC handler: a held hardware chord (voice actions) is the user's own
+   * activation, observed by main. The frame is main's own window frame, never a renderer message. The grant
+   * is consumable only by a push-to-talk command start, so a click grant and a hardware grant never mix.
+   */
+  mintFromHardware(frame: CommandMicActivationFrame): boolean {
+    return this.#mint(frame, 'hardware')
+  }
+
+  hasPending(frame: CommandMicActivationFrame, kind: CommandMicActivationKind = 'click'): boolean {
+    const state = this.#state()
+    this.#discardInvalid()
+    return [...this.#grants.values()].some((grant) => grant.kind === kind && this.#matches(grant, frame, state))
+  }
+
+  consume(frame: CommandMicActivationFrame, kind: CommandMicActivationKind = 'click'): boolean {
+    const state = this.#state()
+    this.#discardInvalid()
+    for (const [id, grant] of this.#grants) {
+      if (grant.kind !== kind || !this.#matches(grant, frame, state)) continue
+      this.#grants.delete(id)
+      return true
+    }
+    return false
+  }
+
+  /** A voice turn ended: its activation must not outlive it. Click grants are untouched. */
+  revokeHardware(): void {
+    for (const [id, grant] of this.#grants) if (grant.kind === 'hardware') this.#grants.delete(id)
+  }
+
+  #mint(frame: CommandMicActivationFrame, kind: CommandMicActivationKind): boolean {
     const state = this.#state()
     if (
       !this.#matchesFrame(frame, state) ||
@@ -52,8 +91,10 @@ export class CommandMicActivationAuthority {
     )
       return false
     this.#discardInvalid()
-    if ([...this.#grants.values()].some((grant) => this.#matches(grant, frame, state))) return true
+    if ([...this.#grants.values()].some((grant) => grant.kind === kind && this.#matches(grant, frame, state)))
+      return true
     this.#grants.set(randomUUID(), {
+      kind,
       webContentsId: frame.webContentsId,
       frameId: frame.frameId,
       url: frame.url,
@@ -62,23 +103,6 @@ export class CommandMicActivationAuthority {
       expiresAt: this.#now() + this.#ttlMs
     })
     return true
-  }
-
-  hasPending(frame: CommandMicActivationFrame): boolean {
-    const state = this.#state()
-    this.#discardInvalid()
-    return [...this.#grants.values()].some((grant) => this.#matches(grant, frame, state))
-  }
-
-  consume(frame: CommandMicActivationFrame): boolean {
-    const state = this.#state()
-    this.#discardInvalid()
-    for (const [id, grant] of this.#grants) {
-      if (!this.#matches(grant, frame, state)) continue
-      this.#grants.delete(id)
-      return true
-    }
-    return false
   }
 
   revokeAll(): void {

@@ -6,6 +6,7 @@ import {
   InputSessionStopRequestSchema,
   type InputSessionContext,
   type InputSessionResult,
+  type InputSessionStart,
   type InputSessionStopResult,
   type TrustedInputOwner
 } from '@shared/input-session'
@@ -30,7 +31,7 @@ interface Dependencies<Event extends EventLike> {
   currentMainUrl(): string
   currentContext(): InputSessionContext
   captureAuthBoundary(): () => boolean
-  authorizeCommandStart?(event: Event, owner: TrustedInputOwner): boolean
+  authorizeCommandStart?(event: Event, owner: TrustedInputOwner, source: InputSessionStart['source']): boolean
 }
 
 function ownerFromEvent(
@@ -107,7 +108,10 @@ export function createInputSessionHandlers<Event extends EventLike>(dependencies
       }
       const owner = ownerFromEvent(event, dependencies.currentMainUrl(), current)
       if (!owner) return { ok: false, reason: 'unauthorized' }
-      if (parsed.data.input.purpose === 'command' && !dependencies.authorizeCommandStart?.(event, owner)) {
+      if (
+        parsed.data.input.purpose === 'command' &&
+        !dependencies.authorizeCommandStart?.(event, owner, parsed.data.input.source)
+      ) {
         return { ok: false, reason: 'unauthorized' }
       }
       return dependencies.authority.start(owner, parsed.data.input)

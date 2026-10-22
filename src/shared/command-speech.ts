@@ -1,5 +1,8 @@
 import { z } from 'zod'
 
+/** Longest command or voice-turn capture. Main's sample and frame limits and the renderer worklet derive from this. */
+export const COMMAND_SPEECH_MAX_SECONDS = 15
+
 const CommandSpeechSessionIdSchema = z.string().regex(/^[a-f0-9]{48}$/)
 export const CommandSpeechStartSchema = z.object({ sessionId: CommandSpeechSessionIdSchema }).strict()
 export const CommandSpeechFrameSchema = z

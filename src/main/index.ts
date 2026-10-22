@@ -109,7 +109,6 @@ import {
   type DiagnosticsExportResult,
   ScreenCaptureCheckPayloadSchema,
   MetisCommandConfirmationSchema,
-  type CommandMicAvailabilityResult,
   RendererCrashContextSchema,
   type RendererCrashContext
 } from '@shared/ipc'
@@ -607,6 +606,8 @@ import {
 import { installAppQuitLifecycle } from './lifecycle/app-quit-lifecycle'
 import { registerQuitIpc } from './ipc/quit-ipc'
 import { QA_IDENTITY_BUILD, installQaFaultHook } from './qa-hooks'
+import { createCommandMicAvailability, createVoiceActionsRuntime } from './voice/voice-actions-runtime'
+import { createCommandMicLeaseTimer } from './command-mic-lease-timer'
 import { installQaCaptureSource } from './qa-capture-source'
 import { resetDustConversation, prewarmDustConversation, isDustAuthError } from './llm/dust'
 import { getScreenSourcesWithRetry, isUsableScreenSource, screenCaptureUnavailableMessage } from './screen-capture'
@@ -781,7 +782,7 @@ import {
 } from './cloud-stt/live-session'
 import { cloudSttRequestBelongsToOwner, replaceCloudSttSessionIfCurrent } from './cloud-stt/session-replacement'
 import { legacyDirectTokenGated, readLegacyCloudflareToken, resolveCloudSttGatewayId } from './cloud-stt/credentials'
-import { assertCloudOnlyAllowsEngine, resolveEnterpriseLiveProfile } from '../shared/enterprise-live-profile'
+import { resolveEnterpriseLiveProfile } from '../shared/enterprise-live-profile'
 import { cloudSttStartAcknowledgement, resolveCloudSttStartProvider } from '../shared/cloud-stt-start'
 import { shouldRecoverCompletedOnboardingExit } from './onboarding-exit-fallback'
 
@@ -1351,21 +1352,14 @@ function publishRecoveredDraftCount(): void {
 }
 let commandMicActivationLeaseId: string | null = null
 let commandSpeechCapture: CommandSpeechCapture | null = null
-let commandMicLeaseTimer: ReturnType<typeof setTimeout> | null = null
-function clearCommandMicLeaseTimer(sessionId?: string): void {
-  if (sessionId && commandMicActivationLeaseId !== sessionId) return
-  if (commandMicLeaseTimer) clearTimeout(commandMicLeaseTimer)
-  commandMicLeaseTimer = null
-}
-function armCommandMicLeaseTimeout(sessionId: string, delayMs: number): void {
-  clearCommandMicLeaseTimer()
-  commandMicLeaseTimer = setTimeout(() => {
-    commandMicLeaseTimer = null
-    const lease = inputSessionAuthority.activeLease
-    if (lease?.sessionId === sessionId && lease.purpose === 'command') inputSessionAuthority.hardStop('cancelled')
-  }, delayMs)
-}
+const { clear: clearCommandMicLeaseTimer, arm: armCommandMicLeaseTimeout } = createCommandMicLeaseTimer({
+  leaseId: () => commandMicActivationLeaseId,
+  authority: () => inputSessionAuthority
+})
+let voiceActions: ReturnType<typeof createVoiceActionsRuntime> | null = null
 const inputSessionAuthority = new InputSessionAuthority({
+  onHardStop: (reason) => voiceActions?.onHardStop(reason),
+  onMeetingReserved: () => voiceActions?.onMeetingReserved(),
   onRevoked: (owner, lease, reason) => {
     if (commandMicActivationLeaseId === lease.sessionId) {
       clearCommandMicLeaseTimer(lease.sessionId)
@@ -1403,17 +1397,8 @@ function currentBrainContextOwner(settings: Settings = getSettings()): BrainCont
     profileKey: createHash('sha256').update(brainStoreDir(settings)).digest('hex')
   }
 }
-function commandMicAvailability(): CommandMicAvailabilityResult {
-  if (!requireAuth()) return { ok: false, reason: 'unauthorized' }
-  const settings = getSettings()
-  const localPolicy = assertCloudOnlyAllowsEngine(
-    resolveEnterpriseLiveProfile(settings.enterpriseLive ?? {}),
-    'parakeet'
-  )
-  if (!localPolicy.ok) return { ok: false, reason: 'policy_blocked' }
-  if (settings.asrEngine !== 'parakeet') return { ok: false, reason: 'unsupported_engine' }
-  return { ok: true }
-}
+const micGate = createCommandMicAvailability({ requireAuth, getSettings, modelReady: parakeetModelReady })
+const { availability: commandMicAvailability, refreshPresence } = micGate
 function commandLeaseCurrentAndAllowed(sessionId: string): boolean {
   const availability = commandMicAvailability()
   if (!availability.ok) {
@@ -1508,18 +1493,24 @@ commandSpeechCapture = new CommandSpeechCapture({
   },
   onExpired: (sessionId) => {
     if (inputSessionAuthority.activeLease?.sessionId === sessionId) inputSessionAuthority.hardStop('cancelled')
-  }
+  },
+  onFinished: (sessionId, result) => voiceActions?.onSpeechFinished(sessionId, result)
 })
-function commandMicActivationFrameFromEvent(event: Electron.IpcMainInvokeEvent): CommandMicActivationFrame | null {
-  const frame = event.senderFrame
-  if (!frame) return null
-  return {
-    webContentsId: event.sender.id,
-    frameId: `${frame.processId}:${frame.routingId}`,
-    isTopFrame: frame.parent === null,
-    url: frame.url
-  }
-}
+voiceActions = createVoiceActionsRuntime({
+  qaIdentity: QA_IDENTITY_BUILD,
+  getSettings,
+  requireAuth,
+  authority: inputSessionAuthority,
+  activation: commandMicActivationAuthority,
+  mainFrame: currentMainActivationFrame,
+  window: () => win,
+  onboardingActive: onboardingExclusiveLive,
+  availability: commandMicAvailability,
+  parakeet: { refreshPresence, ensure: ensureParakeetModel, release: parakeetRelease },
+  speechBusy: () => listeningActive || importJobs?.hasMemoryHeavyWork() === true
+})
+const commandMicActivationFrameFromEvent: (e: Electron.IpcMainInvokeEvent) => CommandMicActivationFrame | null =
+  activationFrameFromEvent
 function activationFrameFromEvent(event: Electron.IpcMainInvokeEvent): MeetingStartActivationFrame | null {
   const frame = event.senderFrame
   if (!frame) return null
@@ -3302,6 +3293,7 @@ function createWindow(targetDisplay?: Electron.Display): void {
     if (win === self && isMainFrame && !isInPlace) hardStopInputSession('owner-replaced')
   })
   bindRendererResets(win.webContents, meetingMicCaptureAuthority)
+  voiceActions?.bindWebContents(win.webContents)
   // Debug aid (opt-in via ASKTOTO_DEBUG_RENDERER): mirror renderer console warnings/errors into the
   // main-process log so a crash-to-error-boundary can be diagnosed without opening the renderer devtools.
   if (process.env.ASKTOTO_DEBUG_RENDERER) {
@@ -5574,6 +5566,7 @@ function registerIpc(): void {
       rebuildTrayMenu()
     }
     lastAppliedManagedSnapshot = managedSnap
+    voiceActions?.refresh() // a managed or user change to voice actions applies on the next poll (idempotent)
     // Close the managed-config gap described above — runs on every poll, not just on detected drift,
     // so it also catches encryption enabled at boot with a stale plaintext graph already on disk.
     purgeGraphIfEncryptedAndStale('encryption-active')
@@ -5957,6 +5950,7 @@ function registerIpc(): void {
     // Start/stop background screen pre-analysis to match the new settings (backgroundScreenContext toggle,
     // or Local AI being enabled/disabled/provisioned) — takes effect immediately, no relaunch.
     refreshScreenPreprocess()
+    voiceActions?.refresh()
     // At-rest encryption just turned on → purge any previously-built CLEARTEXT knowledge graph so it
     // can't leak meeting topics/entities the encryption is meant to protect. (Builds are already
     // blocked while encryption is on, so no graph will be regenerated until it's turned back off.)
@@ -8970,6 +8964,7 @@ function registerIpc(): void {
       commandSpeechCancel: CommandSpeechCancelSchema
     }
   })
+  voiceActions?.registerIpc(ipcMain, assertMainWindow)
   registerMeetingMicIpc({
     ipcMain,
     assertMainWindow,
@@ -9223,6 +9218,7 @@ if (!app.requestSingleInstanceLock()) {
       installScreenObservationLifecycle(powerMonitor, screenObservation, mainLog) // lock and sleep drop pending captures
       installDisplayRemovalRevocation(screen, screenObservation, mainLog) // a removed display drops its captures
       voiceChord.start()
+      voiceActions?.refresh()
       const bootWork = createBootWork() // M2-0031: non-first-paint fs work starts after the first show, under the pool cap
       bootWorkGate = bootWork
       configureSidecarRegistry(createSidecarRegistry(app.getPath('userData')))
@@ -9844,6 +9840,7 @@ const quitLifecycle = installAppQuitLifecycle(app, {
     // Final will-quit, after any prevented before-quit flush: revoke grants, captures, owner sessions; close admission.
     hardStopInputSession('shutdown')
     inputSessionAuthority.shutdown()
+    voiceActions?.dispose()
   },
   setBootPowerSaveBlock,
   endBootWatch,
