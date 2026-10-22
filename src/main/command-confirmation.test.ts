@@ -58,6 +58,8 @@ function createConfirmation() {
     hasListenEntitlement: () => state.listenEntitled,
     getOwner,
     isOnboardingExclusive: () => state.onboardingExclusive,
+    // These tests are about the lifecycle policy, not the 300 ms Return guard (command-confirmation.card.test.ts).
+    minConfirmDelayMs: 0,
     audit
   })
   return { confirmation, execute, sendCommandState, getOwner, audit, state }

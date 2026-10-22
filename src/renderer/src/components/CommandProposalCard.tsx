@@ -1,63 +1,52 @@
-export type CommandProposalPreview = {
-  proposalId: string
-  nonce: string
-  /** Hash of the exact request main will run. Echoed back on confirmation so the approval is bound to it. */
-  argsHash: string
-  expiresAt: number
-  /** Main must generate this exact, allowlisted consequence. Raw transcript is never a preview. */
-  preview: string
-}
+import { useState } from 'react'
+import { createReturnGuard } from '@shared/command-return-guard'
+import type { MetisCommandState } from '@shared/metis-command-contract'
+import type { NavigationGuardChoice, NavigationGuardRequest } from '../lib/navigation-guard'
+import { ConfirmSheet } from '../ui/ConfirmSheet'
+
+type CommandProposal = Extract<MetisCommandState, { proposalId: string }>
 
 export type CommandProposalCardProps = {
-  proposal: CommandProposalPreview
+  proposal: CommandProposal
   onConfirm: (confirmation: { proposalId: string; nonce: string; argsHash: string }) => void
   onCancel: (cancellation: { proposalId: string; nonce: string }) => void
 }
 
 /**
- * Renders only when a future main-owned command state supplies an exact allowlisted preview.
- * It deliberately cannot turn an opaque proposal ID into a misleading or model-authored consequence.
+ * What the card says, derived only from main's allowlisted preview: a title (verb plus target), the exact argument
+ * quoted (or a fixed detail sentence), and a verb on the default button. The transcript never reaches it. The action
+ * is never styled destructive: the person deliberately asked for it, so Return is the default.
  */
-export function CommandProposalCard({ proposal, onConfirm, onCancel }: CommandProposalCardProps): JSX.Element | null {
-  const cancellation = { proposalId: proposal.proposalId, nonce: proposal.nonce }
-  const confirmation = { ...cancellation, argsHash: proposal.argsHash }
-  const preview = proposal.preview.trim()
+export function commandProposalRequest(proposal: CommandProposal, id = 1): NavigationGuardRequest {
+  const { preview } = proposal
+  return {
+    id,
+    kind: 'confirm',
+    title: preview.title,
+    message: preview.argument ? `“${preview.argument}”` : (preview.detail ?? ''),
+    saveLabel: preview.confirmLabel,
+    cancelLabel: 'Cancel'
+  }
+}
 
-  if (!preview) return null
-
+/**
+ * The voice-action confirmation card: an accessible alert dialog built on ConfirmSheet. Return confirms and Escape
+ * cancels, but a Return that was held when the card appeared, an auto-repeat, or one inside the first 300 ms is
+ * ignored (D-10). Opus owns the final visual design and motion (V05); this is the working skeleton.
+ */
+export function CommandProposalCard({ proposal, onConfirm, onCancel }: CommandProposalCardProps): JSX.Element {
+  // One guard per card. The host keys this component by proposal id, so a replaced card starts its own 300 ms window.
+  const [returnGuard] = useState(() => createReturnGuard())
+  const choose = (choice: NavigationGuardChoice): void => {
+    if (choice === 'save')
+      onConfirm({ proposalId: proposal.proposalId, nonce: proposal.nonce, argsHash: proposal.argsHash })
+    else onCancel({ proposalId: proposal.proposalId, nonce: proposal.nonce })
+  }
   return (
-    <section
-      aria-label="Command proposal"
-      data-metis-command-proposal-card="1"
-      className="right-edge-command-card"
-      tabIndex={-1}
-      onKeyDown={(event) => {
-        if (event.key !== 'Escape') return
-        event.preventDefault()
-        onCancel(cancellation)
-      }}
-    >
-      <p className="right-edge-command-card__eyebrow">Ready to confirm</p>
-      <p className="right-edge-command-card__preview">{preview}</p>
-      <p className="right-edge-command-card__hint">Review the action before Métis does anything outside the app.</p>
-      <div className="right-edge-command-card__actions">
-        <button
-          type="button"
-          aria-label="Cancel action"
-          className="no-drag focus-ring right-edge-command-card__cancel"
-          onClick={() => onCancel(cancellation)}
-        >
-          Cancel
-        </button>
-        <button
-          type="button"
-          aria-label="Confirm action"
-          className="no-drag focus-ring right-edge-command-card__confirm"
-          onClick={() => onConfirm(confirmation)}
-        >
-          Confirm
-        </button>
-      </div>
-    </section>
+    <ConfirmSheet
+      request={commandProposalRequest(proposal, 1)}
+      returnGuard={returnGuard}
+      onChoose={(choice) => choose(choice)}
+    />
   )
 }

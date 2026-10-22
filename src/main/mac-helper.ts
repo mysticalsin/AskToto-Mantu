@@ -25,6 +25,9 @@
  *     mouse presses, and prints `m <mask> <seq>` only on change. Permission-free (no event tap), and the protocol
  *     carries no key identity. src/main/voice/chord-watcher.ts owns the child; src/shared/voice/modifier-mask.ts
  *     owns the line format.
+ *   - `activate-pid` / `automation-ask`: one-shot (V04). The first hands focus back to the app that was in front
+ *     before a confirmation card; the second is the only call that may raise the Apple Events prompt, and only
+ *     after a person's Return and before dispatch. `tcc-status` stays read-only.
  *   - `code-identity` / `bundle-copies`: one-shot, read-only signing identity and installed-copy census for
  *     the Screen Recording diagnosis (capture-permissions/). Neither touches the permissions database.
  *
@@ -190,6 +193,42 @@ export function parseTccStatus(stdout: string): TccStatus | null {
 /** One Input Monitoring or Automation preflight; null without a helper or on any failure. */
 export function getTccStatus(probe: TccProbe, bundleId?: string): Promise<TccStatus | null> {
   return runHelperOnce(macTccStatusSpawnSpec(probe, bundleId), parseTccStatus, TCC_STATUS_TIMEOUT_MS)
+}
+
+const ACTIVATE_PID_TIMEOUT_MS = 3_000
+/** The prompt waits for the person, so it gets a long, but finite, deadline. */
+const AUTOMATION_ASK_TIMEOUT_MS = 60_000
+const ActivatePidSchema = z.object({ activated: z.boolean() })
+
+/** Spawn spec for `activate-pid` (V04), or null without a helper or for a pid that is not a positive 32-bit integer. */
+export function macActivatePidSpawnSpec(pid: number): { command: string; args: string[] } | null {
+  if (!macHelperPresent()) return null
+  if (!Number.isInteger(pid) || pid <= 0 || pid > 2 ** 31 - 1) return null
+  return { command: macHelperPath(), args: ['activate-pid', String(pid)] }
+}
+
+/** Bring the application with this pid to the front again. False without a helper or when it did not activate. */
+export async function activatePid(pid: number): Promise<boolean> {
+  const parse = (stdout: string): boolean | null => {
+    try {
+      return ActivatePidSchema.parse(JSON.parse(stdout)).activated
+    } catch {
+      return null
+    }
+  }
+  return (await runHelperOnce(macActivatePidSpawnSpec(pid), parse, ACTIVATE_PID_TIMEOUT_MS)) === true
+}
+
+/** Spawn spec for `automation-ask` (V04): the only call that may raise the Apple Events prompt. */
+export function macAutomationAskSpawnSpec(bundleId: string | undefined): { command: string; args: string[] } | null {
+  if (!macHelperPresent()) return null
+  if (!bundleId || !AUTOMATION_BUNDLE_ID.test(bundleId)) return null
+  return { command: macHelperPath(), args: ['automation-ask', bundleId] }
+}
+
+/** Ask for Automation to one app. Call it only after a person's Return, before dispatch. Null without a helper. */
+export function askAutomation(bundleId: string): Promise<TccStatus | null> {
+  return runHelperOnce(macAutomationAskSpawnSpec(bundleId), parseTccStatus, AUTOMATION_ASK_TIMEOUT_MS)
 }
 
 /** Flag `diagnostics.stall_sampler` (ARCHITECTURE C15). false restores the pre-M2-0192 boot exactly: no

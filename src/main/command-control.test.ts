@@ -337,7 +337,10 @@ describe('CommandControl', () => {
       const proposal = controller.propose(owner, { id: 'desktop.create_note', args: { title: 'private title' } })
       expect(proposal.argsHash).toBe(actionArgsHash({ id: 'desktop.create_note', args: { title: 'private title' } }))
       expect(controller.getState()).toMatchObject({ argsHash: proposal.argsHash })
-      expect(JSON.stringify(controller.getState())).not.toContain('private title')
+      const state = controller.getState()
+      // The card shows the argument the person is approving, in the preview only; nothing else carries it.
+      expect(state).toMatchObject({ preview: { argument: 'private title' } })
+      expect(JSON.stringify({ ...state, preview: undefined })).not.toContain('private title')
     })
 
     it.each([

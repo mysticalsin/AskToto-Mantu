@@ -1,4 +1,5 @@
 import { desktopActionFingerprint, type DesktopActionRequest } from './desktop-actions'
+import { COMMAND_PROPOSAL_TTL_MS } from './metis-command-contract'
 
 /** A proposal is descriptive only; Task 5 will add main-owned confirmation authority. */
 export type CommandProposal = {
@@ -11,7 +12,8 @@ export type CommandProposal = {
   expiresAt: number
 }
 
-export const METIS_COMMAND_PROPOSAL_TTL_MS = 5_000
+/** The runtime and CommandControl share one lifetime (V04), so neither can outlive the other's card. */
+export const METIS_COMMAND_PROPOSAL_TTL_MS = COMMAND_PROPOSAL_TTL_MS
 
 export function commandContextHash(text: string): string {
   let hash = 0x811c9dc5

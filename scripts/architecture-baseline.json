@@ -17,7 +17,6 @@
     "src/main/features/meetings/meeting-public-projection.ts": 1,
     "src/main/operator-test-keypair.ts": 1,
     "src/renderer/src/components/CommandListeningPill.tsx": 1,
-    "src/renderer/src/components/CommandProposalCard.tsx": 1,
     "src/renderer/src/components/ControlBar.tsx": 1,
     "src/renderer/src/components/Logo.tsx": 1,
     "src/renderer/src/components/OnboardingStarfield.tsx": 1,

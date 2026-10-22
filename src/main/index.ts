@@ -678,7 +678,9 @@ import { operatorGate } from './operator-entitlements-state'
 import { operatorIntegrationsSnapshot, registeredOperatorMcpServers } from './operator-integrations'
 import { initLogging, mainLog, auditLog, auditLogPath } from './logger'
 import { CommandConfirmation } from './command-confirmation'
-import { desktopActionTaskDeps } from './tasks/desktop-action-task-runtime'
+import { createCommandConfirmRuntime } from './voice/command-confirm-runtime'
+import { registerCommandConfirmIpc } from './ipc/command-confirm-ipc'
+import { shortcutClaimKey } from './shortcut-claim-key'
 import { ensureMetisCommandRuntime, getMetisCommandRuntime } from './metis-command-register'
 import {
   consumeSecurityLimit,
@@ -1141,8 +1143,14 @@ let tray: Tray | null = null
 let audioArmed = false // loopback capture only granted during an explicit user-initiated Listen
 const speechCaptureGrants = new SpeechCaptureGrantRegistry()
 let speechNavigationEpoch = 1
+const commandConfirm = createCommandConfirmRuntime({
+  isAuthenticated: requireAuth,
+  isRecordingMeeting: () => inputSessionAuthority.hasMeetingReservation,
+  showForConfirm: () => (win && !win.isDestroyed() ? showForConfirm(win) : undefined),
+  blurWindow: () => win?.blur()
+})
 const commandControl = new CommandConfirmation({
-  ...desktopActionTaskDeps(),
+  ...commandConfirm.deps,
   isAuthenticated: requireAuth,
   hasListenEntitlement: () => operatorGate('listen').allowed,
   getOwner: () => win,
@@ -4334,6 +4342,18 @@ function showForAsk(w: BrowserWindow): void {
 }
 
 /**
+ * The third deliberate focus grab (owner decision D-10): the voice-action confirmation card. It is user-initiated
+ * (a physical hold, then a spoken request), the person is looking at the card, and Return is guarded (ignored in
+ * the first 300 ms, held or repeated; main enforces it too). Focus returns to the previous app afterwards.
+ * Reached only through voice/confirm-focus.ts for a proposed card; enforced by no-show-steals-focus.contract.test.ts.
+ */
+function showForConfirm(w: BrowserWindow): void {
+  reveal('hotkey') // the hold chord is a hotkey: un-park the Hide/island overlay first, without activating it
+  w.show()
+  w.focus()
+}
+
+/**
  * FITO-185-P / FITO-185-T: first-run exclusive tour must activate. Bounds-only exclusive
  * (no SFS on Electron 43+, FITO-185-S) stayed behind Finder with showInactive — Tony FAIL
  * cf2f67d: music + forever Loading, desktop visible, no lady+planet. Allowed second
@@ -5076,6 +5096,7 @@ const stopAllSidecars = createStopAll(
     { name: 'parakeet-host', stop: () => killParakeetHostForQuit() },
     { name: 'speaker-embedding-host', stop: () => killSpeakerEmbeddingHostForQuit() },
     { name: 'voice-chord', stop: () => voiceActions?.dispose() },
+    { name: 'command-confirm', stop: () => commandConfirm.dispose() },
     { name: 'local-runtime', stop: () => localRuntime.stop() },
     { name: 'fm-runtime', stop: () => fmRuntime.stop() }
   ],
@@ -5120,31 +5141,6 @@ function registerEmergencyForceQuitShortcut(): boolean {
     mainLog.warn(`[shortcuts] invalid emergency force-quit accelerator: ${EMERGENCY_FORCE_QUIT_ACCELERATOR}`, e)
     return false
   }
-}
-
-/** Electron accepts several spellings for the same macOS modifier. Claim one canonical form so a
- * hand-edited shortcut cannot replace the reserved emergency quit callback through an alias. */
-function shortcutClaimKey(accel: string): string {
-  if (process.platform !== 'darwin') return accel
-  return accel
-    .split('+')
-    .map((part) => {
-      const token = part.trim().toLowerCase()
-      if (
-        token === 'command' ||
-        token === 'cmd' ||
-        token === 'meta' ||
-        token === 'super' ||
-        token === 'commandorcontrol' ||
-        token === 'cmdorctrl'
-      )
-        return 'command'
-      if (token === 'control' || token === 'ctrl') return 'control'
-      if (token === 'escape' || token === 'esc') return 'escape'
-      return token
-    })
-    .sort()
-    .join('+')
 }
 
 function resolveShortcut(action: HotkeyAction, user: Record<string, string>): string {
@@ -8929,6 +8925,7 @@ function registerIpc(): void {
     }
   })
   if (voiceActions) registerVoiceActionsIpc(ipcMain, assertMainWindow, voiceActions)
+  registerCommandConfirmIpc(ipcMain, assertMainWindow, commandConfirm)
   registerMeetingMicIpc({
     ipcMain,
     assertMainWindow,

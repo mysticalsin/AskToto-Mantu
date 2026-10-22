@@ -129,6 +129,9 @@ export class MetisCommandRuntime {
     this.idleTimer = setTimeout(() => {
       if (generation !== this.idleTimerGeneration || !this.state.active) return
       this.idleTimer = null
+      // A card on screen is governed by the proposal's own lifetime (12 s, 30 s with assistive technology), which
+      // is longer than this window. Idling out here would revoke the card the person is still reading.
+      if (this.state.proposal) return
       this.stopLocal('inactivity')
     }, METIS_COMMAND_IDLE_TIMEOUT_MS)
   }
@@ -151,6 +154,8 @@ export class MetisCommandRuntime {
       this.proposalTimer = null
       const next = reduceMetisCommandSession(this.state, { type: 'proposal_expired', proposalId })
       if (next !== this.state) this.apply(next)
+      // The idle window resumes once the card is gone.
+      if (this.state.active) this.armIdleTimeout()
     }, delay)
   }
 

@@ -6,6 +6,7 @@ import { ControlPill } from './components/ControlPill'
 import { OverlayPeek } from './components/OverlayPeek'
 import { RightEdgeAnswerSummary, RightEdgeSidecar, type SidecarReaderTarget } from './components/RightEdgeSidecar'
 import { CommandSpeechPanel } from './components/CommandSpeechPanel'
+import { CommandProposalHost } from './components/CommandProposalHost'
 import {
   RightEdgeReader,
   RightEdgeReaderDetails,
@@ -273,8 +274,6 @@ export function App(): JSX.Element {
   } = useSettings()
   const latestSettingsRef = useRef(settings)
   latestSettingsRef.current = settings
-  // This is deliberately an opaque main-owned capability. Until main provides a verified allowlisted
-  // consequence, the right edge lets the user cancel it but will never invite confirmation blind.
   const [commandState, setCommandState] = useState<MetisCommandState>({ proposalId: null })
   const [commandMicPanelOpen, setCommandMicPanelOpen] = useState(false)
   useEffect(() => window.toto.onMetisCommandState(setCommandState), [])
@@ -4171,6 +4170,7 @@ export function App(): JSX.Element {
       ].join(' ')}
     >
       <ConfirmSheet guard={navigationGuard} request={navigationGuardRequest} />
+      <CommandProposalHost state={commandState} />
       <CloudSpeechConsentPrompt flow={cloudConsentFlow} onStart={startListen} />
       <OverlayToasts
         minimized={minimized}

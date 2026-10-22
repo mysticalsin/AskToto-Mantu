@@ -1,16 +1,21 @@
 import { randomBytes, timingSafeEqual } from 'node:crypto'
+import { previewForDesktopAction, type CommandPreviewResult } from '@shared/command-preview'
 import { isDesktopAdapterId, type DesktopActionRequest, type DesktopActionResult } from '@shared/desktop-actions'
+import {
+  COMMAND_PROPOSAL_TTL_ASSISTIVE_MS,
+  COMMAND_PROPOSAL_TTL_MS,
+  type MetisCommandNotice,
+  type MetisCommandState
+} from '@shared/metis-command-contract'
 import { actionEnvelope, checkDependsOn, isArgsHash, isObservedVerified, type ActionEnvelope } from './action-guard'
 
-export const COMMAND_PROPOSAL_TTL_MS = 10_000
+export { COMMAND_PROPOSAL_TTL_MS }
 
 /** The approval is the proposal id, the nonce and the hash of the exact request it authorizes (ActionGuard). */
 export type CommandControlProposal = { proposalId: string; nonce: string; argsHash: string }
 /** Cancelling authorizes nothing, so the id and nonce are enough. */
 export type CommandControlCancellation = Omit<CommandControlProposal, 'argsHash'>
-export type CommandControlState =
-  | { proposalId: null }
-  | { proposalId: string; nonce: string; argsHash: string; expiresAt: number; revision: number }
+export type CommandControlState = MetisCommandState
 export type CommandControlReason =
   | 'proposal_missing'
   | 'owner_mismatch'
@@ -19,6 +24,8 @@ export type CommandControlReason =
   | 'args_mismatch'
   | 'expired'
   | 'policy_denied'
+  | 'preflight_failed'
+  | 'too_soon'
   | 'outcome_unverified'
   | 'adapter_failed'
 
@@ -29,6 +36,21 @@ type CurrentProposal = CommandControlProposal & {
   expiresAt: number
   idempotencyKey: string
   dependsOn: readonly string[]
+  shownAt: number
+  display: CommandPreviewResult
+}
+
+/** Checks that a card can succeed: before it is shown, and again after Return and before anything is dispatched. */
+export type CommandPreflightStage = 'propose' | 'confirm'
+export type CommandPreflightResult = { ok: true } | { ok: false; notice: MetisCommandNotice }
+
+/**
+ * The card's window life. `presented` runs when a proposal becomes the card on screen (the only caller of the
+ * focus exception); `release` runs when that card is resolved, with why, so focus can go back to the previous app.
+ */
+export interface CommandCardLifecycle {
+  presented(): void
+  release(reason: string): void | Promise<void>
 }
 
 export type CommandConfirmationPolicyInput = {
@@ -66,14 +88,25 @@ export type CommandExecutor = (
   context: CommandExecutionContext
 ) => Promise<DesktopActionResult>
 
-type CommandControlDeps = {
+export type CommandControlDeps = {
   execute: CommandExecutor
   /** Main-process policy is required: omitting it must never turn confirmation into permission. */
   policyAllows: (request: DesktopActionRequest) => boolean
   audit?: (event: 'command.confirmed' | 'command.revoked', metadata: Record<string, string>) => void
   onState?: (state: CommandControlState) => void
   now?: () => number
+  /** Fixed lifetime override (tests). Without it the lifetime is 12 s, or 30 s with assistive technology on. */
   ttlMs?: number
+  assistiveTechnology?: () => boolean
+  /** The exact consequence for a request, from main's templates. No preview means no card. */
+  previewFor?: (request: DesktopActionRequest) => CommandPreviewResult | null
+  platform?: NodeJS.Platform
+  /** A confirmation earlier than this after the card appeared is refused and does not consume the proposal. */
+  minConfirmDelayMs?: number
+  preflight?: (request: DesktopActionRequest, stage: CommandPreflightStage) => Promise<CommandPreflightResult>
+  /** Honest copy for a command that could not start (signed out, permission off, app missing). */
+  onNotice?: (notice: MetisCommandNotice) => void
+  card?: CommandCardLifecycle
 }
 
 function secureEqual(a: string, b: string): boolean {
@@ -86,11 +119,14 @@ export class CommandControl {
   private current: CurrentProposal | null = null
   private expiryTimer: ReturnType<typeof setTimeout> | null = null
   private readonly now: () => number
-  private readonly ttlMs: number
 
   constructor(private readonly deps: CommandControlDeps) {
     this.now = deps.now ?? Date.now
-    this.ttlMs = deps.ttlMs ?? COMMAND_PROPOSAL_TTL_MS
+  }
+
+  private ttlMs(): number {
+    if (this.deps.ttlMs !== undefined) return this.deps.ttlMs
+    return this.deps.assistiveTechnology?.() === true ? COMMAND_PROPOSAL_TTL_ASSISTIVE_MS : COMMAND_PROPOSAL_TTL_MS
   }
 
   propose(
@@ -102,6 +138,7 @@ export class CommandControl {
     const dependencies = checkDependsOn(options.dependsOn ?? [])
     if (!dependencies.ok) {
       this.emit()
+      void this.release('revoked')
       throw new Error(dependencies.reason)
     }
     // The proposal keeps a private snapshot. No caller that supplied the request can mutate what
@@ -110,6 +147,14 @@ export class CommandControl {
       ...request,
       args: Object.freeze({ ...request.args })
     }) as DesktopActionRequest
+    // The card states exactly what will run, from main's template for this request. Without a preview there is no
+    // card: the person is never asked to approve a consequence they cannot read.
+    const display = (this.deps.previewFor ?? ((r) => previewForDesktopAction(r, this.deps.platform)))(requestSnapshot)
+    if (!display) {
+      this.emit()
+      void this.release('revoked')
+      throw new Error('preview_unavailable')
+    }
     const proposalId = randomBytes(16).toString('hex')
     const { argsHash, idempotencyKey } = actionEnvelope(proposalId, requestSnapshot)
     const proposal = { proposalId, nonce: randomBytes(32).toString('hex'), argsHash }
@@ -118,13 +163,67 @@ export class CommandControl {
       ownerWebContentsId: owner.webContentsId,
       revision: owner.revision,
       request: requestSnapshot,
-      expiresAt: this.now() + this.ttlMs,
+      expiresAt: this.now() + this.ttlMs(),
       idempotencyKey,
-      dependsOn: dependencies.dependsOn
+      dependsOn: dependencies.dependsOn,
+      shownAt: this.now(),
+      display
     }
     this.armExpiry(this.current)
     this.emit()
+    try {
+      this.deps.card?.presented()
+    } catch {
+      // The window may be gone. The proposal stays confirmable only by a focused, visible owner (policy).
+    }
     return proposal
+  }
+
+  /**
+   * Preflight, then propose. A failed preflight shows no card and publishes honest copy instead. `stillWanted`
+   * lets the caller drop a proposal that was superseded while the checks ran. Without a preflight this is
+   * exactly `propose`, synchronously.
+   */
+  proposeChecked(
+    owner: { webContentsId: number; revision: number },
+    request: DesktopActionRequest,
+    options: { dependsOn?: readonly string[]; stillWanted?: () => boolean } = {}
+  ): Promise<CommandControlProposal | null> {
+    if (!this.deps.preflight) {
+      try {
+        return Promise.resolve(this.propose(owner, request, options))
+      } catch (error) {
+        return Promise.reject(error)
+      }
+    }
+    return this.proposeAfterPreflight(owner, request, options)
+  }
+
+  private async proposeAfterPreflight(
+    owner: { webContentsId: number; revision: number },
+    request: DesktopActionRequest,
+    options: { dependsOn?: readonly string[]; stillWanted?: () => boolean }
+  ): Promise<CommandControlProposal | null> {
+    const checked = await this.runPreflight(request, 'propose')
+    if (options.stillWanted && !options.stillWanted()) return null
+    if (!checked.ok) {
+      this.deps.onNotice?.(checked.notice)
+      return null
+    }
+    return this.propose(owner, request, options)
+  }
+
+  private async runPreflight(
+    request: DesktopActionRequest,
+    stage: CommandPreflightStage
+  ): Promise<CommandPreflightResult> {
+    if (!this.deps.preflight) return { ok: true }
+    try {
+      return await this.deps.preflight(request, stage)
+    } catch {
+      // A broken check never counts as permission. There is no safe specific copy, so the generic one is used.
+      return { ok: false, notice: { code: 'check_failed', copy: "Métis can't do this right now." } }
+    }
   }
 
   getState(): CommandControlState {
@@ -135,7 +234,11 @@ export class CommandControl {
       nonce: proposal.nonce,
       argsHash: proposal.argsHash,
       expiresAt: proposal.expiresAt,
-      revision: proposal.revision
+      revision: proposal.revision,
+      actionId: proposal.display.actionId,
+      risk: proposal.display.risk,
+      preview: proposal.display.preview,
+      ...(proposal.display.appIconKey ? { appIconKey: proposal.display.appIconKey } : {})
     }
   }
 
@@ -144,6 +247,9 @@ export class CommandControl {
   ): Promise<{ ok: true; outcome: DesktopActionResult['outcome'] } | { ok: false; reason: CommandControlReason }> {
     const proposal = this.validate(input, { argsHash: input.argsHash })
     if ('reason' in proposal) return proposal
+    // A confirmation that lands inside the guard window is a held or auto-repeated key, not a decision. It is
+    // refused without consuming the proposal, so the person's next deliberate press still works.
+    if (this.now() - proposal.shownAt < (this.deps.minConfirmDelayMs ?? 0)) return { ok: false, reason: 'too_soon' }
     // Consume before yielding to the adapter, so a double click or replay cannot execute twice.
     this.clearCurrent()
     this.emit()
@@ -156,8 +262,23 @@ export class CommandControl {
     }
     if (!allowed) {
       this.audit('command.revoked', { actionId: proposal.request.id, reason: 'policy_denied' })
+      await this.release('policy_denied')
       return { ok: false, reason: 'policy_denied' }
     }
+    // Permissions and the target app are re-checked here, after Return and before the task is created, so a prompt
+    // the person is still reading can never become an uncertain effect and a denial leaves no task behind.
+    if (this.deps.preflight) {
+      const checked = await this.runPreflight(proposal.request, 'confirm')
+      if (!checked.ok) {
+        this.audit('command.revoked', { actionId: proposal.request.id, reason: `preflight_${checked.notice.code}` })
+        this.deps.onNotice?.(checked.notice)
+        await this.release('preflight_failed')
+        return { ok: false, reason: 'preflight_failed' }
+      }
+    }
+    // Focus goes back to the previous app first: an action that opens an app then takes focus there naturally
+    // instead of being pulled back to where the person was.
+    if (this.deps.card) await this.release('confirmed')
     try {
       const envelope = { argsHash: proposal.argsHash, idempotencyKey: proposal.idempotencyKey }
       const result = await this.deps.execute(proposal.request, {
@@ -197,6 +318,7 @@ export class CommandControl {
     this.clearCurrent()
     this.emit()
     this.audit('command.revoked', { actionId: proposal.request.id, reason: 'cancelled' })
+    await this.release('cancelled')
     return { ok: true }
   }
 
@@ -206,6 +328,7 @@ export class CommandControl {
     this.clearCurrent()
     this.emit()
     this.audit('command.revoked', { actionId: proposal.request.id, reason })
+    void this.release(reason)
   }
 
   /** A confirmation passes its claimed `argsHash` (even when absent): it must match the hash taken at propose time. */
@@ -225,6 +348,7 @@ export class CommandControl {
       this.clearCurrent()
       this.emit()
       this.audit('command.revoked', { actionId: proposal.request.id, reason: 'expired' })
+      void this.release('expired')
       return { ok: false, reason: 'expired' }
     }
     return proposal
@@ -238,6 +362,15 @@ export class CommandControl {
       },
       Math.max(0, proposal.expiresAt - this.now())
     )
+  }
+
+  /** Tells the card's window life why it ended. A failing hook never changes the outcome of the decision. */
+  private async release(reason: string): Promise<void> {
+    try {
+      await this.deps.card?.release(reason)
+    } catch {
+      // Restoring focus is best effort.
+    }
   }
 
   private clearCurrent(): void {

@@ -8,6 +8,7 @@
  *   choose has no default: focus starts on Cancel, so Return never confirms it by accident.
  * - Tab and Shift-Tab cycle through the sheet's buttons and never leave the sheet while it is open.
  */
+import type { ReturnGuard } from '@shared/command-return-guard'
 import type { NavigationGuardChoice, NavigationGuardRequest } from '../lib/navigation-guard'
 
 /** Buttons in DOM (visual, leading to trailing) order. */
@@ -32,6 +33,7 @@ export function confirmSheetInitialFocus(
 
 export type ConfirmSheetKeyAction =
   | { kind: 'choose'; choice: NavigationGuardChoice }
+  | { kind: 'swallow' }
   | { kind: 'focus'; index: number }
   | { kind: 'activate-focused' }
   | null
@@ -60,4 +62,22 @@ export function confirmSheetKeyAction(
     return fallback ? { kind: 'choose', choice: fallback } : null
   }
   return null
+}
+
+/**
+ * The same keyboard map for a sheet that must not be confirmed by a key that was already down (the voice-action
+ * card). Return is never left to the focused button's native click: it is accepted only as a fresh, non-repeating
+ * press after the guard window, and otherwise swallowed. Escape and Tab are never delayed.
+ */
+export function confirmSheetGuardedKeyAction(
+  request: Pick<NavigationGuardRequest, 'kind' | 'destructive'>,
+  key: { key: string; shiftKey?: boolean; isComposing?: boolean; repeat?: boolean },
+  focusedIndex: number,
+  guard: ReturnGuard
+): ConfirmSheetKeyAction {
+  if (key.key !== 'Enter') return confirmSheetKeyAction(request, key, focusedIndex)
+  if (!guard.acceptsReturn(key)) return { kind: 'swallow' }
+  const choices = confirmSheetChoices(request)
+  const choice = focusedIndex >= 0 ? choices[focusedIndex] : confirmSheetDefaultChoice(request)
+  return choice ? { kind: 'choose', choice } : { kind: 'swallow' }
 }

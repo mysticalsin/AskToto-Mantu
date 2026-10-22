@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { sourceIndexOf } from '../../scripts/lib/source-layout'
+import { readModuleSource } from '../test-helpers/module-source'
 
 const main = readFileSync(join(__dirname, 'index.ts'), 'utf8')
 const preload = readFileSync(join(__dirname, '../preload/index.ts'), 'utf8')
@@ -146,5 +147,51 @@ describe('Cap2 command authority boundary', () => {
     expect(app).not.toContain('startMetisCommandEar')
     expect(app).not.toContain('data-metis-command-ear-chip')
     expect(app).not.toContain('CommandListeningPill')
+  })
+})
+
+describe('V04 confirmation card boundary', () => {
+  const host = readModuleSource(join(__dirname, '../renderer/src/components'), './CommandProposalHost').text
+  const register = readModuleSource(__dirname, './metis-command-register').text
+  const control = readModuleSource(__dirname, './command-control').text
+  const confirmation = readModuleSource(__dirname, './command-confirmation').text
+
+  it('keeps the card host as the one renderer place that confirms, and mounts it in App without a pill', () => {
+    expect(host).toContain('window.toto.confirmMetisCommand(')
+    expect(app).not.toContain('confirmMetisCommand(')
+    expect(app).toContain('<CommandProposalHost state={commandState} />')
+    expect(app).not.toContain('CommandListeningPill')
+  })
+
+  it('sends the card only the opaque capability plus main-built preview, never a request or transcript', () => {
+    const getState = between(control, '  getState(): CommandControlState {', '  async confirm(')
+    expect(getState).toContain('preview: proposal.display.preview')
+    expect(getState).not.toMatch(/request|transcript/)
+  })
+
+  it('routes a runtime proposal through the preflight, and re-checks after Return and before dispatch', () => {
+    expect(register).toContain('.proposeChecked(')
+    expect(register).not.toMatch(/commandControl\??\.propose\(/)
+    const confirm = between(control, '  async confirm(', '  async cancel(')
+    const policy = confirm.indexOf('policyAllows')
+    const preflight = confirm.indexOf("runPreflight(proposal.request, 'confirm')")
+    const release = confirm.indexOf("release('confirmed')")
+    const execute = confirm.indexOf('this.deps.execute(')
+    expect(policy).toBeGreaterThan(-1)
+    expect(preflight).toBeGreaterThan(policy)
+    expect(release).toBeGreaterThan(preflight)
+    expect(execute).toBeGreaterThan(release)
+  })
+
+  it('enforces the 300 ms Return guard in main by default, so a renderer cannot skip it', () => {
+    expect(confirmation).toContain('minConfirmDelayMs: deps.minConfirmDelayMs ?? COMMAND_RETURN_GUARD_MS')
+  })
+
+  it('wires one production composition into the confirmation, with the recovery IPC behind the main-window check', () => {
+    expect(main).toMatch(/createCommandConfirmRuntime\(\{[\s\S]*?showForConfirm:/)
+    expect(main).toContain('...commandConfirm.deps,')
+    expect(main).toContain('registerCommandConfirmIpc(ipcMain, assertMainWindow, commandConfirm)')
+    const ipcSource = readModuleSource(__dirname, './ipc/command-confirm-ipc').text
+    expect(ipcSource).toMatch(/assertMainWindow\(event\)\s*return runtime\.takeRecoveryNotices\(\)/)
   })
 })

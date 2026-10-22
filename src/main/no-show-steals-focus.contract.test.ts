@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, it, expect } from 'vitest'
+import { readModuleSource } from '../test-helpers/module-source'
 
 /**
  * no-show-steals-focus.contract.test.ts — MQA-275, Phase 1d of the Métis × Vibe-Island rebuild.
@@ -53,6 +54,7 @@ describe('MQA-275 — the overlay never steals focus except the one deliberate a
     const ask = functionBody('showForAsk')
     const exclusive = functionBody('showForExclusiveOnboarding')
     const legacy = functionBody('legacyReveal')
+    const confirm = functionBody('showForConfirm')
     const showCall = /\b(?:win|w)\??\.show\(\)/g
     const offenders: number[] = []
     let m: RegExpExecArray | null
@@ -60,7 +62,8 @@ describe('MQA-275 — the overlay never steals focus except the one deliberate a
       const insideAsk = m.index >= ask.start && m.index < ask.end
       const insideExclusive = m.index >= exclusive.start && m.index < exclusive.end
       const insideLegacy = m.index >= legacy.start && m.index < legacy.end
-      if (!insideAsk && !insideExclusive && !insideLegacy) offenders.push(m.index)
+      const insideConfirm = m.index >= confirm.start && m.index < confirm.end
+      if (!insideAsk && !insideExclusive && !insideLegacy && !insideConfirm) offenders.push(m.index)
     }
     const lines = offenders.map((idx) => indexSrc.slice(0, idx).split('\n').length)
     expect(
@@ -92,5 +95,39 @@ describe('MQA-275 — the overlay never steals focus except the one deliberate a
     // The two tray menu items (Settings…, Today's agenda) no longer call win.show() at all — they let
     // sendHotkey() reveal (non-activating, since neither action is 'ask').
     expect(indexSrc).not.toMatch(/label: 'Settings…', click: \(\) => \{\s*\n\s*if \(win/)
+  })
+
+  describe('D-10: the confirmation card is the third exception', () => {
+    it('showForConfirm shows and focuses, and its doc comment states the rationale and the guards', () => {
+      const { text } = functionBody('showForConfirm')
+      expect(text).toMatch(/\.show\(\)/)
+      expect(text).toMatch(/\.focus\(\)/)
+      const fnStart = indexSrc.indexOf('function showForConfirm(')
+      const docStart = indexSrc.lastIndexOf('/**', fnStart)
+      const doc = indexSrc.slice(docStart, fnStart)
+      expect(doc).toContain('third')
+      expect(doc).toMatch(/no-show-steals-focus\.contract\.test/)
+      expect(doc).toMatch(/physical/i)
+      expect(doc).toMatch(/300 ms/)
+      expect(doc).toMatch(/previous app/i)
+    })
+
+    it('is reached from exactly one place: the focus controller CommandControl calls for a proposed card', () => {
+      const calls = indexSrc.match(/\bshowForConfirm\(/g) ?? []
+      expect(calls.length, 'definition plus the one controller dependency').toBe(2)
+      expect(indexSrc).toMatch(/createCommandConfirmRuntime\(\{[^}]*showForConfirm: \(\) =>/s)
+      const runtime = readModuleSource(__dirname, './voice/command-confirm-runtime').text
+      expect(runtime).toMatch(/createConfirmFocus\(\{[^}]*showForConfirm: options\.showForConfirm/s)
+    })
+
+    it('the controller never shows or focuses a window itself, and only propose() presents a card', () => {
+      const focus = readModuleSource(__dirname, './voice/confirm-focus').text
+      expect(focus).not.toMatch(/\.show\(|\.showInactive\(|\.focus\(/)
+      const control = readModuleSource(__dirname, './command-control').text
+      const presents = control.match(/card\?\.presented\(\)/g) ?? []
+      expect(presents.length).toBe(1)
+      const proposeBody = control.slice(control.indexOf('  propose('), control.indexOf('  proposeChecked('))
+      expect(proposeBody).toMatch(/card\?\.presented\(\)/)
+    })
   })
 })

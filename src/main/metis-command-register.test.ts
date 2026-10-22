@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { DesktopActionRequest } from '@shared/desktop-actions'
+import { COMMAND_PROPOSAL_TTL_MS } from '@shared/metis-command-contract'
 import { CommandControl } from './command-control'
 import type { MetisCommandRuntime } from './metis-command-runtime'
 
@@ -51,7 +52,7 @@ describe('command runtime approval lifetime', () => {
     runtime!.ingestTranscript('open notes', 'command')
     const stale = confirmation()
 
-    await vi.advanceTimersByTimeAsync(5_000)
+    await vi.advanceTimersByTimeAsync(COMMAND_PROPOSAL_TTL_MS)
 
     expect(controller.getState()).toEqual({ proposalId: null })
     expect(await controller.confirm(stale)).toEqual({ ok: false, reason: 'proposal_missing' })

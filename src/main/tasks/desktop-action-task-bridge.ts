@@ -1,5 +1,7 @@
 import { randomBytes } from 'node:crypto'
+import { recoveredUncertainCopy } from '@shared/command-copy'
 import type { DesktopActionRequest, DesktopActionResult } from '@shared/desktop-actions'
+import type { MetisCommandRecoveryNotice } from '@shared/metis-command-contract'
 import { DESKTOP_ADAPTER_IDS } from '@shared/desktop-actions'
 import {
   ACTION_DEPENDENCY_LIMIT,
@@ -46,7 +48,8 @@ export const DESKTOP_ACTION_TASK_POLICY: TaskPolicy = {
   allowedCapabilities: DESKTOP_ADAPTER_IDS,
   resourceBudgets: { [ACTIONS_RESOURCE]: 1 },
   maxRetentionMs: DAY_MS,
-  // A confirmed proposal lives 10 s, so a grant that outlives that is a bug, not a slow user.
+  // A dispatch grant is issued after confirmation and used at once, so a grant that outlives 10 s is a bug, not a slow
+  // user. The card's own lifetime (12 s, 30 s with assistive technology) is a different clock.
   maxGrantTtlMs: 10_000
 }
 const GRANT_TTL_MS = 10_000
@@ -75,6 +78,14 @@ export interface DesktopActionTaskBridgeDeps {
   execute: (request: DesktopActionRequest, envelope: ActionEnvelope) => Promise<DesktopActionResult>
   store: TaskStateStore
   authSessionGeneration: () => number
+  /**
+   * Which uncertain tasks the person has already been told about. Without it a recovered uncertain task is
+   * reported again at every boot until it expires.
+   */
+  acknowledgements?: {
+    read(): Promise<readonly string[]>
+    write(ids: readonly string[]): Promise<void>
+  }
   audit?: (event: DesktopActionTaskAuditEvent, metadata: Record<string, string>) => void
   log?: { warn(message: string, ...args: unknown[]): void; error(message: string, ...args: unknown[]): void }
   now?: () => number
@@ -173,6 +184,7 @@ export class DesktopActionTaskBridge {
   private state: TaskRuntimeState = createTaskRuntimeState()
   private progress: TaskProgressState = createTaskProgressState()
   private loaded = false
+  private acknowledged: Set<string> | null = null
   private tail: Promise<unknown> = Promise.resolve()
   private readonly now: () => number
   private readonly newId: () => string
@@ -190,6 +202,52 @@ export class DesktopActionTaskBridge {
     // compile arrow functions inside class property initializers.
     this.execute = this.run.bind(this)
     this.recover = this.recoverState.bind(this)
+  }
+
+  /**
+   * Uncertain tasks the person has not been told about yet, as copy for the Reader details. Each one is returned
+   * once and then counts as acknowledged (persisted). It names the action and never its arguments (privacy), and
+   * it never replays anything. Empty until recovery has run.
+   */
+  async takeRecoveryNotices(): Promise<MetisCommandRecoveryNotice[]> {
+    if (!this.loaded) return []
+    return this.locked(async () => {
+      const acknowledged = await this.loadAcknowledgements()
+      const fresh = [...this.state.tasks.values()].filter(
+        (task) => task.effectOutcome === 'uncertain' && !acknowledged.has(task.taskId)
+      )
+      if (fresh.length === 0) return []
+      for (const task of fresh) acknowledged.add(task.taskId)
+      await this.persistAcknowledgements()
+      return fresh.map((task) => {
+        const actionId = task.scope.capabilities[0] ?? ''
+        return { taskId: task.taskId, actionId, copy: recoveredUncertainCopy(actionId) }
+      })
+    })
+  }
+
+  private async loadAcknowledgements(): Promise<Set<string>> {
+    if (this.acknowledged) return this.acknowledged
+    let ids: readonly string[] = []
+    try {
+      ids = (await this.deps.acknowledgements?.read()) ?? []
+    } catch (error) {
+      this.deps.log?.warn('[desktop-action-task] could not read acknowledgements; notices may repeat once:', error)
+    }
+    this.acknowledged = new Set(ids)
+    return this.acknowledged
+  }
+
+  /** Forget acknowledgements for tasks that no longer exist, then write. Best effort: a notice may repeat once. */
+  private async persistAcknowledgements(): Promise<void> {
+    if (!this.acknowledged || !this.deps.acknowledgements) return
+    const live = [...this.acknowledged].filter((id) => this.state.tasks.has(id))
+    this.acknowledged = new Set(live)
+    try {
+      await this.deps.acknowledgements.write(live)
+    } catch (error) {
+      this.deps.log?.warn('[desktop-action-task] could not persist acknowledgements:', error)
+    }
   }
 
   snapshot(): DesktopActionTaskSnapshot[] {
@@ -495,6 +553,10 @@ export class DesktopActionTaskBridge {
         this.progress = forgetTaskProgress(this.progress, begun.taskId)
         if (outcome === 'uncertain') {
           this.deps.audit?.('task.effect_uncertain', { taskId: begun.taskId, actionId: request.id })
+          // The person sees this result now, so a later boot does not announce it a second time.
+          const acknowledged = await this.loadAcknowledgements()
+          acknowledged.add(begun.taskId)
+          await this.persistAcknowledgements()
         }
         await this.persistQuietly()
       } catch (error) {

@@ -1,8 +1,14 @@
 import { AlertTriangle, Info, Save, Trash2, X } from 'lucide-react'
 import { useEffect, useRef } from 'react'
 import type { NavigationGuardChoice, NavigationGuardRequest, NavigationGuardService } from '../lib/navigation-guard'
+import type { ReturnGuard } from '@shared/command-return-guard'
 import { registerConfirmHost } from './confirm-context'
-import { confirmSheetChoices, confirmSheetInitialFocus, confirmSheetKeyAction } from './confirm-sheet-model'
+import {
+  confirmSheetChoices,
+  confirmSheetGuardedKeyAction,
+  confirmSheetInitialFocus,
+  confirmSheetKeyAction
+} from './confirm-sheet-model'
 
 /**
  * The overlay's one confirmation sheet. Given `guard`, it is the window's confirmation host: it answers that
@@ -11,17 +17,20 @@ import { confirmSheetChoices, confirmSheetInitialFocus, confirmSheetKeyAction } 
 export function ConfirmSheet({
   guard,
   request,
-  onChoose
+  onChoose,
+  returnGuard
 }: {
   guard?: NavigationGuardService
   request: NavigationGuardRequest | null
   onChoose?: (choice: NavigationGuardChoice, id: number) => void
+  /** A confirmation that a held or repeated key must not confirm (the voice-action card). */
+  returnGuard?: ReturnGuard
 }): JSX.Element | null {
   useEffect(() => (guard ? registerConfirmHost(guard) : undefined), [guard])
   if (!request) return null
   const choose = onChoose ?? ((choice: NavigationGuardChoice, id: number) => guard?.choose(choice, id))
   // Keyed by request so each decision gets a fresh focus target and restores focus to its own invoker.
-  return <ConfirmSheetDialog key={request.id} request={request} onChoose={choose} />
+  return <ConfirmSheetDialog key={request.id} request={request} onChoose={choose} returnGuard={returnGuard} />
 }
 
 const neutralButton =
@@ -33,10 +42,12 @@ const destructiveButton =
 
 function ConfirmSheetDialog({
   request,
-  onChoose
+  onChoose,
+  returnGuard
 }: {
   request: NavigationGuardRequest
   onChoose: (choice: NavigationGuardChoice, id: number) => void
+  returnGuard?: ReturnGuard
 }): JSX.Element {
   const buttonRefs = useRef<Partial<Record<NavigationGuardChoice, HTMLButtonElement | null>>>({})
   const choices = confirmSheetChoices(request)
@@ -53,11 +64,14 @@ function ConfirmSheetDialog({
     buttonRefs.current[confirmSheetInitialFocus(request)]?.focus()
     const onKey = (event: KeyboardEvent): void => {
       const focused = choices.findIndex((choice) => buttonRefs.current[choice] === document.activeElement)
-      const action = confirmSheetKeyAction(request, event, focused)
+      const action = returnGuard
+        ? confirmSheetGuardedKeyAction(request, event, focused, returnGuard)
+        : confirmSheetKeyAction(request, event, focused)
       if (!action) return
       event.stopPropagation()
       if (action.kind === 'activate-focused') return // the focused button's own activation clicks it
       event.preventDefault()
+      if (action.kind === 'swallow') return
       if (action.kind === 'focus') buttonRefs.current[choices[action.index]]?.focus()
       else onChoose(action.choice, request.id)
     }
@@ -77,7 +91,11 @@ function ConfirmSheetDialog({
         buttonRefs.current[choice] = element
       }}
       type="button"
-      onClick={() => onChoose(choice, request.id)}
+      onClick={(event) => {
+        // A click the keyboard synthesised inside the guard window is a held key, not a decision.
+        if (returnGuard && choice !== 'cancel' && !returnGuard.acceptsClick(event)) return
+        onChoose(choice, request.id)
+      }}
       className={className}
       data-metis-meeting-start={request.startsMeeting && choice !== 'cancel' ? '' : undefined}
     >

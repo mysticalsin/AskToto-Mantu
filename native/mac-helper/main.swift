@@ -75,6 +75,13 @@
 //                     this app may send Apple Events to <bundle-id> (AEDeterminePermissionToAutomateTarget with
 //                     askUserIfNeeded=false): "unknown" when the user has not been asked yet or the target is
 //                     not running. Accessibility is probed in-process by Electron, so it is not here.
+//   automation-ask <bundle-id>  One-shot (V04). The ONLY call here that may raise a system prompt: it asks
+//                     whether this app may send Apple Events to <bundle-id> (AEDeterminePermissionToAutomateTarget
+//                     with askUserIfNeeded=true) and prints ONE JSON object {status} like tcc-status. Metis calls
+//                     it after the person pressed Return and before anything is dispatched, so a prompt still being
+//                     read can never turn into an uncertain effect. tcc-status stays read-only.
+//   activate-pid <pid>  One-shot (V04). Brings the running application with that pid to the front again, so a
+//                     confirmation card hands focus back to the app the person was in. Prints {activated}.
 //   watch-modifiers [--interval-ms N]  Long-running, permission-free (V01, the voice hold chord). Polls two idle
 //                     state queries every N ms (default 40, clamped to 20-200): which modifier keys are down
 //                     (CGEventSource.flagsState, device-dependent bits kept so Right Command differs from Left)
@@ -891,11 +898,55 @@ func runTccStatus(_ options: [String]) -> Never {
     }
 }
 
+func runAutomationAsk(bundleId: String) -> Never {
+    let target = NSAppleEventDescriptor(bundleIdentifier: bundleId)
+    guard let desc = target.aeDesc else {
+        fail("automation-ask: cannot address \(bundleId)")
+    }
+    let result = AEDeterminePermissionToAutomateTarget(desc, AEEventClass(typeWildCard), AEEventID(typeWildCard), true)
+    switch result {
+    case noErr:
+        emitJson(TccStatusResult(status: "granted"), command: "automation-ask")
+    case OSStatus(errAEEventNotPermitted):
+        emitJson(TccStatusResult(status: "denied"), command: "automation-ask")
+    default:
+        // procNotFound (target not running) and anything else: the person was not asked, so the answer is unknown.
+        emitJson(TccStatusResult(status: "unknown"), command: "automation-ask")
+    }
+}
+
+struct ActivatePidResult: Encodable {
+    let activated: Bool
+}
+
+func runActivatePid(pidText: String) -> Never {
+    guard let pid = pid_t(pidText), pid > 0, let app = NSRunningApplication(processIdentifier: pid) else {
+        fail("activate-pid: no running application for \(pidText)")
+    }
+    func waitUntilActive(_ seconds: TimeInterval) -> Bool {
+        let deadline = Date().addingTimeInterval(seconds)
+        while !app.isActive && Date() < deadline {
+            RunLoop.current.run(until: Date().addingTimeInterval(0.01))
+        }
+        return app.isActive
+    }
+    _ = app.activate(options: [.activateAllWindows])
+    var activated = waitUntilActive(0.15)
+    if !activated, let url = app.bundleURL {
+        // macOS 14 and later only honours a direct activation from the frontmost app. Ask LaunchServices instead.
+        let configuration = NSWorkspace.OpenConfiguration()
+        configuration.activates = true
+        NSWorkspace.shared.openApplication(at: url, configuration: configuration) { _, _ in }
+        activated = waitUntilActive(1.2)
+    }
+    emitJson(ActivatePidResult(activated: activated), command: "activate-pid")
+}
+
 // MARK: - entry point
 
 let arguments = CommandLine.arguments
 guard arguments.count >= 2 else {
-    fail("usage: metis-mac-helper <watch-frontmost|ocr|transcribe|screen-metrics|stat-flags|proc-info|supervise|stall-watch|code-identity|bundle-copies|tcc-status|watch-modifiers> [path|-]")
+    fail("usage: metis-mac-helper <watch-frontmost|ocr|transcribe|screen-metrics|stat-flags|proc-info|supervise|stall-watch|code-identity|bundle-copies|tcc-status|automation-ask|activate-pid|watch-modifiers> [path|-]")
 }
 switch arguments[1] {
 case "watch-frontmost":
@@ -934,6 +985,16 @@ case "bundle-copies":
     runBundleCopies(bundleId: arguments[2])
 case "tcc-status":
     runTccStatus(Array(arguments.dropFirst(2)))
+case "automation-ask":
+    guard arguments.count >= 3 else {
+        fail("usage: metis-mac-helper automation-ask <bundle-id>")
+    }
+    runAutomationAsk(bundleId: arguments[2])
+case "activate-pid":
+    guard arguments.count >= 3 else {
+        fail("usage: metis-mac-helper activate-pid <pid>")
+    }
+    runActivatePid(pidText: arguments[2])
 default:
     fail("unknown command: \(arguments[1])")
 }

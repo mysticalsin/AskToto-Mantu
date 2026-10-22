@@ -1,5 +1,6 @@
 import type { IpcRenderer } from 'electron'
 import { createCloudSpeechPreloadApi } from './cloud-speech'
+import { createCommandConfirmPreloadApi } from './command-confirm'
 import { createTranscriptRevisionPreloadApi } from './transcript-revision'
 import { createMetricsPreloadApi } from './metrics'
 import { createDictationMemoryPreloadApi } from './dictation-memory'
@@ -14,6 +15,7 @@ export function createFeaturePreloadApis(ipc: IpcRenderer) {
     ...createMetricsPreloadApi(ipc),
     ...createVoiceActionsPreloadApi(ipc),
     ...createDictationMemoryPreloadApi(ipc),
-    ...createSessionContextPreloadApi(ipc)
+    ...createSessionContextPreloadApi(ipc),
+    ...createCommandConfirmPreloadApi(ipc)
   }
 }

@@ -43,11 +43,23 @@ export function ensureMetisCommandRuntime(opts: {
       lastProposalId = null
       const owner = opts.getCommandOwner?.()
       if (!owner || !opts.commandControl) return
-      opts.commandControl.propose(
-        { webContentsId: owner.webContentsId, revision: proposal.utteranceRevision },
-        proposal.request
-      )
+      // Marked before the checks run so a repeat of the same state cannot propose twice, and so a retraction
+      // while they run (stillWanted) drops the card instead of showing a stale one.
       lastProposalId = proposal.id
+      const proposalId = proposal.id
+      opts.commandControl
+        .proposeChecked(
+          { webContentsId: owner.webContentsId, revision: proposal.utteranceRevision },
+          proposal.request,
+          { stillWanted: () => lastProposalId === proposalId }
+        )
+        .then((shown) => {
+          // A refused preflight or an unpreviewable action shows no card: forget it so the same words can retry.
+          if (shown === null && lastProposalId === proposalId) lastProposalId = null
+        })
+        .catch(() => {
+          if (lastProposalId === proposalId) lastProposalId = null
+        })
     },
     jevEnabled: () => opts.jevEnabled?.() === true,
     operatorDecideAuth: () => {

@@ -581,7 +581,7 @@ export function RightEdgeSidecar({
               {intelligence.error}
             </p>
           ) : null}
-          {commandState.proposalId ? (
+          {commandState.proposalId && !commandState.preview ? (
             <section
               className="right-edge-sidecar__pending"
               aria-label="Pending command without a verified preview"

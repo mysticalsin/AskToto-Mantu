@@ -1,61 +1,71 @@
-import { describe, expect, it, vi } from 'vitest'
-import { CommandProposalCard } from './CommandProposalCard'
+import { renderToStaticMarkup } from 'react-dom/server'
+import { describe, expect, it } from 'vitest'
+import type { MetisCommandState } from '@shared/metis-command-contract'
+import { CommandProposalCard, commandProposalRequest } from './CommandProposalCard'
 
-type ElementNode = {
-  type?: unknown
-  props?: { children?: unknown; onClick?: () => void; 'aria-label'?: string }
+type Proposal = Extract<MetisCommandState, { proposalId: string }>
+
+const proposal: Proposal = {
+  proposalId: 'a'.repeat(32),
+  nonce: 'b'.repeat(64),
+  argsHash: 'e'.repeat(64),
+  expiresAt: 1_012_000,
+  revision: 3,
+  actionId: 'desktop.create_note',
+  risk: 'create',
+  appIconKey: 'notes',
+  preview: { title: 'Create a note in Notes', argument: 'Groceries', confirmLabel: 'Create' }
 }
 
-function findByAriaLabel(node: unknown, label: string): ElementNode | undefined {
-  if (Array.isArray(node)) {
-    for (const child of node) {
-      const found = findByAriaLabel(child, label)
-      if (found) return found
-    }
-    return undefined
-  }
-  if (!node || typeof node !== 'object') return undefined
-  const element = node as ElementNode
-  if (element.props?.['aria-label'] === label) return element
-  return findByAriaLabel(element.props?.children, label)
-}
-
-describe('CommandProposalCard', () => {
-  it('forwards only the opaque proposal id, nonce and args hash when confirmation is chosen', () => {
-    const confirm = vi.fn()
-    const proposal = {
-      proposalId: 'a'.repeat(32),
-      nonce: 'b'.repeat(64),
-      argsHash: 'e'.repeat(64),
-      preview: 'Open Notes',
-      expiresAt: Date.now() + 10_000
-    }
-
-    const tree = CommandProposalCard({ proposal, onConfirm: confirm, onCancel: vi.fn() })
-    const button = findByAriaLabel(tree, 'Confirm action')
-    button?.props?.onClick?.()
-
-    expect(confirm).toHaveBeenCalledWith({
-      proposalId: proposal.proposalId,
-      nonce: proposal.nonce,
-      argsHash: proposal.argsHash
+describe('commandProposalRequest (what the card shows is exactly what main allowlisted)', () => {
+  it('uses the main-built title, quotes the exact argument and names the action with a verb', () => {
+    expect(commandProposalRequest(proposal)).toMatchObject({
+      kind: 'confirm',
+      title: 'Create a note in Notes',
+      message: '“Groceries”',
+      saveLabel: 'Create',
+      cancelLabel: 'Cancel'
     })
   })
 
-  it('forwards only the opaque id and nonce when Escape cancels the reviewed action', () => {
-    const cancel = vi.fn()
-    const proposal = {
-      proposalId: 'c'.repeat(32),
-      nonce: 'd'.repeat(64),
-      argsHash: 'f'.repeat(64),
-      preview: 'Open Notes',
-      expiresAt: Date.now() + 10_000
+  it('shows a plain detail sentence when there is no quoted argument', () => {
+    const windowsPhoto: Proposal = {
+      ...proposal,
+      actionId: 'desktop.photo_booth_capture',
+      risk: 'reversible',
+      preview: { title: 'Open Camera', detail: 'Press the shutter yourself.', confirmLabel: 'Open' }
     }
+    expect(commandProposalRequest(windowsPhoto).message).toBe('Press the shutter yourself.')
+  })
 
-    const tree = CommandProposalCard({ proposal, onConfirm: vi.fn(), onCancel: cancel })
-    const card = findByAriaLabel(tree, 'Command proposal')
-    card?.props?.onKeyDown?.({ key: 'Escape', preventDefault: vi.fn() } as unknown as never)
+  it('is never styled destructive: the person deliberately asked for the action', () => {
+    expect(commandProposalRequest(proposal).destructive).toBeUndefined()
+  })
+})
 
-    expect(cancel).toHaveBeenCalledWith({ proposalId: proposal.proposalId, nonce: proposal.nonce })
+describe('CommandProposalCard', () => {
+  const html = renderToStaticMarkup(
+    <CommandProposalCard proposal={proposal} onConfirm={() => {}} onCancel={() => {}} />
+  )
+
+  it('is an alert dialog labelled by the title and described by the argument', () => {
+    expect(html).toContain('role="alertdialog"')
+    expect(html).toMatch(/aria-labelledby="([^"]+)"/)
+    expect(html).toMatch(/aria-describedby="([^"]+)"/)
+    expect(html).toContain('Create a note in Notes')
+    expect(html).toContain('“Groceries”')
+  })
+
+  it('offers Cancel and a verb button, never OK or Confirm', () => {
+    expect(html).toContain('>Cancel<')
+    expect(html).toContain('>Create<')
+    expect(html).not.toContain('>OK<')
+    expect(html).not.toContain('>Confirm<')
+  })
+
+  it('never renders the nonce or the args hash', () => {
+    expect(html).not.toContain(proposal.nonce)
+    expect(html).not.toContain(proposal.argsHash)
+    expect(html).not.toContain(proposal.proposalId)
   })
 })

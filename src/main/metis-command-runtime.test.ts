@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
+import { METIS_COMMAND_PROPOSAL_TTL_MS } from '@shared/metis-command-proposal'
 import { METIS_COMMAND_IDLE_TIMEOUT_MS, createMetisCommandRuntime } from './metis-command-runtime'
 
 describe('command runtime proposals', () => {
@@ -17,12 +18,27 @@ describe('command runtime proposals', () => {
     expect(runtime.getState().proposal).toBeUndefined()
   })
 
+  it('keeps a proposal past the idle window, so a card lives its full 12 s', async () => {
+    vi.useFakeTimers()
+    try {
+      const runtime = createMetisCommandRuntime({ onState: () => {} })
+      runtime.ingestTranscript('open notes', 'command')
+      await vi.advanceTimersByTimeAsync(METIS_COMMAND_IDLE_TIMEOUT_MS + 1_000)
+      expect(runtime.getState().proposal?.request.id).toBe('desktop.open_notes')
+      await vi.advanceTimersByTimeAsync(METIS_COMMAND_PROPOSAL_TTL_MS - METIS_COMMAND_IDLE_TIMEOUT_MS)
+      expect(runtime.getState().proposal).toBeUndefined()
+      expect(runtime.getState().reason).toBe('proposal_expired')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('expires and revokes proposals on reset or stop', async () => {
     vi.useFakeTimers()
     try {
       const runtime = createMetisCommandRuntime({ onState: () => {} })
       runtime.ingestTranscript('open notes', 'command')
-      await vi.advanceTimersByTimeAsync(5_000)
+      await vi.advanceTimersByTimeAsync(METIS_COMMAND_PROPOSAL_TTL_MS)
       expect(runtime.getState().proposal).toBeUndefined()
       expect(runtime.getState().reason).toBe('proposal_expired')
 

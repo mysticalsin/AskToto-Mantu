@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import { createAsrModelProtocolHandler } from './asr-model-protocol'
 import { sourceIndexOf } from '../../scripts/lib/source-layout'
 import { ipcModuleSource } from '../../scripts/lib/ipc-module-source'
+import { readModuleSource } from '../test-helpers/module-source'
 
 /**
  * Source-contract tests for the C_Main fix batch (main/index.ts + main/store.ts wiring gaps). Same
@@ -104,7 +105,9 @@ describe('emergency force quit remains available when the renderer is wedged', (
     const body = source.slice(start, end)
     expect(body).toMatch(/process\.platform !== 'darwin'/)
     expect(body).toMatch(/globalShortcut\.register\(EMERGENCY_FORCE_QUIT_ACCELERATOR, forceQuitMétis\)/)
-    expect(source).toMatch(/function shortcutClaimKey\(accel: string\): string/)
+    expect(readModuleSource(__dirname, './shortcut-claim-key').text).toMatch(
+      /export function shortcutClaimKey\(accel: string\): string/
+    )
     expect(source).toMatch(/const claimKey = shortcutClaimKey\(accel\)/)
     expect(source).toMatch(
       /claimedBy\.set\(shortcutClaimKey\(EMERGENCY_FORCE_QUIT_ACCELERATOR\), 'emergency-force-quit'\)/

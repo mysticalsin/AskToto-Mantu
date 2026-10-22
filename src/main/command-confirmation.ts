@@ -1,6 +1,15 @@
+import { COMMAND_RETURN_GUARD_MS } from '@shared/command-return-guard'
 import { IPC } from '@shared/ipc'
+import { COMMAND_CONFIRM_IPC } from '@shared/metis-command-contract'
 import type { VoiceImmediateRunInput } from '@shared/voice/voice-action-policy'
-import { CommandControl, commandConfirmationPolicyAllows, type CommandExecutor } from './command-control'
+import {
+  CommandControl,
+  commandConfirmationPolicyAllows,
+  type CommandCardLifecycle,
+  type CommandExecutor,
+  type CommandPreflightResult,
+  type CommandPreflightStage
+} from './command-control'
 
 type CommandOwner = {
   isDestroyed(): boolean
@@ -22,6 +31,14 @@ export type CommandConfirmationDeps = {
   hasListenEntitlement: () => boolean
   getOwner: () => CommandOwner | null
   isOnboardingExclusive: () => boolean
+  /** `app.isAccessibilitySupportEnabled()`: reading a card with assistive technology takes longer, so it lives 30 s. */
+  isAssistiveTechnologyOn?: () => boolean
+  /** Permissions, target app, sign-in and recording checks. See voice/command-preflight.ts. */
+  preflight?: (request: Parameters<CommandExecutor>[0], stage: CommandPreflightStage) => Promise<CommandPreflightResult>
+  /** The card's window life (focus exception and restore). See voice/confirm-focus.ts. */
+  card?: CommandCardLifecycle
+  /** Earliest a confirmation can land after its card appeared. Defaults to the 300 ms Return guard. */
+  minConfirmDelayMs?: number
   audit: (event: 'command.confirmed' | 'command.revoked', metadata: Record<string, string>) => void
 }
 
@@ -58,9 +75,17 @@ export class CommandConfirmation extends CommandControl {
         })
       },
       audit: deps.audit,
+      assistiveTechnology: deps.isAssistiveTechnologyOn,
+      preflight: deps.preflight,
+      card: deps.card,
+      minConfirmDelayMs: deps.minConfirmDelayMs ?? COMMAND_RETURN_GUARD_MS,
       onState: (state) => {
         const owner = deps.getOwner()
         if (owner && !owner.isDestroyed()) owner.webContents.send(IPC.metisCommandState, state)
+      },
+      onNotice: (notice) => {
+        const owner = deps.getOwner()
+        if (owner && !owner.isDestroyed()) owner.webContents.send(COMMAND_CONFIRM_IPC.notice, notice)
       }
     })
     this.lifecycleState = lifecycleState
