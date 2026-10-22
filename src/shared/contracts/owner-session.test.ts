@@ -45,7 +45,7 @@ describe('OwnerSessionRefSchema', () => {
     expect(OwnerSessionRefSchema.safeParse({ ...validRef, tenantKey: 'CD'.repeat(32) }).success).toBe(false)
     expect(OwnerSessionRefSchema.safeParse({ ...validRef, tenantKey: 'c'.repeat(63) }).success).toBe(false)
     expect(
-      OwnerSessionRefSchema.safeParse({ ...validRef, tenantKey: '72f988bf-86f1-41af-91ab-2d7cd011db47' }).success
+      OwnerSessionRefSchema.safeParse({ ...validRef, tenantKey: '00000000-0000-4000-8000-00000000c0de' }).success
     ).toBe(false)
   })
 

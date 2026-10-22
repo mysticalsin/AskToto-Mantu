@@ -41,7 +41,7 @@ vi.mock('./win-security', async (importOriginal) => {
 
 // Shape Entra actually issues in the id-token `tid` claim, and the only tenantId the sign-in gate can
 // ever match (Microsoft's own published sample tenant).
-const TENANT_GUID = '72f988bf-86f1-41af-91ab-2d7cd011db47'
+const TENANT_GUID = '00000000-0000-4000-8000-00000000c0de'
 
 // The auth trust boundary (requireAuth) gates every privileged IPC handler in the main process.
 // These tests cover the fail-open default and the fail-closed overrides (R-01 / R-17).
@@ -176,7 +176,7 @@ describe('MQA-107 — SignInWall reset escape hatch recovers a wrong-tenant self
   const AZURE_ENV = ['AZURE_CLIENT_ID', 'AZURE_TENANT_ID', 'ASKTOTO_ALLOWED_DOMAIN', 'ASKTOTO_REQUIRE_AUTH']
   // Well-formed GUID, but a digit-swap of the real tenant (…db47 → …db74) — passes TENANT_GUID_RE, can
   // never match the id-token `tid`. This is exactly the repro: a typo that bricks with no in-app recovery.
-  const WRONG_GUID = '72f988bf-86f1-41af-91ab-2d7cd011db74'
+  const WRONG_GUID = '00000000-0000-4000-8000-00000000c0df'
 
   const configureSelfServe = (tenantId: string): void => {
     setSettings({ azureClientId: 'client-id', azureTenantId: tenantId, azureAllowedDomain: 'mantu.com' })
@@ -273,7 +273,7 @@ describe('MQA-066 — SSO bootstrap escapes an enforced-but-unconfigured wall', 
   let ud: string
   const AZURE_ENV = ['AZURE_CLIENT_ID', 'AZURE_TENANT_ID', 'ASKTOTO_ALLOWED_DOMAIN', 'ASKTOTO_REQUIRE_AUTH']
   // Well-formed, and a digit-swap of the real tenant — passes the shape check, can never match `tid`.
-  const WRONG_TENANT = '72f988bf-86f1-41af-91ab-2d7cd011db74'
+  const WRONG_TENANT = '00000000-0000-4000-8000-00000000c0df'
 
   beforeEach(() => {
     ud = mkdtempSync(join(tmpdir(), 'asktoto-auth-bootstrap-test-'))
