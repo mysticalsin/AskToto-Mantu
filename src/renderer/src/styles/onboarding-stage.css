@@ -213,6 +213,19 @@
 .onboard-stage--portal-close {
   background: #05010a;
 }
+/* Every tour scene scrolls inside the stage on short or zoomed windows. Centred when it fits, top-aligned
+   (so the heading is never clipped) when it does not. Backgrounds stay fixed outside this slot. */
+.onboard-tour-slot {
+  justify-content: center;
+  justify-content: safe center;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+/* Scene headings take focus programmatically on each step; they are not controls, so no ring. */
+.onboard-tour-slot [tabindex='-1']:focus {
+  outline: none;
+}
 .onboard-portal-content {
   opacity: 1;
   transform: none;

@@ -53,6 +53,17 @@ export const IDLE_ASR_STATUS: AsrAssetsStatus = {
   label: 'Getting transcription files…'
 }
 
+/** The setup scan waited ASR_SETUP_FAIL_OPEN_MS and the files are still arriving. This is a slow download,
+ *  not a failure: it stays non-terminal so the live poll keeps updating the percentage. */
+export function asrStatusWhileStillDownloading(prev?: AsrAssetsStatus | null): AsrAssetsStatus {
+  return {
+    ready: false,
+    status: 'downloading',
+    progress: prev?.progress || 0,
+    label: 'Transcription files are still downloading. You can continue and finish them in Settings.'
+  }
+}
+
 /** Act 3 transcription row. Never skip a missing bundle. Immutable package failures explain how to recover. */
 export function asrAssetsRowStatus(
   input: AsrAssetsStatus | null | undefined,

@@ -1,14 +1,14 @@
 import { describe, it, expect, vi } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { connectDust, ssoSignInVerdict } from '../lib/onboarding-completion'
 import {
   apiPickerFallbackProvider,
-  connectDust,
   providerReadyCopy,
-  providerTileDisabledReason,
-  ssoSignInVerdict
-} from './Onboarding'
+  providerTileDisabledReason
+} from '../lib/onboarding-readiness-copy'
 import { Sparkles } from 'lucide-react'
+import { asrStatusWhileStillDownloading } from '../lib/onboarding-setup-rows'
 import {
   aiRowStatus,
   asrAssetsRowStatus,
@@ -652,5 +652,24 @@ describe('MQA-263 — a build that ships connected must say so', () => {
 
   it('treats the second argument as optional, so existing call sites keep working', () => {
     expect(providerReadyCopy('anthropic')).toEqual(providerReadyCopy('anthropic', {}))
+  })
+})
+
+describe('Q09 D1-11: a slow download is not an error', () => {
+  it('reports a still-downloading status that the poll can keep updating', () => {
+    const status = asrStatusWhileStillDownloading({ ready: false, status: 'downloading', progress: 0.4, label: 'x' })
+    expect(status.status).toBe('downloading')
+    expect(status.ready).toBe(false)
+    expect(status.error).toBeUndefined()
+    expect(status.progress).toBe(0.4)
+    expect(asrAssetsRowStatus(status)).toMatchObject({ state: 'loading', progress: 0.4 })
+  })
+
+  it('never hides the live percentage behind a latched error', () => {
+    const slow = asrStatusWhileStillDownloading(undefined)
+    expect(slow.status).not.toBe('error')
+    expect(slow.progress).toBe(0)
+    expect(slow.label).toMatch(/still downloading/i)
+    expect(asrAssetsRowStatus(slow).state).toBe('loading')
   })
 })

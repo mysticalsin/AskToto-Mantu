@@ -93,6 +93,7 @@ import {
   resolveOnboardingPlacementSync,
   saveOnboardingAppearanceChoice,
   seedOnboardingAppearance,
+  seedOnboardingMode,
   seedOnboardingPlacement
 } from '../lib/onboarding-appearance'
 import { persistOverlayPlacement } from '../lib/overlay-placement-save'
@@ -130,7 +131,9 @@ import { speechPackAllowsEnsure } from '../lib/local-speech-pack-policy'
 import { packageModeFromStateSnapshot } from '../lib/package-profile-readiness'
 import { allowsAutomaticAsrSetup, type OnboardingPackageMode } from '../lib/product-speech-onboarding'
 import { cloudSpeechRowStatus } from '../lib/cloud-speech-readiness'
-import { createCloudSpeechRequestFence } from '../lib/cloud-speech-request-fence'
+import { MiniToggle } from './OnboardingMiniToggle'
+import { useSceneHeadingFocus } from '../lib/use-scene-heading-focus'
+import { useCloudSpeechCapability } from '../lib/use-cloud-speech-capability'
 import {
   IDLE_ASR_STATUS,
   ASR_SETUP_FAIL_OPEN_MS,
@@ -140,6 +143,7 @@ import {
   asrRowNeedsRepair,
   asrRowNeedsRetry,
   asrStatusIsReady,
+  asrStatusWhileStillDownloading,
   firstRunCanFinish,
   micRowStatus,
   setupContinueLabel,
@@ -186,7 +190,8 @@ export interface OnboardingExperienceProps {
    *  carried through the trusted main-process launch path so the optional AI action opens Settings in
    *  the replacement window, not a BrowserWindow about to be destroyed. */
   onDone: (result: {
-    mode: ConversationMode
+    /** Only set when the user picked a persona card. Replay leaves the saved persona untouched otherwise. */
+    mode?: ConversationMode
     recordingConsent: boolean
     destination: 'answer' | 'settings'
   }) => void | Promise<void>
@@ -354,44 +359,6 @@ export function setupAsrBlocksContinue(
   if (asr && (asr.state === 'ready' || asr.state === 'skipped')) return false
   if (!asr) return rows.length === 0
   return true
-}
-
-/** Act 3's opt-out toggle (screenAsk) — a small local switch so this scene doesn't need to reach into
- *  Settings.tsx's `Toggle` (which is styled against the separate `--cl-*` settings-panel token set this
- *  onboarding shell never mounts). Same on/off mechanics, themed with the onboarding's own
- *  `--color-accent` tokens instead. */
-function MiniToggle({
-  on,
-  onChange,
-  label
-}: {
-  on: boolean
-  onChange: (v: boolean) => void
-  label: string
-}): JSX.Element {
-  return (
-    <button
-      type="button"
-      role="switch"
-      aria-checked={on}
-      aria-label={label}
-      onClick={(e) => {
-        e.stopPropagation()
-        onChange(!on)
-      }}
-      className={
-        'no-drag focus-ring relative h-[20px] w-[34px] shrink-0 rounded-full transition-colors duration-150 ' +
-        (on ? 'bg-[var(--color-accent)]' : 'bg-white/15')
-      }
-    >
-      <span
-        className={
-          'absolute top-[2px] h-[16px] w-[16px] rounded-full bg-white transition-all duration-150 ' +
-          (on ? 'left-[16px]' : 'left-[2px]')
-        }
-      />
-    </button>
-  )
 }
 
 /** Fixed spark positions for the Ready ceremony (Act 6, MQA-283) — a handful of one-shot CSS motes
@@ -771,7 +738,13 @@ export function OnboardingExperience({
   const [rows, setRows] = useState<SetupRow[]>([])
   // M2-0429: the latest permission snapshot and the real loopback self-test behind the screen row.
   const screenSetup = useScreenSetup(scene === 'setup')
-  const [mode, setMode] = useState<ConversationMode>('general')
+  const [mode, setMode] = useState<ConversationMode>(() => seedOnboardingMode(settings))
+  // Replay keeps the saved persona: only a card the user actually picks is written back at Ready.
+  const modeTouchedRef = useRef(false)
+  const pickMode = (id: ConversationMode): void => {
+    modeTouchedRef.current = true
+    setMode(id)
+  }
   const [appearance, setAppearance] = useState<OverlayLayout>(() => seedOnboardingAppearance(settings))
   const [placement, setPlacement] = useState<OverlayPlacement>(() => seedOnboardingPlacement(settings))
   const [appearanceSave, setAppearanceSave] = useState<{ busy: boolean; error: string | null }>({
@@ -835,18 +808,38 @@ export function OnboardingExperience({
     setAppearanceSave({ busy: false, error: null })
   }
   const appearanceLocked = Boolean(settings?.managedKeys?.includes('overlayLayout'))
+  const screenAskManaged = Boolean(settings?.managedKeys?.includes('screenAsk'))
   const placementLocked = placementManaged
   // Recording-consent gate (CMO-QA #1). Finish is blocked until this checkbox is checked on Ready.
   const [consent, setConsent] = useState(false)
   const [asrStatus, setAsrStatus] = useState<AsrAssetsStatus>(IDLE_ASR_STATUS)
   const [productPackageMode, setProductPackageMode] = useState<OnboardingPackageMode>('pending')
-  const [cloudCapability, setCloudCapability] = useState<CloudSpeechCapability | null>(null)
   /** Once true, Continue stays unlocked even if ASR poll returns loading. */
   const [setupAccessFailOpen, setSetupAccessFailOpen] = useState(false)
+  // Lean profile: the approved cloud speech route. A rejected IPC is its own state, never a spinner.
+  const cloudSpeech = useCloudSpeechCapability(
+    productPackageMode === 'lean',
+    JSON.stringify([
+      settings?.brokerSpeech.engine,
+      settings?.brokerSpeech.transport,
+      settings?.cloudSttProvider,
+      settings?.licenseValid,
+      settings?.licenseLastValidatedAt,
+      settings?.managedKeys.includes('brokerSpeech'),
+      settings?.managedKeys.includes('cloudSttProvider'),
+      settings?.enterpriseLive.managed,
+      settings?.enterpriseLive.inferenceMode,
+      settings?.enterpriseLive.summaryOnly
+    ]),
+    () => setSetupAccessFailOpen(true)
+  )
+  const cloudCapability = cloudSpeech.capability
+  const cloudCheckFailed = cloudSpeech.checkFailed
+
   const speechPackPolicy = settings?.localSpeechPack ?? 'offered'
   const autoAsrSetup = allowsAutomaticAsrSetup(productPackageMode, speechPackPolicy)
   const speechPackManaged = speechPackPolicy === 'required'
-  const cloudRow = cloudSpeechRowStatus(cloudCapability)
+  const cloudRow = cloudSpeechRowStatus(cloudCapability, undefined, cloudCheckFailed)
   const asrReady =
     productPackageMode === 'lean'
       ? cloudRow.state === 'ready'
@@ -897,54 +890,6 @@ export function OnboardingExperience({
   }, [])
 
   useEffect(() => {
-    if (productPackageMode !== 'lean') return
-    let current = true
-    let lastCheckAt = 0
-    const requestFence = createCloudSpeechRequestFence()
-    const refresh = (): void => {
-      if (Date.now() - lastCheckAt < 750) return
-      lastCheckAt = Date.now()
-      const requestId = requestFence.begin()
-      setCloudCapability(null)
-      void window.toto
-        .cloudSpeechCapability()
-        .then((capability) => {
-          if (current && requestFence.isCurrent(requestId)) setCloudCapability(capability)
-        })
-        .catch(() => {
-          if (current && requestFence.isCurrent(requestId)) setCloudCapability(null)
-        })
-        .finally(() => {
-          if (current && requestFence.isCurrent(requestId)) setSetupAccessFailOpen(true)
-        })
-    }
-    const onVisibility = (): void => {
-      if (document.visibilityState === 'visible') refresh()
-    }
-    refresh()
-    window.addEventListener('focus', refresh)
-    document.addEventListener('visibilitychange', onVisibility)
-    return () => {
-      current = false
-      requestFence.invalidate()
-      window.removeEventListener('focus', refresh)
-      document.removeEventListener('visibilitychange', onVisibility)
-    }
-  }, [
-    productPackageMode,
-    settings?.brokerSpeech.engine,
-    settings?.brokerSpeech.transport,
-    settings?.cloudSttProvider,
-    settings?.licenseValid,
-    settings?.licenseLastValidatedAt,
-    settings?.managedKeys.includes('brokerSpeech'),
-    settings?.managedKeys.includes('cloudSttProvider'),
-    settings?.enterpriseLive.managed,
-    settings?.enterpriseLive.inferenceMode,
-    settings?.enterpriseLive.summaryOnly
-  ])
-
-  useEffect(() => {
     if (!autoAsrSetup) return
     let live = true
     const apply = (s: AsrAssetsStatus): void => {
@@ -957,12 +902,9 @@ export function OnboardingExperience({
     // A stalled setup must become actionable, but must not turn the final Ready action into a trap.
     const asrSetupTimeout = setTimeout(() => {
       if (!live) return
+      // Slow is not failed: unlock Continue but leave asrStatus alone so the poll keeps showing the real
+      // download progress. A true failure arrives through the ensure rejection or an 'error' status.
       setSetupAccessFailOpen(true)
-      setAsrStatus((prev) => {
-        if (prev.ready || prev.status === 'ready' || prev.status === 'error') return prev
-        const message = 'Transcription setup needs attention. Try again to continue.'
-        return { ready: false, status: 'error', progress: prev.progress || 0, label: message, error: message }
-      })
     }, ASR_SETUP_FAIL_OPEN_MS)
     const poll = async (): Promise<void> => {
       const s = await window.toto.asrAssetsStatus().catch(() => null)
@@ -991,6 +933,7 @@ export function OnboardingExperience({
     const s = screenRowStatus(screenSetup.perms, screenSetup.check, isWindows)
     setRows((rs) => rs.map((r) => (r.key === 'screen' ? { ...r, state: s.state, detail: s.detail } : r)))
   }, [scene, screenSetup.perms, screenSetup.check])
+  const tourSlotRef = useSceneHeadingFocus<HTMLDivElement>(scene)
   // P0: any post-hero scene must keep portal mask open (Example: after Next → black).
   useEffect(() => {
     if (scene === 'hero') return
@@ -1032,17 +975,7 @@ export function OnboardingExperience({
           (await Promise.race([
             window.toto.asrAssetsStatus().catch((err) => asrEnsureFailureStatus(err)),
             new Promise<AsrAssetsStatus>((r) =>
-              setTimeout(
-                () =>
-                  r({
-                    ready: false,
-                    status: 'error',
-                    progress: 0,
-                    label: 'Transcription files are still downloading. You can continue and finish them in Settings.',
-                    error: 'Transcription files are still downloading. You can continue and finish them in Settings.'
-                  }),
-                ASR_SETUP_FAIL_OPEN_MS
-              )
+              setTimeout(() => r(asrStatusWhileStillDownloading()), ASR_SETUP_FAIL_OPEN_MS)
             )
           ])) || asrEnsureFailureStatus()
         if (live) {
@@ -1053,7 +986,7 @@ export function OnboardingExperience({
         const detail = speechPackManaged ? `${asr.detail} Managed by your organization.` : asr.detail
         set('asr', asr.state, detail, asr.progress)
       } else if (productPackageMode === 'lean') {
-        const status = cloudSpeechRowStatus(cloudCapability)
+        const status = cloudSpeechRowStatus(cloudCapability, undefined, cloudCheckFailed)
         set('asr', status.state, status.detail)
       } else if (productPackageMode === 'invalid') {
         set('asr', 'action', 'The installed package profile could not be verified.')
@@ -1100,17 +1033,17 @@ export function OnboardingExperience({
     return () => {
       live = false
     }
-  }, [scene, autoAsrSetup, productPackageMode, cloudCapability, speechPackManaged])
+  }, [scene, autoAsrSetup, productPackageMode, cloudCapability, cloudCheckFailed, speechPackManaged])
 
   useEffect(() => {
     if (scene !== 'setup' || productPackageMode !== 'lean') return
-    const status = cloudSpeechRowStatus(cloudCapability)
+    const status = cloudSpeechRowStatus(cloudCapability, undefined, cloudCheckFailed)
     setRows((current) =>
       current.map((row) =>
         row.key === 'asr' ? { ...row, label: 'Cloud speech', state: status.state, detail: status.detail } : row
       )
     )
-  }, [scene, productPackageMode, cloudCapability])
+  }, [scene, productPackageMode, cloudCapability, cloudCheckFailed])
 
   // --- Live-poll while the scene stays mounted, so a grant flipped in System Settings (possibly in a
   // split view right next to this window) is reflected without the user coming back to click anything.
@@ -1211,7 +1144,7 @@ export function OnboardingExperience({
       await closeOnboardingPortal(music.muted, prefersReducedMotion())
       playBarLand(music.muted)
       requestBarLand()
-      await onDone({ mode, recordingConsent: true, destination })
+      await onDone({ mode: modeTouchedRef.current ? mode : undefined, recordingConsent: true, destination })
       return true
     } catch (error) {
       doneRef.current = false
@@ -1258,7 +1191,7 @@ export function OnboardingExperience({
         <div className="onboard-tour-chrome flex h-9 shrink-0 items-center justify-center pt-3">
           <ActProgress scene={scene} />
         </div>
-        <div className="onboard-tour-slot flex min-h-0 w-full flex-1 flex-col items-center justify-center gap-6">
+        <div ref={tourSlotRef} className="onboard-tour-slot flex min-h-0 w-full flex-1 flex-col items-center gap-6">
           {scene === 'hero' && (
             <HeroWelcome
               onBegin={() => {
@@ -1285,7 +1218,12 @@ export function OnboardingExperience({
 
           {scene === 'problem' && (
             <div key="problem" className="onboard-post-lady flex flex-col items-center gap-8">
-              <div className="scene-enter flex max-w-[420px] flex-col gap-3 text-left">
+              <div
+                role="group"
+                aria-label={PROBLEM_STORY.join(' ')}
+                data-onboard-focus
+                className="scene-enter flex max-w-[420px] flex-col gap-3 text-left"
+              >
                 {PROBLEM_STORY.map((line) => (
                   <p
                     key={line}
@@ -1326,7 +1264,7 @@ export function OnboardingExperience({
             >
               <OnboardingDemoScene
                 mode={mode}
-                onSetMode={setMode}
+                onSetMode={pickMode}
                 onContinue={() => {
                   playHero()
                   setScene(sceneAfterReveal())
@@ -1385,6 +1323,17 @@ export function OnboardingExperience({
                           </button>
                         </div>
                       )}
+                      {r.key === 'asr' && productPackageMode === 'lean' && cloudCheckFailed && (
+                        <div className="mt-1.5 flex flex-wrap items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() => cloudSpeech.refresh(true)}
+                            className="no-drag focus-ring rounded-full bg-[var(--color-accent)]/15 px-2.5 py-1 text-[11px] font-semibold text-[color:var(--color-accent-2)] hover:bg-[var(--color-accent)]/25"
+                          >
+                            Try Again
+                          </button>
+                        </div>
+                      )}
                       {r.key === 'asr' && productPackageMode === 'legacy' && asrRowNeedsRepair(r) && (
                         <div className="mt-1.5 flex flex-wrap items-center gap-2">
                           <span className="text-[11px] leading-snug text-[color:var(--color-ink-3)]">
@@ -1428,16 +1377,24 @@ export function OnboardingExperience({
                       your call" rather than a setup step. Independent of the permission grant above: the
                       toggle flips the app's intent to ask, whether or not the OS has said yes yet. */}
                       {r.key === 'screen' && settings && patch && (
-                        <div className="mt-1.5 flex items-center justify-between gap-2 border-t border-white/10 pt-1.5">
-                          <span className="text-[11px] leading-snug text-[color:var(--color-ink-3)]">
-                            Let Métis see your screen when you ask (on by default, your call).
-                          </span>
-                          <MiniToggle
-                            on={settings.screenAsk}
-                            onChange={(v) => patch({ screenAsk: v })}
-                            label="Let Métis see your screen when you ask"
-                          />
-                        </div>
+                        <>
+                          <div className="mt-1.5 flex items-center justify-between gap-2 border-t border-white/10 pt-1.5">
+                            <span className="text-[11px] leading-snug text-[color:var(--color-ink-3)]">
+                              Let Métis see your screen when you ask (on by default, your call).
+                            </span>
+                            <MiniToggle
+                              on={settings.screenAsk}
+                              disabled={screenAskManaged}
+                              onChange={(v) => void patch({ screenAsk: v }).catch(() => {})}
+                              label="Let Métis see your screen when you ask"
+                            />
+                          </div>
+                          {screenAskManaged && (
+                            <p className="m-0 mt-1 text-[11px] leading-snug text-[color:var(--color-ink-3)]">
+                              Managed by your organization.
+                            </p>
+                          )}
+                        </>
                       )}
                       {r.key === 'ai' && r.state === 'action' && (
                         <p className="mt-1 text-[11px] leading-snug text-[color:var(--color-ink-3)]">
@@ -1541,7 +1498,7 @@ export function OnboardingExperience({
                       key={p.id}
                       type="button"
                       aria-pressed={selected}
-                      onClick={() => setMode(p.id)}
+                      onClick={() => pickMode(p.id)}
                       className={'onboard-persona no-drag focus-ring' + (selected ? ' is-selected' : '')}
                     >
                       {selected && <span key={mode} aria-hidden="true" className="persona-select-ring" />}
@@ -1657,7 +1614,12 @@ export function OnboardingV2({
         lockOnboardingAudio()
         haltAllOnboardingAudio()
         await persistOnboardingCompletion({
-          settingsPatch: { mode, recordingConsent, onboardingDone: true, onboardingDoneAt: Date.now() },
+          settingsPatch: {
+            ...(mode ? { mode } : {}),
+            recordingConsent,
+            onboardingDone: true,
+            onboardingDoneAt: Date.now()
+          },
           patch,
           onCompleted: onDone
         })

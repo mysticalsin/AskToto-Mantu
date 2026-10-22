@@ -35,7 +35,7 @@ describe.skipIf(process.env.ASKTOTO_BROWSER_QA !== '1')('onboarding demo browser
                 import { OnboardingExperience } from '/src/components/OnboardingExperience.tsx'
                 import '/src/styles.css'
                 window.__mountOnboardingBrowserTest = () => createRoot(document.getElementById('root')).render(
-                  React.createElement(OnboardingExperience, { onDone: () => {}, authReady: true }))
+                  React.createElement(OnboardingExperience, { onDone: () => {}, authReady: true, ...(window.__onboardingTestProps || {}) }))
                 if (!new URLSearchParams(location.search).has('manualMount')) window.__mountOnboardingBrowserTest()
                 </script></body></html>`
               res.setHeader('content-type', 'text/html; charset=utf-8')
@@ -273,6 +273,138 @@ describe.skipIf(process.env.ASKTOTO_BROWSER_QA !== '1')('onboarding demo browser
 
       for (let i = 0; i < 4; i++) await page.getByRole('button', { name: 'Next', exact: true }).click()
       await page.getByRole('heading', { name: 'Where should Métis sit?' }).waitFor({ state: 'visible', timeout: 5_000 })
+    } finally {
+      await page.close()
+    }
+  }, 30_000)
+
+  /** The Setup scene resumes straight from the marker a grant relaunch leaves, with every IPC answering "nothing". */
+  const SETUP_INIT = (settings: Record<string, unknown> | null): void => {
+    localStorage.setItem('metis.onboarding.resumeSetup', '1')
+    Object.defineProperty(navigator, 'platform', { get: () => 'MacIntel' })
+    const ready = { status: 'ready', ready: true, progress: 100, label: 'Ready' }
+    const perms = {
+      microphone: 'granted',
+      screenRecording: 'granted',
+      screenDiagnosis: {
+        state: 'granted',
+        reasons: [],
+        action: 'none',
+        duplicates: [],
+        grantedFor: null,
+        repairFailed: false
+      }
+    }
+    const patches: Record<string, unknown>[] = []
+    const base: Record<string, unknown> = {
+      asrAssetsEnsure: async () => ready,
+      asrAssetsStatus: async () => ready,
+      onImportAssetsProgress: () => () => {},
+      localModelsList: async () => [],
+      getPermissions: async () => perms,
+      requestPermissionsUpfront: async () => perms
+    }
+    const nothing = () => {
+      const done = Promise.resolve(undefined)
+      return Object.assign(() => {}, {
+        then: done.then.bind(done),
+        catch: done.catch.bind(done),
+        finally: done.finally.bind(done)
+      })
+    }
+    ;(window as unknown as { __patches: typeof patches }).__patches = patches
+    ;(window as unknown as { toto: unknown }).toto = new Proxy(base, {
+      get: (t, k: string) => (k in t ? t[k] : nothing)
+    })
+    if (settings) {
+      ;(window as unknown as { __onboardingTestProps: unknown }).__onboardingTestProps = {
+        settings,
+        patch: async (p: Record<string, unknown>) => {
+          patches.push(p)
+          return settings
+        }
+      }
+    }
+  }
+  const SETTINGS = {
+    screenAsk: true,
+    managedKeys: [] as string[],
+    mode: 'general',
+    providerReady: true,
+    provider: 'cloudflare',
+    asrEngine: 'auto',
+    localSpeechPack: 'offered',
+    localLlm: { enabled: false, modelId: 'x' },
+    brokerSpeech: { engine: 'auto', transport: 'auto' },
+    enterpriseLive: { managed: false, inferenceMode: 'cloud', summaryOnly: false },
+    overlayLayout: 'bar',
+    overlayPlacement: 'top-center'
+  }
+
+  it('Q09 D1-7: moves focus to the new scene heading on Next', async () => {
+    const page = await browser.newPage({ viewport: { width: 1100, height: 768 }, reducedMotion: 'reduce' })
+    try {
+      await page.addInitScript(SETUP_INIT, null)
+      await page.addInitScript(() => localStorage.removeItem('metis.onboarding.resumeSetup'))
+      await page.goto(url)
+      await page.getByRole('button', { name: 'Next', exact: true }).click()
+      await page.getByText("You're in the meeting.").waitFor({ state: 'visible' })
+      await page.waitForFunction(() => document.activeElement?.closest('.onboard-tour-slot') != null)
+      expect(await page.evaluate(() => document.activeElement?.tagName)).not.toBe('BODY')
+      await page.getByRole('button', { name: 'Continue' }).click()
+      const heading = page.getByRole('heading', { name: 'Here’s what that looks like.' })
+      await heading.waitFor({ state: 'visible' })
+      await page.waitForFunction(() => document.activeElement?.tagName === 'H2')
+      expect(await page.evaluate(() => document.activeElement?.textContent)).toBe('Here’s what that looks like.')
+    } finally {
+      await page.close()
+    }
+  }, 30_000)
+
+  it('Q09 D1-8: setup scene scrolls at 720px height', async () => {
+    const page = await browser.newPage({ viewport: { width: 1280, height: 400 }, reducedMotion: 'reduce' })
+    try {
+      await page.addInitScript(SETUP_INIT, SETTINGS)
+      await page.goto(url)
+      const cont = page.getByRole('button', { name: /^Continue( anyway)?$/ }).last()
+      await cont.waitFor({ state: 'attached', timeout: 10_000 })
+      await page.waitForTimeout(1_500)
+      const slot = await page.evaluate(() => {
+        const el = document.querySelector('.onboard-tour-slot') as HTMLElement
+        return { overflowY: getComputedStyle(el).overflowY, scrolls: el.scrollHeight > el.clientHeight }
+      })
+      expect(slot.overflowY).toBe('auto')
+      expect(slot.scrolls).toBe(true)
+      await cont.scrollIntoViewIfNeeded()
+      const hit = await cont.evaluate((el) => {
+        const r = el.getBoundingClientRect()
+        const top = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2)
+        return top === el || el.contains(top)
+      })
+      expect(hit).toBe(true)
+      // The heading stays reachable from the top, too (centred overflow must not clip it).
+      const headingTop = await page.getByRole('heading', { name: 'Your setup' }).evaluate((el) => {
+        const slotEl = document.querySelector('.onboard-tour-slot') as HTMLElement
+        slotEl.scrollTop = 0
+        return el.getBoundingClientRect().top >= slotEl.getBoundingClientRect().top - 1
+      })
+      expect(headingTop).toBe(true)
+    } finally {
+      await page.close()
+    }
+  }, 30_000)
+
+  it('Q09 D1-4: locks the screen-ask toggle when managed', async () => {
+    const page = await browser.newPage({ viewport: { width: 1280, height: 900 }, reducedMotion: 'reduce' })
+    try {
+      await page.addInitScript(SETUP_INIT, { ...SETTINGS, managedKeys: ['screenAsk'] })
+      await page.goto(url)
+      const toggle = page.getByRole('switch', { name: 'Let Métis see your screen when you ask' })
+      await toggle.waitFor({ state: 'visible', timeout: 10_000 })
+      expect(await toggle.isDisabled()).toBe(true)
+      await page.getByText('Managed by your organization.').first().waitFor({ state: 'visible' })
+      await toggle.click({ force: true })
+      expect(await page.evaluate(() => (window as unknown as { __patches: unknown[] }).__patches.length)).toBe(0)
     } finally {
       await page.close()
     }

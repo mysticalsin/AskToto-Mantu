@@ -35,7 +35,8 @@ describe('Mac-show tour stay-visible + quieter bar land', () => {
     expect(problem).not.toMatch(/PROBLEM_STORY\.length \* 1100/)
     expect(problem).toMatch(/style=\{\{ opacity: 1 \}\}/)
     expect(problem).not.toMatch(/animationFillMode/)
-    const continueAt = problem.indexOf('>Continue<') >= 0 ? problem.indexOf('>Continue<') : problem.search(/>\s*Continue\s*</)
+    const continueAt =
+      problem.indexOf('>Continue<') >= 0 ? problem.indexOf('>Continue<') : problem.search(/>\s*Continue\s*</)
     const sceneEnterAt = problem.indexOf('scene-enter')
     expect(sceneEnterAt).toBeGreaterThanOrEqual(0)
     expect(continueAt).toBeGreaterThan(sceneEnterAt)

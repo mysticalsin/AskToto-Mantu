@@ -29,16 +29,7 @@ const engine = readFileSync(join(__dirname, './onboarding-starfield-engine.ts'),
 const flow = readFileSync(join(__dirname, './onboarding-flow.ts'), 'utf8')
 const live = [experience, demo].join('\n')
 
-const TOUR = [
-  'hero',
-  'problem',
-  'reveal',
-  'setup',
-  'personalize',
-  'license',
-  'appearance',
-  'ready'
-] as const
+const TOUR = ['hero', 'problem', 'reveal', 'setup', 'personalize', 'license', 'appearance', 'ready'] as const
 
 describe('KineticGrid file + Mantu colors + pointer-events none + no stage slide', () => {
   it('ships the canvas host at the contracted path', () => {
@@ -93,16 +84,10 @@ describe('starfield is not mounted after the lady beat', () => {
     expect(ONBOARDING_HERO_VIDEO_SRC).toMatch(/onboarding-hero-lady-planet/)
     expect(ONBOARDING_HERO_VIDEO_SRC).not.toMatch(/hf_20260319_055001/)
     expect(ONBOARDING_HERO_VIDEO_REMOTE_SRC).toMatch(/hf_20260429_115139_0fc6bd3d/)
-    expect(experience).toMatch(/\(scene === 'hero' \|\| scene === 'problem' \|\| scene === 'reveal'\) && \(\s*<OnboardingHeroVideo/)
-    expect(KINETIC_GRID_SCENES).toEqual([
-      'problem',
-      'reveal',
-      'appearance',
-      'setup',
-      'personalize',
-      'license',
-      'ready'
-    ])
+    expect(experience).toMatch(
+      /\(scene === 'hero' \|\| scene === 'problem' \|\| scene === 'reveal'\) && \(\s*<OnboardingHeroVideo/
+    )
+    expect(KINETIC_GRID_SCENES).toEqual(['problem', 'reveal', 'appearance', 'setup', 'personalize', 'license', 'ready'])
     expect(shouldMountKineticGrid('hero')).toBe(false)
     expect(shouldMountStarfield('hero')).toBe(false)
     for (const scene of KINETIC_GRID_SCENES) {
@@ -151,7 +136,9 @@ describe('onboardingDone cannot become true without completing Ready', () => {
     expect(experience).toMatch(/canMarkOnboardingDone\(\{ scene, asrReady, consent \}\)/)
     const finish = experience.slice(experience.indexOf('const finish = async'))
     expect(finish.indexOf('canMarkOnboardingDone')).toBeGreaterThan(-1)
-    expect(finish.indexOf('canMarkOnboardingDone')).toBeLessThan(finish.indexOf('onDone({ mode, recordingConsent: true, destination })'))
+    expect(finish.indexOf('canMarkOnboardingDone')).toBeLessThan(
+      finish.indexOf('onDone({ mode: modeTouchedRef.current ? mode : undefined, recordingConsent: true, destination })')
+    )
     const v2 = experience.slice(experience.indexOf('export function OnboardingV2'))
     expect(v2).toMatch(/onboardingDone: true/)
     expect(v2).not.toMatch(/scene === 'skip'/)
@@ -162,14 +149,18 @@ describe('haltAllOnboardingAudio remains correct through Ready and Replay', () =
   it('Ready halts first; Replay halts only after its reset is confirmed', () => {
     const finish = experience.slice(experience.indexOf('const finish = async'))
     expect(finish.indexOf('haltAllOnboardingAudio()')).toBeGreaterThan(-1)
-    expect(finish.indexOf('haltAllOnboardingAudio()')).toBeLessThan(finish.indexOf('onDone({ mode, recordingConsent: true, destination })'))
+    expect(finish.indexOf('haltAllOnboardingAudio()')).toBeLessThan(
+      finish.indexOf('onDone({ mode: modeTouchedRef.current ? mode : undefined, recordingConsent: true, destination })')
+    )
     const v2 = experience.slice(experience.indexOf('onDone={async ({ mode, recordingConsent, destination })'))
     expect(v2.indexOf('haltAllOnboardingAudio()')).toBeGreaterThan(-1)
     expect(v2.indexOf('haltAllOnboardingAudio()')).toBeLessThan(v2.indexOf('onboardingDone: true'))
     const replay = settings.slice(settings.indexOf('const replayOnboarding = async'))
     expect(replay.indexOf('const saved = await patch({ onboardingDone: false })')).toBeGreaterThan(-1)
     expect(replay.indexOf('haltAllOnboardingAudio()')).toBeGreaterThan(-1)
-    expect(replay.indexOf('const saved = await patch({ onboardingDone: false })')).toBeLessThan(replay.indexOf('haltAllOnboardingAudio()'))
+    expect(replay.indexOf('const saved = await patch({ onboardingDone: false })')).toBeLessThan(
+      replay.indexOf('haltAllOnboardingAudio()')
+    )
     expect(replay.indexOf('haltAllOnboardingAudio()')).toBeLessThan(replay.indexOf('window.toto.onboardingEnter()'))
   })
 })

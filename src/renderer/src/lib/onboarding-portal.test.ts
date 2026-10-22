@@ -44,7 +44,7 @@ describe('onboarding portal pill + Ready-only finish', () => {
     const finish = experience.slice(experience.indexOf('const finish = async ('))
     expect(finish.indexOf('closeOnboardingPortal')).toBeGreaterThan(-1)
     expect(finish.indexOf('closeOnboardingPortal')).toBeLessThan(
-      finish.indexOf('onDone({ mode, recordingConsent: true, destination })')
+      finish.indexOf('onDone({ mode: modeTouchedRef.current ? mode : undefined, recordingConsent: true, destination })')
     )
   })
 
@@ -94,7 +94,7 @@ describe('onboarding portal pill + Ready-only finish', () => {
     expect(experience).toMatch(/recordingConsent: true/)
     expect(experience).toMatch(/onboardingDone: true/)
     const v2 = experience.slice(experience.indexOf('export function OnboardingV2'))
-    expect(v2).toMatch(/mode, recordingConsent, onboardingDone: true/)
+    expect(v2).toMatch(/\.\.\.\(mode \? \{ mode \} : \{\}\),\s*recordingConsent,\s*onboardingDone: true/)
   })
 })
 

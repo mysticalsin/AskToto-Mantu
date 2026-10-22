@@ -51,19 +51,22 @@ describe('MQA-277 — Act 2 (Demo) scripted timeline projector (demoFrameAt)', (
     expect(a).toEqual(b)
   })
 
-  it('the suggestion only appears once its beat starts, streams (0<progress<1 => not full text), and ' +
-      'settles to the exact full text once the beat ends', () => {
-    expect(demoFrameAt(DEMO_TIMING.suggestionTextStart - 1).suggestion).toBeNull()
+  it(
+    'the suggestion only appears once its beat starts, streams (0<progress<1 => not full text), and ' +
+      'settles to the exact full text once the beat ends',
+    () => {
+      expect(demoFrameAt(DEMO_TIMING.suggestionTextStart - 1).suggestion).toBeNull()
 
-    const mid = demoFrameAt(Math.round((DEMO_TIMING.suggestionTextStart + DEMO_TIMING.suggestionTextEnd) / 2))
-    expect(mid.suggestion).not.toBeNull()
-    expect(mid.suggestion!.streaming).toBe(true)
-    expect(mid.suggestion!.text.length).toBeGreaterThan(0)
+      const mid = demoFrameAt(Math.round((DEMO_TIMING.suggestionTextStart + DEMO_TIMING.suggestionTextEnd) / 2))
+      expect(mid.suggestion).not.toBeNull()
+      expect(mid.suggestion!.streaming).toBe(true)
+      expect(mid.suggestion!.text.length).toBeGreaterThan(0)
 
-    const settled = demoFrameAt(DEMO_TIMING.suggestionTextEnd)
-    expect(settled.suggestion!.streaming).toBe(false)
-    expect(settled.suggestion!.text).toMatch(/^\*\*Say this:\*\*/)
-  })
+      const settled = demoFrameAt(DEMO_TIMING.suggestionTextEnd)
+      expect(settled.suggestion!.streaming).toBe(false)
+      expect(settled.suggestion!.text).toMatch(/^\*\*Say this:\*\*/)
+    }
+  )
 
   it('the fact-check verdict is parseable the same way Answer.tsx parses a real verdict', () => {
     const settled = demoFrameAt(DEMO_TIMING.factcheckTextEnd)
@@ -82,21 +85,24 @@ describe('MQA-277 — Act 2 (Demo) scripted timeline projector (demoFrameAt)', (
     }
   })
 
-  it('the synthetic cursor targets the suggestion chip during the suggestion stage, arrives (progress 1) ' +
-      'exactly at cursorToSuggestionArrive, and flashes "pressed" briefly right after', () => {
-    const approaching = demoFrameAt(DEMO_TIMING.cursorToSuggestionStart + 200)
-    expect(approaching.cursor.target).toBe('suggestion')
-    expect(approaching.cursor.progress).toBeGreaterThan(0)
-    expect(approaching.cursor.progress).toBeLessThan(1)
-    expect(approaching.cursor.pressed).toBe(false)
+  it(
+    'the synthetic cursor targets the suggestion chip during the suggestion stage, arrives (progress 1) ' +
+      'exactly at cursorToSuggestionArrive, and flashes "pressed" briefly right after',
+    () => {
+      const approaching = demoFrameAt(DEMO_TIMING.cursorToSuggestionStart + 200)
+      expect(approaching.cursor.target).toBe('suggestion')
+      expect(approaching.cursor.progress).toBeGreaterThan(0)
+      expect(approaching.cursor.progress).toBeLessThan(1)
+      expect(approaching.cursor.pressed).toBe(false)
 
-    const arrived = demoFrameAt(DEMO_TIMING.cursorToSuggestionArrive)
-    expect(arrived.cursor.progress).toBe(1)
-    expect(arrived.cursor.pressed).toBe(true)
+      const arrived = demoFrameAt(DEMO_TIMING.cursorToSuggestionArrive)
+      expect(arrived.cursor.progress).toBe(1)
+      expect(arrived.cursor.pressed).toBe(true)
 
-    const longAfter = demoFrameAt(DEMO_TIMING.cursorToSuggestionArrive + 5000)
-    expect(longAfter.cursor.pressed).toBe(false)
-  })
+      const longAfter = demoFrameAt(DEMO_TIMING.cursorToSuggestionArrive + 5000)
+      expect(longAfter.cursor.pressed).toBe(false)
+    }
+  )
 
   it('the cursor retargets to the fact-check chip during the fact-check stage', () => {
     const approaching = demoFrameAt(DEMO_TIMING.cursorToFactcheckStart + 200)
@@ -127,10 +133,13 @@ describe('MQA-277 — Act 2 (Demo) scripted timeline projector (demoFrameAt)', (
     expect(DEMO_STAGE_BOUNDARIES[DEMO_STAGE_BOUNDARIES.length - 1]).toBe(DEMO_TIMING.end)
   })
 
-  it('DEMO_LINES only ever contains "them"/"you" speakers — never "unknown" (this is a scripted, ' +
-      'fully-attributed fake meeting, not an imported recording)', () => {
-    for (const l of DEMO_LINES) expect(['them', 'you']).toContain(l.speaker)
-  })
+  it(
+    'DEMO_LINES only ever contains "them"/"you" speakers — never "unknown" (this is a scripted, ' +
+      'fully-attributed fake meeting, not an imported recording)',
+    () => {
+      for (const l of DEMO_LINES) expect(['them', 'you']).toContain(l.speaker)
+    }
+  )
 
   it('the chosen-role recap layouts differ for sales vs recruiting vs meeting', () => {
     const sales = demoRecapMarkdown('sales')
@@ -195,14 +204,17 @@ describe('MQA-277 — Act 2 (Demo) scripted timeline projector (demoFrameAt)', (
 })
 
 describe('MQA-278 — the demo script structurally cannot read real app/session state (contract test)', () => {
-  it('never imports or references window.toto, the live listen engine, or renderer state — its only ' +
+  it(
+    'never imports or references window.toto, the live listen engine, or renderer state — its only ' +
       'inputs are its own constants and a plain elapsedMs number, so a real transcript/session can ' +
-      'never leak into the demo through this module', () => {
-    const src = readFileSync(new URL('./onboarding-demo.ts', import.meta.url), 'utf8')
-    expect(src).not.toMatch(/window\.toto/)
-    expect(src).not.toMatch(/from ['"]\.\.\/lib\/listen['"]/)
-    expect(src).not.toMatch(/from ['"]\.\/listen['"]/)
-    expect(src).not.toMatch(/from ['"]\.\.\/state['"]/)
-    expect(src).not.toMatch(/from ['"]\.\.\/App['"]/)
-  })
+      'never leak into the demo through this module',
+    () => {
+      const src = readFileSync(new URL('./onboarding-demo.ts', import.meta.url), 'utf8')
+      expect(src).not.toMatch(/window\.toto/)
+      expect(src).not.toMatch(/from ['"]\.\.\/lib\/listen['"]/)
+      expect(src).not.toMatch(/from ['"]\.\/listen['"]/)
+      expect(src).not.toMatch(/from ['"]\.\.\/state['"]/)
+      expect(src).not.toMatch(/from ['"]\.\.\/App['"]/)
+    }
+  )
 })

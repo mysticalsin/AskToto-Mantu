@@ -51,3 +51,24 @@ describe('cloud speech readiness copy', () => {
     expect(cloudSpeechRowStatus(refused).detail).not.toContain('secret')
   })
 })
+
+describe('Q09 D1-10: a failed capability check is actionable, not a permanent spinner', () => {
+  it('keeps checking while the first answer is pending', () => {
+    expect(cloudSpeechRowStatus(null).state).toBe('checking')
+    expect(cloudSpeechRowStatus(null, undefined, false).state).toBe('checking')
+  })
+
+  it('turns a rejected check into an action row with a retry reason', () => {
+    expect(cloudSpeechRowStatus(null, undefined, true)).toEqual({
+      state: 'action',
+      detail: "Couldn't check cloud speech. Try again."
+    })
+  })
+
+  it('never lets a stale failure flag hide a real answer', () => {
+    expect(cloudSpeechRowStatus(ready, undefined, true)).toEqual({
+      state: 'ready',
+      detail: 'Ready: Cloudflare Workers AI · Nova-3'
+    })
+  })
+})

@@ -134,9 +134,13 @@ describe('onboarding music — CC0 Goldberg Aria, HTML audio, no choir synth', (
     expect(production).toMatch(/beforeunload/)
     const finish = experience.slice(experience.indexOf('const finish = async'))
     expect(finish.indexOf('haltAllOnboardingAudio()')).toBeGreaterThan(-1)
-    expect(finish.indexOf('haltAllOnboardingAudio()')).toBeLessThan(finish.indexOf('onDone({ mode, recordingConsent: true, destination })'))
+    expect(finish.indexOf('haltAllOnboardingAudio()')).toBeLessThan(
+      finish.indexOf('onDone({ mode: modeTouchedRef.current ? mode : undefined, recordingConsent: true, destination })')
+    )
     expect(finish.indexOf('music.stop()')).toBeGreaterThan(-1)
-    expect(finish.indexOf('music.stop()')).toBeLessThan(finish.indexOf('onDone({ mode, recordingConsent: true, destination })'))
+    expect(finish.indexOf('music.stop()')).toBeLessThan(
+      finish.indexOf('onDone({ mode: modeTouchedRef.current ? mode : undefined, recordingConsent: true, destination })')
+    )
     expect(finish).toMatch(/disposePortalAudio\(\)/)
   })
 })

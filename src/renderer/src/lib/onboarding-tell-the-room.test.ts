@@ -24,12 +24,8 @@ describe('tell the room — designed consent on personalize', () => {
     expect(TELL_THE_ROOM_TITLE).toBe('Tell the room')
     expect(TELL_THE_ROOM_LEAD).toMatch(/keep quality high and actually get things done/)
     expect(TELL_THE_ROOM_LEAD).toMatch(/People on the call deserve to hear that first/)
-    expect(TELL_THE_ROOM_QUOTE).toBe(
-      "I'm using Métis to capture this for notes, follow-ups, and quality."
-    )
-    expect(TELL_THE_ROOM_WHY).toBe(
-      'Saying it out loud is how we stay transparent and aligned with GDPR.'
-    )
+    expect(TELL_THE_ROOM_QUOTE).toBe("I'm using Métis to capture this for notes, follow-ups, and quality.")
+    expect(TELL_THE_ROOM_WHY).toBe('Saying it out loud is how we stay transparent and aligned with GDPR.')
     expect(TELL_THE_ROOM_CHECKBOX).toBe("I'll tell everyone on the call before I record.")
     expect(TELL_THE_ROOM_READY).toMatch(
       /Métis starts listening only when you press Listen and tell the room\. Nothing is captured before that\./
@@ -73,9 +69,13 @@ describe('tell the room — designed consent on personalize', () => {
   })
 
   it('Continue stays gated; finish still writes recordingConsent; Ready echoes the quote', () => {
-    expect(experience).toMatch(/if \(doneRef\.current \|\| !canMarkOnboardingDone\(\{ scene, asrReady, consent \}\)\) return/)
+    expect(experience).toMatch(
+      /if \(doneRef\.current \|\| !canMarkOnboardingDone\(\{ scene, asrReady, consent \}\)\) return/
+    )
     // `destination` carries Ready's optional "set up AI" choice; consent stays hard-coded true here.
-    expect(experience).toMatch(/onDone\(\{ mode, recordingConsent: true, destination \}\)/)
+    expect(experience).toMatch(
+      /onDone\(\{ mode: modeTouchedRef\.current \? mode : undefined, recordingConsent: true, destination \}\)/
+    )
     expect(experience).toMatch(/TELL_THE_ROOM_READY/)
     expect(experience).toMatch(/onboard-tell-quote--echo/)
     expect(experience).toMatch(/TELL_THE_ROOM_QUOTE/)

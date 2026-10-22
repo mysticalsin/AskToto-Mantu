@@ -3,18 +3,15 @@
  * Contract: docs/design/ONBOARDING-APPEARANCE.md and DESIGN.md (Onboarding appearance).
  * Pure helpers so the ask, persist, and live preview can be tested without the exclusive stage.
  */
-import {
-  autoHideOverlayForLayout,
-  parseOverlayLayout,
-  type OverlayLayout
-} from '@shared/overlay-chrome'
+import { autoHideOverlayForLayout, parseOverlayLayout, type OverlayLayout } from '@shared/overlay-chrome'
 import { parseOverlayPlacement, type OverlayPlacement } from '@shared/overlay-placement'
 import type { PublicSettings } from '@shared/ipc'
+import type { ConversationMode } from '@shared/ipc'
 import { overlayPlacementSettingsPatch } from './overlay-placement-save'
+import { ONBOARDING_PERSONAS } from './persona-vibe'
 
 export const ONBOARDING_POSITION_HEADING = 'Where should Métis sit?'
-export const ONBOARDING_POSITION_LEAD =
-  'Choose the top of your screen or a sidecar beside your meeting.'
+export const ONBOARDING_POSITION_LEAD = 'Choose the top of your screen or a sidecar beside your meeting.'
 
 /** Show the surface, not the user's as-yet-unselected resting shape, during the position step. */
 export function placementDemoLayout(placement: OverlayPlacement): OverlayLayout {
@@ -27,8 +24,7 @@ export function placementPreviewCaption(placement: OverlayPlacement): string {
     : 'Métis opens at the top of your screen. Choose its resting shape next.'
 }
 export const ONBOARDING_APPEARANCE_HEADING = 'How should Métis look?'
-export const ONBOARDING_APPEARANCE_LEAD =
-  'Choose a resting shape. You can change it anytime in Settings.'
+export const ONBOARDING_APPEARANCE_LEAD = 'Choose a resting shape. You can change it anytime in Settings.'
 
 export const ONBOARDING_APPEARANCE_COPY: Record<OverlayLayout, { title: string; desc: string }> = {
   hide: {
@@ -58,6 +54,13 @@ export function onboardingAppearanceCopy(
 
 export function seedOnboardingAppearance(settings?: { overlayLayout?: unknown } | null): OverlayLayout {
   return parseOverlayLayout(settings?.overlayLayout)
+}
+
+/** Replay opens on the persona the user already saved. A custom mode the three cards cannot show (or a
+ *  first run with no value) shows 'general', and onboarding writes the persona back only after a pick. */
+export function seedOnboardingMode(settings?: { mode?: unknown } | null): ConversationMode {
+  const saved = settings?.mode
+  return ONBOARDING_PERSONAS.some((p) => p.id === saved) ? (saved as ConversationMode) : 'general'
 }
 
 export function appearanceSettingsPatch(layout: OverlayLayout): {
@@ -108,12 +111,7 @@ export function resolveOnboardingPlacementSync(input: {
 
 export type AppearancePreviewPhase = 'rest' | 'in' | 'settled' | 'out'
 
-export type AppearancePreviewEvent =
-  | 'click-top'
-  | 'hover-enter'
-  | 'hover-leave'
-  | 'spring-in-end'
-  | 'spring-out-end'
+export type AppearancePreviewEvent = 'click-top' | 'hover-enter' | 'hover-leave' | 'spring-in-end' | 'spring-out-end'
 
 export function appearancePreviewInitialPhase(layout: OverlayLayout): AppearancePreviewPhase {
   return layout === 'bar' ? 'settled' : 'rest'

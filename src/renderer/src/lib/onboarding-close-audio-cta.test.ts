@@ -80,7 +80,9 @@ describe('closing onboarding hard-stops the Goldberg Aria', () => {
   it('Act 6 Ready and unmount halt immediately; Replay halts only after its reset is confirmed', () => {
     const finish = experience.slice(experience.indexOf('const finish = async'))
     expect(finish.indexOf('haltAllOnboardingAudio()')).toBeGreaterThan(-1)
-    expect(finish.indexOf('haltAllOnboardingAudio()')).toBeLessThan(finish.indexOf('onDone({ mode, recordingConsent: true, destination })'))
+    expect(finish.indexOf('haltAllOnboardingAudio()')).toBeLessThan(
+      finish.indexOf('onDone({ mode: modeTouchedRef.current ? mode : undefined, recordingConsent: true, destination })')
+    )
     expect(experience).toMatch(/canMarkOnboardingDone\(\{ scene, asrReady, consent \}\)/)
     expect(experience).toMatch(/return \(\) => \{\s*haltAllOnboardingAudio\(\)/)
     expect(experience).not.toMatch(/if \(!bedRef\.current && typeof Audio/)
@@ -92,7 +94,9 @@ describe('closing onboarding hard-stops the Goldberg Aria', () => {
     const replay = settings.slice(settings.indexOf('const replayOnboarding = async'))
     expect(replay.indexOf('const saved = await patch({ onboardingDone: false })')).toBeGreaterThan(-1)
     expect(replay.indexOf('haltAllOnboardingAudio()')).toBeGreaterThan(-1)
-    expect(replay.indexOf('const saved = await patch({ onboardingDone: false })')).toBeLessThan(replay.indexOf('haltAllOnboardingAudio()'))
+    expect(replay.indexOf('const saved = await patch({ onboardingDone: false })')).toBeLessThan(
+      replay.indexOf('haltAllOnboardingAudio()')
+    )
     expect(replay.indexOf('haltAllOnboardingAudio()')).toBeLessThan(replay.indexOf('window.toto.onboardingEnter()'))
     expect(production).toMatch(/querySelectorAll\('audio'\)/)
     expect(production).toMatch(/function haltAllOnboardingAudio/)
@@ -157,7 +161,9 @@ describe('closing onboarding hard-stops the Goldberg Aria', () => {
   it('Ready finish, App after onboardingDone, and exclusive exit lock before leftover play', () => {
     const finish = experience.slice(experience.indexOf('const finish = async'))
     expect(finish.indexOf('lockOnboardingAudio()')).toBeGreaterThan(-1)
-    expect(finish.indexOf('lockOnboardingAudio()')).toBeLessThan(finish.indexOf('onDone({ mode, recordingConsent: true, destination })'))
+    expect(finish.indexOf('lockOnboardingAudio()')).toBeLessThan(
+      finish.indexOf('onDone({ mode: modeTouchedRef.current ? mode : undefined, recordingConsent: true, destination })')
+    )
     const v2 = experience.slice(experience.indexOf('onDone={async ({ mode, recordingConsent, destination })'))
     expect(v2.indexOf('lockOnboardingAudio()')).toBeGreaterThan(-1)
     expect(v2.indexOf('lockOnboardingAudio()')).toBeLessThan(v2.indexOf('onboardingDone: true'))
@@ -169,7 +175,10 @@ describe('closing onboarding hard-stops the Goldberg Aria', () => {
     const index = readFileSync(join(__dirname, '../../../main/index.ts'), 'utf8')
     expect(index).toMatch(/function lockOnboardingAudioInRenderer/)
     expect(index).toMatch(/ONBOARDING_AUDIO_LOCK_EVENT/)
-    const exit = index.slice(index.indexOf('function exitExclusiveOnboardingStage'), index.indexOf('function applyOverlayAlwaysOnTop'))
+    const exit = index.slice(
+      index.indexOf('function exitExclusiveOnboardingStage'),
+      index.indexOf('function applyOverlayAlwaysOnTop')
+    )
     expect(exit.indexOf('lockOnboardingAudioInRenderer(win)')).toBeGreaterThan(-1)
     expect(exit.indexOf('lockOnboardingAudioInRenderer(win)')).toBeLessThan(exit.indexOf('leaveExclusiveOsFullscreen'))
 
@@ -177,7 +186,9 @@ describe('closing onboarding hard-stops the Goldberg Aria', () => {
     expect(replay.indexOf('const saved = await patch({ onboardingDone: false })')).toBeGreaterThan(-1)
     expect(replay.indexOf('unlockOnboardingAudio()')).toBeGreaterThan(-1)
     expect(replay.indexOf('haltAllOnboardingAudio()')).toBeLessThan(replay.indexOf('unlockOnboardingAudio()'))
-    expect(replay.indexOf('const saved = await patch({ onboardingDone: false })')).toBeLessThan(replay.indexOf('unlockOnboardingAudio()'))
+    expect(replay.indexOf('const saved = await patch({ onboardingDone: false })')).toBeLessThan(
+      replay.indexOf('unlockOnboardingAudio()')
+    )
     expect(replay.indexOf('unlockOnboardingAudio()')).toBeLessThan(replay.indexOf('window.toto.onboardingEnter()'))
     expect(ONBOARDING_AUDIO_LOCK_EVENT).toBe('metis-onboarding-audio-lock')
   })

@@ -22,8 +22,10 @@ const REFUSAL_COPY: Record<NonNullable<CloudSpeechCapability['refusal']>, string
 
 export function cloudSpeechRowStatus(
   capability: CloudSpeechCapability | null,
-  requestedEngine?: CloudSpeechEngine | null
+  requestedEngine?: CloudSpeechEngine | null,
+  checkFailed = false
 ): CloudSpeechRowStatus {
+  if (!capability && checkFailed) return { state: 'action', detail: "Couldn't check cloud speech. Try again." }
   if (!capability) return { state: 'checking', detail: 'Checking the approved cloud speech route…' }
   if (!capability.ready || !capability.selected || capability.refusal) {
     return {

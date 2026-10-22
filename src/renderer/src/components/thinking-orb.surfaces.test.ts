@@ -18,7 +18,6 @@ const SURFACES = [
   'RecallView.tsx',
   'UpcomingSection.tsx',
   'ReviewEntityStrip.tsx',
-  'Onboarding.tsx',
   'OnboardingExperience.tsx',
   'ui.tsx'
 ]

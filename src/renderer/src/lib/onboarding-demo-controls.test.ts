@@ -28,12 +28,18 @@ function harness(duration = 1000) {
       pending.set(id, callback)
       return id
     },
-    cancel: (id: number) => { pending.delete(id) }
+    cancel: (id: number) => {
+      pending.delete(id)
+    }
   }
   const clock = createDemoPlaybackClock(duration, scheduler, (frame) => frames.push(frame))
   return {
-    clock, pending, frames,
-    at(value: number) { time = value },
+    clock,
+    pending,
+    frames,
+    at(value: number) {
+      time = value
+    },
     tick(value: number) {
       time = value
       const callbacks = [...pending.values()]
@@ -108,13 +114,16 @@ describe('onboarding demo pacing and lifecycle', () => {
     h.clock.play()
     expect(h.clock.snapshot()).toEqual({ elapsedMs: 1000, phase: 'held' })
     expect(h.pending.size).toBe(0)
-    expect(demoPlaybackStatus('held', { hidden: false, reducedMotion: true }, false))
-      .toContain('All content')
+    expect(demoPlaybackStatus('held', { hidden: false, reducedMotion: true }, false)).toContain('All content')
   })
 
   it('optional synchronous and rejected media attempts never own navigation', async () => {
     const calls: string[] = []
-    expect(() => runOptionalDemoMedia(() => { throw new Error('test media error') })).not.toThrow()
+    expect(() =>
+      runOptionalDemoMedia(() => {
+        throw new Error('test media error')
+      })
+    ).not.toThrow()
     runOptionalDemoMedia(() => {
       calls.push('media')
       return Promise.reject(new Error('test rejection'))
@@ -138,9 +147,8 @@ describe('onboarding demo pacing and lifecycle', () => {
       removeEventListener: (name: string) => motionEvents.delete(name)
     }
     const changes: unknown[] = []
-    const stop = watchDemoEnvironment(
-      owner as unknown as Document, media as unknown as MediaQueryList,
-      (next) => changes.push(next)
+    const stop = watchDemoEnvironment(owner as unknown as Document, media as unknown as MediaQueryList, (next) =>
+      changes.push(next)
     )
     const stale = documentEvents.get('visibilitychange')!
     owner.visibilityState = 'hidden'
@@ -225,7 +233,11 @@ describe('demo orchestrator — the one owner of pause/replay/previous/advance',
     const state = { beat: 1, replayKey: 0, paused: false }
     const model = beatModel()
     expect(demoOrchestratorSnapshot(state, 400, false, model)).toEqual({
-      beat: 1, replayKey: 0, paused: false, hasNext: true, elapsedMs: 1400
+      beat: 1,
+      replayKey: 0,
+      paused: false,
+      hasNext: true,
+      elapsedMs: 1400
     })
     expect(demoOrchestratorSnapshot(state, 400, true, model)).toMatchObject({ elapsedMs: 2000 })
     expect(demoOrchestratorSnapshot({ ...state, beat: 3 }, 0, false, model)).toMatchObject({ hasNext: false })

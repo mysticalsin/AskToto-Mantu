@@ -28,7 +28,9 @@ describe('onboarding completion flow', () => {
   it('offers encrypted-profile recovery only for the safe, explicit key-unlock failure class', () => {
     expect(
       isEncryptedProfileRecoveryError(
-        new Error(`${ENCRYPTED_PROFILE_RECOVERY_ERROR_PREFIX} Unlock or grant access to the original macOS Keychain, then try again.`)
+        new Error(
+          `${ENCRYPTED_PROFILE_RECOVERY_ERROR_PREFIX} Unlock or grant access to the original macOS Keychain, then try again.`
+        )
       )
     ).toBe(true)
     expect(isEncryptedProfileRecoveryError(new Error('EACCES writing settings.json'))).toBe(false)
@@ -39,7 +41,8 @@ describe('onboarding completion flow', () => {
 
   it('keeps an archive failure honest without exposing its local recovery path', () => {
     const message = encryptedProfileRecoveryFailureMessage({
-      error: 'Could not finish the profile archive. The partial recovery copy was left at /private/user-data/.metis-recovery-secret.'
+      error:
+        'Could not finish the profile archive. The partial recovery copy was left at /private/user-data/.metis-recovery-secret.'
     })
 
     expect(message).toContain('some encrypted files may be in the local recovery folder')
@@ -132,9 +135,19 @@ describe('onboarding completion flow', () => {
     const events: string[] = []
     const flow = createOnboardingCompletionFlow(() => {})
 
-    expect(await flow.attempt(async () => false, () => events.push('settings'))).toBe('blocked')
+    expect(
+      await flow.attempt(
+        async () => false,
+        () => events.push('settings')
+      )
+    ).toBe('blocked')
     expect(events).toEqual([])
-    expect(await flow.attempt(async () => true, () => events.push('settings'))).toBe('completed')
+    expect(
+      await flow.attempt(
+        async () => true,
+        () => events.push('settings')
+      )
+    ).toBe('completed')
     expect(events).toEqual(['settings'])
   })
 
@@ -149,7 +162,7 @@ describe('onboarding completion flow', () => {
           onboardingDone: true,
           onboardingDoneAt: 123
         },
-        patch: async () => ({ onboardingDone: false } as never),
+        patch: async () => ({ onboardingDone: false }) as never,
         onCompleted: () => events.push('completed')
       })
     ).rejects.toThrow(ONBOARDING_COMPLETION_NOT_SAVED_ERROR)

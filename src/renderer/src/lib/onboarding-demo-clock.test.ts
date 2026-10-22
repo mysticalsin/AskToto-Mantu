@@ -14,7 +14,9 @@ describe('Act 2 demo clock — DOM cursor, not setState every rAF', () => {
     expect(demo).toMatch(/cursorEl\.style\.transform/)
     expect(demo).toMatch(/setLocalMs\(next\.localMs\)/)
     // The rAF tick must not setState every frame. Commit only at beat hold or DEMO_COMMIT_MS.
-    expect(demo).not.toMatch(/const tick = \(now: number\): void => \{\s*const local = now - t0\s*\n\s*setLocalMs\(local\)/)
+    expect(demo).not.toMatch(
+      /const tick = \(now: number\): void => \{\s*const local = now - t0\s*\n\s*setLocalMs\(local\)/
+    )
     expect(demo).toMatch(/local - lastCommitRef\.current >= DEMO_COMMIT_MS/)
     expect(demo).toMatch(/prefetchOnboardingDemoChunks/)
     expect(experience).toMatch(/prefetchOnboardingDemoChunks\(\)/)

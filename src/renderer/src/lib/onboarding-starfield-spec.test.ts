@@ -75,7 +75,9 @@ describe('Starfield Close — CONFIG, layers, shaders verbatim', () => {
   it('pins all four shader strings', () => {
     expect(STARFIELD_VERTEX_SHADER).toContain('pos.z = mod(pos.z + uDrift + (uDepth * 0.5), uDepth) - (uDepth * 0.5);')
     expect(STARFIELD_VERTEX_SHADER).toContain('normalize(toParticle + vec3(0.0001))')
-    expect(STARFIELD_FRAGMENT_SHADER).toContain('gl_FragColor = vec4(color * uBrightness, strength * uOpacity * vTwinkle);')
+    expect(STARFIELD_FRAGMENT_SHADER).toContain(
+      'gl_FragColor = vec4(color * uBrightness, strength * uOpacity * vTwinkle);'
+    )
     expect(FINAL_VERTEX_SHADER).toBe('varying vec2 vUv; void main(){ vUv = uv; gl_Position = vec4(position, 1.0); }')
     expect(FINAL_FRAGMENT_SHADER).toContain('vec3 warp3d(vec3 pos, float t)')
     expect(FINAL_FRAGMENT_SHADER).toContain('texture2D(bloomTexture, vUv).xyz + texture2D(torusTexture, vUv).xyz')
@@ -135,7 +137,9 @@ describe('Starfield Close — local three, no CDN', () => {
 
 describe('Starfield Close — leftover engine must not slide the stage', () => {
   it('hero video keep-alive through problem/reveal; leftover engine has no ndc camera parallax', () => {
-    expect(experienceSrc).toMatch(/\(scene === 'hero' \|\| scene === 'problem' \|\| scene === 'reveal'\) && \(\s*<OnboardingHeroVideo/)
+    expect(experienceSrc).toMatch(
+      /\(scene === 'hero' \|\| scene === 'problem' \|\| scene === 'reveal'\) && \(\s*<OnboardingHeroVideo/
+    )
     expect(engineSrc).not.toMatch(/ndc\.x \* CONFIG\.parallax/)
     expect(engineSrc).toMatch(/camera\.position\.set\(0, 0, 5 - scroll \* CONFIG\.scrollPush\)/)
     expect(engineSrc).toMatch(/setClearColor\(0x05010a/)

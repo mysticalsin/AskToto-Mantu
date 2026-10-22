@@ -27,6 +27,7 @@ import {
   resolveOnboardingPlacementSync,
   saveOnboardingAppearanceChoice,
   seedOnboardingAppearance,
+  seedOnboardingMode,
   seedOnboardingPlacement
 } from './onboarding-appearance'
 import { shouldMountKineticGrid, KINETIC_GRID_SCENES } from './onboarding-kinetic-grid'
@@ -98,9 +99,30 @@ describe('onboarding appearance — persist existing overlay', () => {
   })
 
   it('adopts real or managed settings after boot without overwriting an in-flow choice', () => {
-    expect(resolveOnboardingPlacementSync({ current: 'top-center', incoming: 'right-edge', userSelected: false, managed: false })).toBe('right-edge')
-    expect(resolveOnboardingPlacementSync({ current: 'top-center', incoming: 'right-edge', userSelected: true, managed: false })).toBeNull()
-    expect(resolveOnboardingPlacementSync({ current: 'top-center', incoming: 'right-edge', userSelected: true, managed: true })).toBe('right-edge')
+    expect(
+      resolveOnboardingPlacementSync({
+        current: 'top-center',
+        incoming: 'right-edge',
+        userSelected: false,
+        managed: false
+      })
+    ).toBe('right-edge')
+    expect(
+      resolveOnboardingPlacementSync({
+        current: 'top-center',
+        incoming: 'right-edge',
+        userSelected: true,
+        managed: false
+      })
+    ).toBeNull()
+    expect(
+      resolveOnboardingPlacementSync({
+        current: 'top-center',
+        incoming: 'right-edge',
+        userSelected: true,
+        managed: true
+      })
+    ).toBe('right-edge')
   })
 
   it('commits an appearance only when the trusted settings response confirms it', async () => {
@@ -112,7 +134,9 @@ describe('onboarding appearance — persist existing overlay', () => {
     ).resolves.toBe(false)
     await expect(
       saveOnboardingAppearanceChoice(
-        async () => { throw new Error('keychain unavailable') },
+        async () => {
+          throw new Error('keychain unavailable')
+        },
         (saved) => saved.overlayLayout === 'bar'
       )
     ).resolves.toBe(false)
@@ -125,7 +149,9 @@ describe('onboarding appearance — persist existing overlay', () => {
   })
 
   it('finish / onDone never writes overlayLayout', () => {
-    expect(experience).toMatch(/mode, recordingConsent, onboardingDone: true, onboardingDoneAt: Date\.now\(\)/)
+    expect(experience).toMatch(
+      /\.\.\.\(mode \? \{ mode \} : \{\}\),\s*recordingConsent,\s*onboardingDone: true,\s*onboardingDoneAt: Date\.now\(\)/
+    )
     expect(experience).not.toMatch(/onDone\(\{[\s\S]*overlayLayout/)
     expect(experience).toMatch(/appearanceSettingsPatch\(id\)/)
     expect(experience).toMatch(/persistOverlayPlacement\(id, appearance, patch\)/)
@@ -146,7 +172,9 @@ describe('onboarding appearance — Tony copy', () => {
     expect(ONBOARDING_APPEARANCE_COPY.bar.title).toBe('Bar')
     expect(ONBOARDING_APPEARANCE_HEADING).toBe('How should Métis look?')
     expect(ONBOARDING_APPEARANCE_LEAD).toMatch(/Choose a resting shape/)
-    const all = `${ONBOARDING_APPEARANCE_HEADING} ${ONBOARDING_APPEARANCE_LEAD} ${Object.values(ONBOARDING_APPEARANCE_COPY)
+    const all = `${ONBOARDING_APPEARANCE_HEADING} ${ONBOARDING_APPEARANCE_LEAD} ${Object.values(
+      ONBOARDING_APPEARANCE_COPY
+    )
       .map((c) => `${c.title} ${c.desc}`)
       .join(' ')}`
     expect(all).not.toMatch(/\u2014/)
@@ -189,13 +217,37 @@ describe('onboarding appearance — live preview, no lag', () => {
   })
 
   it('keeps right-edge Hidden invisible and gives Island the visible rail', () => {
-    expect(appearancePreviewEdgeState('hide', 'rest')).toEqual({ showRail: false, showDrawer: false, showEdgeGlow: true })
+    expect(appearancePreviewEdgeState('hide', 'rest')).toEqual({
+      showRail: false,
+      showDrawer: false,
+      showEdgeGlow: true
+    })
     expect(appearancePreviewEdgeState('hide', 'in')).toEqual({ showRail: false, showDrawer: true, showEdgeGlow: false })
-    expect(appearancePreviewEdgeState('island', 'rest')).toEqual({ showRail: true, showDrawer: false, showEdgeGlow: false })
-    expect(appearancePreviewEdgeState('island', 'in')).toEqual({ showRail: true, showDrawer: true, showEdgeGlow: false })
-    expect(appearancePreviewEdgeState('island', 'settled')).toEqual({ showRail: true, showDrawer: true, showEdgeGlow: false })
-    expect(appearancePreviewEdgeState('island', 'out')).toEqual({ showRail: true, showDrawer: true, showEdgeGlow: false })
-    expect(appearancePreviewEdgeState('bar', 'settled')).toEqual({ showRail: false, showDrawer: false, showEdgeGlow: false })
+    expect(appearancePreviewEdgeState('island', 'rest')).toEqual({
+      showRail: true,
+      showDrawer: false,
+      showEdgeGlow: false
+    })
+    expect(appearancePreviewEdgeState('island', 'in')).toEqual({
+      showRail: true,
+      showDrawer: true,
+      showEdgeGlow: false
+    })
+    expect(appearancePreviewEdgeState('island', 'settled')).toEqual({
+      showRail: true,
+      showDrawer: true,
+      showEdgeGlow: false
+    })
+    expect(appearancePreviewEdgeState('island', 'out')).toEqual({
+      showRail: true,
+      showDrawer: true,
+      showEdgeGlow: false
+    })
+    expect(appearancePreviewEdgeState('bar', 'settled')).toEqual({
+      showRail: false,
+      showDrawer: false,
+      showEdgeGlow: false
+    })
   })
 
   it('matches the right-edge sidecar by revealing Hidden from its rail hover', () => {
@@ -233,7 +285,9 @@ describe('onboarding appearance — live preview, no lag', () => {
   it('keeps right-edge preview drawer animation durations inside the DESIGN motion budget', () => {
     expect(design).toContain('320–380ms in / 280–340ms out')
     const match = (className: string, animationName: string): RegExpMatchArray => {
-      const result = css.match(new RegExp(`\\.${className} \\{\\s*animation:\\s*${animationName} (\\d+)ms var\\(--ease-spring\\) both;\\s*\\}`))
+      const result = css.match(
+        new RegExp(`\\.${className} \\{\\s*animation:\\s*${animationName} (\\d+)ms var\\(--ease-spring\\) both;\\s*\\}`)
+      )
       expect(result, `missing ${animationName} duration`).not.toBeNull()
       return result as RegExpMatchArray
     }
@@ -391,5 +445,28 @@ describe('onboarding appearance — overlay park and Island hover stay out', () 
     expect(appearanceLib).not.toMatch(/restoreParkAfterShow|OVERLAY_HIDE_PARK|hoverWatchRestRect/)
     expect(component).not.toMatch(/src\/main\/island/)
     expect(indexMain).not.toMatch(/from '\.\/onboarding-appearance'/)
+  })
+})
+
+describe('Q09 D1-3: replay keeps the saved persona', () => {
+  it('replay seeds the saved persona', () => {
+    expect(seedOnboardingMode({ mode: 'interview' })).toBe('interview')
+    expect(seedOnboardingMode({ mode: 'sales' })).toBe('sales')
+  })
+
+  it('falls back to general for a first run, a missing value or a custom mode the cards cannot show', () => {
+    expect(seedOnboardingMode(undefined)).toBe('general')
+    expect(seedOnboardingMode(null)).toBe('general')
+    expect(seedOnboardingMode({})).toBe('general')
+    expect(seedOnboardingMode({ mode: '' })).toBe('general')
+    expect(seedOnboardingMode({ mode: 'my-custom-mode' })).toBe('general')
+  })
+
+  it('only writes the persona when the user picked a card', () => {
+    const source = experience
+    expect(source).toMatch(/useState<ConversationMode>\(\(\) => seedOnboardingMode\(settings\)\)/)
+    expect(source).toMatch(/modeTouchedRef/)
+    expect(source).toMatch(/mode: modeTouchedRef\.current \? mode : undefined/)
+    expect(source).toMatch(/\.\.\.\(mode \? \{ mode \} : \{\}\)/)
   })
 })

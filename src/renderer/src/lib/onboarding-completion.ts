@@ -94,7 +94,9 @@ export function createOnboardingCompletionFlow(
 
 /** Keep the durable write ahead of the host callback that exits onboarding or opens another surface. */
 export async function persistOnboardingCompletion(input: {
-  settingsPatch: Pick<PublicSettings, 'mode' | 'recordingConsent' | 'onboardingDone' | 'onboardingDoneAt'>
+  /** `mode` is omitted unless the user picked a persona, so Replay never overwrites the saved one. */
+  settingsPatch: Pick<PublicSettings, 'recordingConsent' | 'onboardingDone' | 'onboardingDoneAt'> &
+    Partial<Pick<PublicSettings, 'mode'>>
   patch: (patch: Partial<PublicSettings>) => Promise<PublicSettings>
   onCompleted: () => void
 }): Promise<void> {

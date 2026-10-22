@@ -119,16 +119,15 @@ function useDemoPlayback(wrapRef: RefObject<HTMLDivElement>) {
   const lastCommitRef = useRef(0)
   const clickedForRef = useRef<DemoCursorTarget | null>(null)
 
-  useEffect(() =>
-    watchDemoEnvironment(
-      typeof document === 'undefined' ? null : document,
-      motion,
-      (next) => {
+  useEffect(
+    () =>
+      watchDemoEnvironment(typeof document === 'undefined' ? null : document, motion, (next) => {
         controlsRef.current = { ...controlsRef.current, environment: next }
         clockRef.current?.[demoClockCommand(next, controlsRef.current.paused)]()
         setEnvironment(next)
-      }
-    ), [motion])
+      }),
+    [motion]
+  )
 
   useEffect(() => {
     const beat = orchestrator.beat
@@ -146,8 +145,12 @@ function useDemoPlayback(wrapRef: RefObject<HTMLDivElement>) {
       const wrap = wrapRef.current
       const controls = controlsRef.current
       if (
-        !cursorEl || !wrap || frame.cursor.target === 'none' ||
-        controls.environment.reducedMotion || controls.environment.hidden || controls.paused
+        !cursorEl ||
+        !wrap ||
+        frame.cursor.target === 'none' ||
+        controls.environment.reducedMotion ||
+        controls.environment.hidden ||
+        controls.paused
       ) {
         if (cursorEl) cursorEl.style.opacity = '0'
       } else {
@@ -166,10 +169,7 @@ function useDemoPlayback(wrapRef: RefObject<HTMLDivElement>) {
           cursorEl.style.opacity = '1'
           cursorEl.style.transform = `translate(${p.x - 7}px, ${p.y - 7}px)`
           cursorEl.classList.toggle('demo-cursor-press', frame.cursor.pressed)
-          if (
-            snapshot.phase === 'playing' && frame.cursor.pressed &&
-            clickedForRef.current !== frame.cursor.target
-          ) {
+          if (snapshot.phase === 'playing' && frame.cursor.pressed && clickedForRef.current !== frame.cursor.target) {
             clickedForRef.current = frame.cursor.target
             // The scripted chip is optional decoration, never authority to block Next.
             runOptionalDemoMedia(() => chip.click())
@@ -186,11 +186,15 @@ function useDemoPlayback(wrapRef: RefObject<HTMLDivElement>) {
         setLocalMs(local)
       }
     }
-    const clock = createDemoPlaybackClock(duration, {
-      now: () => performance.now(),
-      request: (callback) => requestAnimationFrame(callback),
-      cancel: (id) => cancelAnimationFrame(id)
-    }, tick)
+    const clock = createDemoPlaybackClock(
+      duration,
+      {
+        now: () => performance.now(),
+        request: (callback) => requestAnimationFrame(callback),
+        cancel: (id) => cancelAnimationFrame(id)
+      },
+      tick
+    )
     // Deliberately no play/pause/finish call here: the sync effect below depends on the same
     // orchestrator.beat/replayKey and runs right after this one in the same commit, so it is
     // the only place that drives a freshly created clock too.
@@ -230,7 +234,11 @@ function useDemoPlayback(wrapRef: RefObject<HTMLDivElement>) {
     status: demoPlaybackStatus(phase, environment, snapshot.paused),
     togglePaused: () => {
       // Stop immediately in the click, rather than waiting for a render/effect.
-      const next = toggleDemoPause(orchestratorRef.current, phaseRef.current, controlsRef.current.environment.reducedMotion)
+      const next = toggleDemoPause(
+        orchestratorRef.current,
+        phaseRef.current,
+        controlsRef.current.environment.reducedMotion
+      )
       if (next === orchestratorRef.current) return
       controlsRef.current = { ...controlsRef.current, paused: next.paused }
       clockRef.current?.[demoClockCommand(controlsRef.current.environment, next.paused)]()
@@ -279,8 +287,19 @@ export function OnboardingDemoScene({
 }): JSX.Element {
   const wrapRef = useRef<HTMLDivElement>(null)
   const {
-    elapsedMs, beat, hasNext, advance, previous, replay, togglePaused,
-    paused, phase, status, replayKey, reducedMotion, cursorRef
+    elapsedMs,
+    beat,
+    hasNext,
+    advance,
+    previous,
+    replay,
+    togglePaused,
+    paused,
+    phase,
+    status,
+    replayKey,
+    reducedMotion,
+    cursorRef
   } = useDemoPlayback(wrapRef)
   const statusId = useId()
   const previewId = useId()
@@ -298,10 +317,18 @@ export function OnboardingDemoScene({
   const demoLines: TranscriptLine[] = frame.lines.map((l) => ({ speaker: l.speaker, text: l.text, t: l.at }))
 
   const suggestionAnswer: AnswerState | null = frame.suggestion
-    ? { id: 'onboarding-demo-suggestion', text: frame.suggestion.text, streaming: frame.suggestion.streaming, error: null, prompt: '' }
+    ? {
+        id: 'onboarding-demo-suggestion',
+        text: frame.suggestion.text,
+        streaming: frame.suggestion.streaming,
+        error: null,
+        prompt: ''
+      }
     : null
 
-  const busy = !!(frame.suggestion?.streaming && frame.stage === 'suggestion') || !!(frame.factcheck?.streaming && frame.stage === 'factcheck')
+  const busy =
+    !!(frame.suggestion?.streaming && frame.stage === 'suggestion') ||
+    !!(frame.factcheck?.streaming && frame.stage === 'factcheck')
 
   const body =
     frame.stage === 'factcheck' ? (
@@ -334,126 +361,146 @@ export function OnboardingDemoScene({
   return (
     <div key="reveal" className="flex min-h-0 w-full flex-1 flex-col items-center gap-4">
       <div className="scene-enter flex min-h-0 w-full flex-1 flex-col items-center gap-4 overflow-y-auto py-2">
-      <h2 className="m-0 text-[24px] font-semibold text-[color:var(--color-ink)]">Here’s what that looks like.</h2>
-      <p className="m-0 text-[13px] text-[color:var(--color-ink-2)]">
-        {hasNext
-          ? 'This clip plays on its own. Next starts the next one.'
-          : 'That’s the full pass. Continue when you’re ready.'}
-      </p>
-      <p id={statusId} role="status" aria-live="polite" aria-atomic="true"
-        className="m-0 max-w-[880px] text-center text-[13px] text-[color:var(--color-ink-2)]">
-        Step {beat + 1} of {DEMO_STAGE_VIDEOS.length}: {DEMO_STAGE_LABELS[frame.stage]}. {status}
-      </p>
-      <p className="m-0 max-w-[880px] text-center text-[12px] text-[color:var(--color-ink-2)]">
-        Scripted example. No recording or desktop actions.
-      </p>
-      <div role="group" aria-label="Example role" className="flex max-w-[880px] flex-wrap justify-center gap-1.5">
-        {CONVERSATION_MODES.map((id) => (
-          <button
-            key={id}
-            type="button"
-            onClick={() => onSetMode(id)}
-            aria-pressed={mode === id}
-            className={
-              'onboard-role-chip no-drag focus-ring rounded-full px-3 py-1.5 text-[11px] font-semibold ' +
-              (mode === id
-                ? 'bg-[#f4f4f5] text-[#09090b]'
-                : 'bg-white/10 text-[color:var(--color-ink-2)] hover:bg-white/16')
-            }
-          >
-            {BUILTIN_MODE_LABELS[id]}
-          </button>
-        ))}
-      </div>
-
-      <div id={previewId} className="w-full max-w-[880px]">
-      <OnboardingDemoPreviewBoundary key={`${beat}:${replayKey}`}>
-      {!frame.meetingEnded ? (
-        <div ref={wrapRef} className="relative w-full max-w-[880px]">
-          <Bar
-            value=""
-            onChange={() => {}}
-            onSubmit={() => {}}
-            onStop={() => {}}
-            busy={busy}
-            listening
-            onToggleListen={() => {}}
-            paused={false}
-            onTogglePause={() => {}}
-            onCapture={() => {}}
-            capturing={false}
-            captureAccel=""
-            onSettings={() => {}}
-            onHistory={() => {}}
-            onMinimize={() => {}}
-            stealth={false}
-            onToggleStealth={() => {}}
-            startedAt={startedAtRef.current}
-            panelOpen={false}
-            onTogglePanel={() => {}}
-            canTogglePanel={false}
-            focusSignal={0}
-            mode="general"
-            onSetMode={() => {}}
-            body={body}
-            onNewMeeting={() => {}}
-            onTranscript={() => {}}
-            transcriptShown
-          />
-          <QuickActions
-            onAction={() => {}}
-            rainbowRing={!frame.suggestion && !frame.factcheck}
-            providerReady
-            localSummaryReady
-            localSuggestReady
-            localFallbackReady
-          />
-          {!reducedMotion && (
-            <div ref={cursorRef} aria-hidden="true" className="demo-cursor" style={{ opacity: 0 }} />
-          )}
+        <h2 className="m-0 text-[24px] font-semibold text-[color:var(--color-ink)]">Here’s what that looks like.</h2>
+        <p className="m-0 text-[13px] text-[color:var(--color-ink-2)]">
+          {hasNext
+            ? 'This clip plays on its own. Next starts the next one.'
+            : 'That’s the full pass. Continue when you’re ready.'}
+        </p>
+        <p
+          id={statusId}
+          role="status"
+          aria-live="polite"
+          aria-atomic="true"
+          className="m-0 max-w-[880px] text-center text-[13px] text-[color:var(--color-ink-2)]"
+        >
+          Step {beat + 1} of {DEMO_STAGE_VIDEOS.length}: {DEMO_STAGE_LABELS[frame.stage]}. {status}
+        </p>
+        <p className="m-0 max-w-[880px] text-center text-[12px] text-[color:var(--color-ink-2)]">
+          Scripted example. No recording or desktop actions.
+        </p>
+        <div role="group" aria-label="Example role" className="flex max-w-[880px] flex-wrap justify-center gap-1.5">
+          {CONVERSATION_MODES.map((id) => (
+            <button
+              key={id}
+              type="button"
+              onClick={() => onSetMode(id)}
+              aria-pressed={mode === id}
+              className={
+                'onboard-role-chip no-drag focus-ring rounded-full px-3 py-1.5 text-[11px] font-semibold ' +
+                (mode === id
+                  ? 'bg-[#f4f4f5] text-[#09090b]'
+                  : 'bg-white/10 text-[color:var(--color-ink-2)] hover:bg-white/16')
+              }
+            >
+              {BUILTIN_MODE_LABELS[id]}
+            </button>
+          ))}
         </div>
-      ) : (
-        <DemoRecapCard mode={mode} />
-      )}
-      </OnboardingDemoPreviewBoundary>
-      </div>
+
+        {/* Illustrative only: the real Bar and QuickActions run with no-op handlers, so the whole preview is
+      inert (no focus, no pointer, hidden from assistive tech). Playback and Continue stay outside it.
+      React 18 does not know `inert`; an empty string renders the boolean attribute. */}
+        <div id={previewId} className="w-full max-w-[880px]" {...({ inert: '' } as Record<string, string>)}>
+          <OnboardingDemoPreviewBoundary key={`${beat}:${replayKey}`}>
+            {!frame.meetingEnded ? (
+              <div ref={wrapRef} className="relative w-full max-w-[880px]">
+                <Bar
+                  value=""
+                  onChange={() => {}}
+                  onSubmit={() => {}}
+                  onStop={() => {}}
+                  busy={busy}
+                  listening
+                  onToggleListen={() => {}}
+                  paused={false}
+                  onTogglePause={() => {}}
+                  onCapture={() => {}}
+                  capturing={false}
+                  captureAccel=""
+                  onSettings={() => {}}
+                  onHistory={() => {}}
+                  onMinimize={() => {}}
+                  stealth={false}
+                  onToggleStealth={() => {}}
+                  startedAt={startedAtRef.current}
+                  panelOpen={false}
+                  onTogglePanel={() => {}}
+                  canTogglePanel={false}
+                  focusSignal={0}
+                  mode="general"
+                  onSetMode={() => {}}
+                  body={body}
+                  onNewMeeting={() => {}}
+                  onTranscript={() => {}}
+                  transcriptShown
+                />
+                <QuickActions
+                  onAction={() => {}}
+                  rainbowRing={!frame.suggestion && !frame.factcheck}
+                  providerReady
+                  localSummaryReady
+                  localSuggestReady
+                  localFallbackReady
+                />
+                {!reducedMotion && (
+                  <div ref={cursorRef} aria-hidden="true" className="demo-cursor" style={{ opacity: 0 }} />
+                )}
+              </div>
+            ) : (
+              <DemoRecapCard mode={mode} />
+            )}
+          </OnboardingDemoPreviewBoundary>
+        </div>
       </div>
 
       <div className="flex w-full shrink-0 flex-col items-center gap-3">
-        <div role="group" aria-label="Demo playback"
-          className="flex max-w-[880px] flex-wrap items-center justify-center gap-2">
-          <button type="button" className="onboard-cta no-drag focus-ring"
-            disabled={beat === 0} aria-controls={previewId} onClick={previous}>
+        <div
+          role="group"
+          aria-label="Demo playback"
+          className="flex max-w-[880px] flex-wrap items-center justify-center gap-2"
+        >
+          <button
+            type="button"
+            className="onboard-cta no-drag focus-ring"
+            disabled={beat === 0}
+            aria-controls={previewId}
+            onClick={previous}
+          >
             Previous
           </button>
           {!reducedMotion && (
-            <button type="button" className="onboard-cta no-drag focus-ring"
-              disabled={phase === 'held'} aria-pressed={paused}
-              aria-controls={previewId} onClick={togglePaused}>
+            <button
+              type="button"
+              className="onboard-cta no-drag focus-ring"
+              disabled={phase === 'held'}
+              aria-pressed={paused}
+              aria-controls={previewId}
+              onClick={togglePaused}
+            >
               {paused ? 'Resume demo' : 'Pause demo'}
             </button>
           )}
-          <button type="button" className="onboard-cta no-drag focus-ring"
-            aria-controls={previewId} onClick={replay}>
+          <button type="button" className="onboard-cta no-drag focus-ring" aria-controls={previewId} onClick={replay}>
             Replay this step
           </button>
         </div>
         <div role="group" aria-label="Continue onboarding" className="flex flex-wrap justify-center gap-3">
-        <button
-          type="button"
-          aria-describedby={statusId}
-          onClick={() => {
-            onPlayVideo?.()
-            if (demoNextLeavesTour(beat)) onContinue()
-            else advance()
-          }}
-          className="onboard-cta no-drag focus-ring"
-        >
-          Next
-        </button>
-        <button type="button" onClick={onContinue} className="onboard-cta no-drag focus-ring">
-          Set me up
-        </button>
+          <button
+            type="button"
+            aria-describedby={statusId}
+            onClick={() => {
+              onPlayVideo?.()
+              if (demoNextLeavesTour(beat)) onContinue()
+              else advance()
+            }}
+            className="onboard-cta no-drag focus-ring"
+          >
+            Next
+          </button>
+          <button type="button" onClick={onContinue} className="onboard-cta no-drag focus-ring">
+            Set me up
+          </button>
         </div>
       </div>
     </div>

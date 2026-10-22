@@ -26,7 +26,9 @@ describe('MQA-283 — the narrative experience now ends at Ready, not a legacy p
 
   it("OnboardingV2 marks onboardingDone itself inside the experience's onDone, not via a provider phase", () => {
     expect(experienceSrc).toMatch(/await persistOnboardingCompletion\(\{/)
-    expect(experienceSrc).toMatch(/mode, recordingConsent, onboardingDone: true, onboardingDoneAt: Date\.now\(\)/)
+    expect(experienceSrc).toMatch(
+      /\.\.\.\(mode \? \{ mode \} : \{\}\),\s*recordingConsent,\s*onboardingDone: true,\s*onboardingDoneAt: Date\.now\(\)/
+    )
     expect(experienceSrc).toMatch(/onCompleted: onDone/)
   })
 
@@ -179,5 +181,35 @@ describe('MQA-283 — Replay onboarding in Settings re-arms the same gate a firs
     expect(block).toMatch(/Métis couldn't start setup again\. Try again\./)
     expect(block).not.toMatch(/onboardingDoneAt/)
     expect(settingsSrc).toMatch(/role="alert"/)
+  })
+})
+
+describe('Q09 — onboarding correctness structure', () => {
+  it('the 2 second fail-open timers never latch asrStatus to error (D1-11)', () => {
+    const timer = experienceSrc.slice(
+      experienceSrc.indexOf('const asrSetupTimeout'),
+      experienceSrc.indexOf('const poll = async')
+    )
+    expect(timer).toContain('setSetupAccessFailOpen(true)')
+    expect(timer).not.toMatch(/status: 'error'/)
+    expect(timer).not.toContain('needs attention')
+    // The scene-mount scan races the same 2 s window and must not hand back an error object either.
+    expect(experienceSrc).not.toMatch(
+      /status: 'error',\s*progress: 0,\s*label: 'Transcription files are still downloading/
+    )
+    expect(experienceSrc).toContain('asrStatusWhileStillDownloading(')
+  })
+
+  it('locks and explains the managed screen-ask toggle, and catches a rejected patch (D1-4)', () => {
+    expect(experienceSrc).toMatch(/managedKeys\?\.includes\('screenAsk'\)/)
+    expect(experienceSrc).toMatch(/disabled=\{screenAskManaged\}/)
+    expect(experienceSrc).toMatch(/Managed by your organization\./)
+    expect(experienceSrc).toMatch(/void patch\(\{ screenAsk: v \}\)\.catch\(/)
+  })
+
+  it('moves focus to the scene heading on every scene change and retries a failed cloud check (D1-7, D1-10)', () => {
+    expect(experienceSrc).toMatch(/useSceneHeadingFocus<HTMLDivElement>\(scene\)/)
+    expect(experienceSrc).toMatch(/ref=\{tourSlotRef\}/)
+    expect(experienceSrc).toMatch(/cloudSpeech\.refresh\(true\)/)
   })
 })
