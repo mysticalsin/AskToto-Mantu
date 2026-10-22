@@ -6,6 +6,7 @@ import { TranscriptLineSchema, type TranscriptLine } from './transcript-line'
 import { CloudSpeechSettingsSchema, DEFAULT_CLOUD_SPEECH_SETTINGS } from './broker-speech-settings'
 import type { ProviderId } from './providers'
 import { LocalVisionEvidenceSchema } from './local-ai'
+import { AskContextRequestSchema } from './session-context-request'
 import { EntityKindSchema } from './brain'
 import { OPERATOR_LICENSE_MAX } from './operator-license'
 import { OPERATOR_TIERS } from './operator-entitlements'
@@ -811,27 +812,26 @@ const AskStartBaseSchema = z.object({
   localSessionId: z.string().uuid().optional(),
   /** Bounded evidence from the packaged local vision worker. */
   visionEvidence: LocalVisionEvidenceSchema.optional(),
-  /** raw transcript text for suggest mode */
+  /** Saved-meeting transcript for summary and recap only. Live context is main-derived: see `context`. */
   transcript: z.string().optional(),
+  /** Which conversation context main derives from its own ledger for this ask (suggest, screen, follow-up). */
+  context: AskContextRequestSchema.optional(),
   /** 'deeper' = the user tapped "Go deeper" → re-ask for a fuller answer (injected per-turn, never cached) */
   depth: z.enum(['deeper']).optional(),
   /** 'factcheck' = a verification ask → the router sends it to the strongest model (verifier path). */
   kind: z.enum(['answer', 'factcheck']).optional(),
-  /** When true, main redacts high-confidence secrets (cards, API keys, SSNs, private keys — same
-   *  redactSecrets() used on req.transcript) out of THIS request's `prompt` before it reaches a cloud
-   *  model. For prompts built from auto-captured content (e.g. fact-check's transcript fallback), never
-   *  from the user's own typed text — the "typed questions are never changed" promise depends on this
-   *  staying unset on any typed-claim/typed-question ask. Optional/undefined (not defaulted) like the
-   *  other per-turn flags above so every existing caller is unaffected. */
+  /** When true, main redacts high-confidence secrets (cards, API keys, SSNs, private keys, as redactSecrets()
+   *  does for the transcript) out of THIS request's `prompt` before it reaches a cloud model. For prompts built
+   *  from captured content only, never the user's typed text: "typed questions are never changed" depends on
+   *  it staying unset there. Optional (not defaulted) like the other per-turn flags. */
   redactPrompt: z.boolean().optional(),
   /** Pins a specific Dust agent sId regardless of tier routing (e.g. Spotlight Ref). Dust-only; ignored by other providers. */
   agentOverride: z.string().optional(),
   /** Forces this one request to a specific provider regardless of the globally active `provider` setting —
    *  e.g. cascading a recap/follow-up/Spotlight-Ref request into Dust even when Kimi/Anthropic/etc. is active. */
   providerOverride: ProviderIdSchema.optional(),
-  /** Receipt Mode: relevant past-meeting knowledge, assembled in main from the brain (never sent by the
-   *  renderer — main overwrites it after parse). Injected per-turn into the user text so it never pollutes
-   *  or invalidates the cached system prompt. Capped for defense-in-depth against a hostile renderer. */
+  /** Receipt Mode: past-meeting knowledge assembled in main from the brain (main overwrites it after parse).
+   *  Injected per-turn into the user text so it never invalidates the cached system prompt. Capped. */
   brainContext: z.string().max(8000).optional(),
   /** Renderer INTENT flag for a screen-ask fast-path: "answer this using the pre-analyzed screen context you
    *  have cached, instead of me capturing + uploading a fresh image." A boolean only — the renderer never

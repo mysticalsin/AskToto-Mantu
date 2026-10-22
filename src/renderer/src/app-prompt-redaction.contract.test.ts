@@ -1,11 +1,12 @@
 /**
  * Contract: every ask built from captured speech or screen text is redacted before it leaves the device
- * (Q01 / D5-1, D5-2, D5-5). Main redacts only `req.transcript` and prompts flagged `redactPrompt`, and must
- * never touch the user's typed text, so each renderer call site that embeds the transcript in `prompt`
- * has to opt in explicitly. A TypeScript AST walk over App.tsx finds every `*.run({ prompt })` and
- * `askScreen(prompt, opts)` call, resolves the prompt expression one declaration deep, and fails any
- * transcript-derived site that is neither flagged nor routed through the redacting helpers. The expected
- * enclosing-function list is explicit, so a new site fails until a human classifies it.
+ * (Q01 / D5-1, D5-2, D5-5), and the renderer sends no live transcript at all (G13). Main redacts `req.transcript`,
+ * the slots it fills from its own ledger, and prompts flagged `redactPrompt`, and must never touch the user's
+ * typed text, so each renderer call site that puts the transcript in a `prompt` has to either flag the prompt or
+ * declare the `context` main fills the slot from. A TypeScript AST walk over App.tsx finds every
+ * `*.run({ prompt })` and `askScreen(prompt, opts)` call, resolves the prompt expression one declaration deep,
+ * and fails any transcript-derived site that does neither. The expected enclosing-function list is explicit, so
+ * a new site fails until a human classifies it.
  */
 import ts from 'typescript'
 import { describe, expect, it } from 'vitest'
@@ -22,7 +23,12 @@ interface Site {
   node: ts.CallExpression
 }
 
-const TRANSCRIPT_TOKEN = /listen\.text\(|\btx\b|\btranscript\b|transcriptToText\(/
+const TRANSCRIPT_TOKEN =
+  /listen\.text\(|\btx\b|\btranscript\b|transcriptToText\(|withContext\(|assistPrompt\(|TRANSCRIPT_SLOT|noDecisionAsk\(/
+
+/** Whether a call's object declares a `context`, directly or in a conditional spread. */
+const declaresContext = (call: ts.Node | undefined): boolean =>
+  !!call && ts.isObjectLiteralExpression(call) && /\bcontext\s*:/.test(call.getText(file))
 
 function propOf(obj: ts.ObjectLiteralExpression, name: string): ts.ObjectLiteralElementLike | undefined {
   return obj.properties.find((p) => p.name !== undefined && p.name.getText(file) === name)
@@ -132,11 +138,12 @@ describe('transcript-derived asks redact (Q01)', () => {
     expect(sites.length).toBeGreaterThan(15)
   })
 
-  it('every transcript-derived ask redacts', () => {
+  it('every transcript-derived ask redacts: the prompt is flagged, or it declares the context main fills and redacts', () => {
     const unprotected = derived.filter((s) => {
       if (s.hasRedactFlag) return false
-      // Typed question + transcript: only the transcript part is redacted, in the renderer.
-      return !/transcriptForPrompt\(|withContext\([\s\S]*redact/.test(s.resolved)
+      // Typed question + transcript slot: main redacts the slot only, never the typed part.
+      const call = s.node.arguments[0]
+      return !declaresContext(call) && !/withContext\(/.test(s.resolved)
     })
     expect(unprotected.map((s) => `${s.fn}: ${s.callee}`)).toEqual([])
   })
@@ -144,8 +151,20 @@ describe('transcript-derived asks redact (Q01)', () => {
   it('the classified set of transcript-derived call sites is explicit', () => {
     const fns = [...new Set(derived.map((s) => s.fn))].sort()
     expect(fns).toEqual(
-      ['assist', 'generateColdCallCoaching', 'onQuickAction', 'spotlightRef', 'submit', 'useEffect', 'whatNext'].sort()
+      ['assist', 'generateColdCallCoaching', 'onQuickAction', 'spotlightRef', 'submit', 'whatNext'].sort()
     )
+  })
+
+  it('a prompt that embeds a transcript slot declares a context, so main can fill it', () => {
+    const slotted = sites.filter(
+      (s) => s.callee !== 'askScreen' && /TRANSCRIPT_SLOT|withContext\(|assistPrompt\(/.test(s.resolved)
+    )
+    expect(slotted.length).toBeGreaterThan(0)
+    const missing = slotted.filter((s) => {
+      const call = s.node.arguments[0]
+      return !declaresContext(call)
+    })
+    expect(missing.map((s) => `${s.fn}: ${s.callee}`)).toEqual([])
   })
 
   it('askScreen forwards redactPrompt into all three of its asks', () => {
@@ -162,6 +181,8 @@ describe('transcript-derived asks redact (Q01)', () => {
     const runs = body.match(/ask\.run\(\{[\s\S]*?\}\)/g) ?? []
     expect(runs.length).toBe(3)
     for (const r of runs) expect(r).toMatch(/redactPrompt:\s*opts\?\.redactPrompt/)
+    // The slot a screen prompt carries is filled by main: every run declares the context derived from that prompt.
+    for (const r of runs) expect(r).toMatch(/context:\s*screenRunContext\(prompt,/)
   })
 
   it('typed text is never flagged: the typed screen-asks pass no redactPrompt', () => {
@@ -179,28 +200,40 @@ describe('transcript-derived asks redact (Q01)', () => {
   })
 })
 
-describe('transcript tails (D5-5)', () => {
-  it('every non-recap ask that sends a transcript slices it to the tail', () => {
+describe('the renderer sends no live transcript (G13, D5-5)', () => {
+  const runCalls: Array<{ fn: string; obj: ts.ObjectLiteralExpression }> = []
+  const visit = (node: ts.Node): void => {
+    if (
+      ts.isCallExpression(node) &&
+      /\.run$/.test(node.expression.getText(file)) &&
+      node.arguments[0] &&
+      ts.isObjectLiteralExpression(node.arguments[0])
+    )
+      runCalls.push({ fn: enclosingName(node), obj: node.arguments[0] })
+    ts.forEachChild(node, visit)
+  }
+  visit(file)
+
+  it('only a saved-meeting summary or recap puts a `transcript` on a request', () => {
     const bad: string[] = []
-    const visit = (node: ts.Node): void => {
-      if (
-        ts.isCallExpression(node) &&
-        /\.run$/.test(node.expression.getText(file)) &&
-        node.arguments[0] &&
-        ts.isObjectLiteralExpression(node.arguments[0])
-      ) {
-        const obj = node.arguments[0]
-        const tx = propOf(obj, 'transcript')
-        const mode = propOf(obj, 'mode')
-        const modeText = mode ? propInitializerText(mode) : ''
-        if (tx && !/summary|recap/.test(modeText)) {
-          const text = propInitializerText(tx)
-          if (!/transcriptTail\(|\.slice\(-/.test(text)) bad.push(`${enclosingName(node)}: ${text}`)
-        }
-      }
-      ts.forEachChild(node, visit)
+    for (const { fn, obj } of runCalls) {
+      const tx = propOf(obj, 'transcript')
+      const mode = propOf(obj, 'mode')
+      const modeText = mode ? propInitializerText(mode) : ''
+      if (tx && !/summary|recap/.test(modeText)) bad.push(`${fn}: ${propInitializerText(tx)}`)
     }
-    visit(file)
     expect(bad).toEqual([])
+  })
+
+  it('no ask reads, slices or embeds the live transcript text, except the full-meeting coaching and recap asks', () => {
+    const exempt = new Set(['generateColdCallCoaching', 'maybeFireRecap', 'endReview'])
+    const bad = runCalls
+      .filter(({ fn, obj }) => !exempt.has(fn) && !/summary|recap/.test(propOf(obj, 'mode')?.getText(file) ?? ''))
+      .filter(({ obj }) => /listen\.text\(|transcriptTail|\.slice\(-/.test(obj.getText(file)))
+    expect(bad.map(({ fn }) => fn)).toEqual([])
+  })
+
+  it('the renderer no longer has a transcript tail helper to slice with', () => {
+    expect(appModule.text).not.toMatch(/transcriptTail|transcriptForPrompt/)
   })
 })

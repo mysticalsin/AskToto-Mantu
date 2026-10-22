@@ -622,7 +622,11 @@ describe('feedEmptyIsEcho — echo silence is not an ASR stall', () => {
 
   it('is what the Parakeet/Apple empty-run counters gate on (source contract)', () => {
     expect(listenSrc).toMatch(/if \(feedEmptyIsEcho\(res\)\) \{\s*\n\s*parakeetEmptyRunRef\.current = 0/g)
-    expect(listenSrc).toMatch(/if \(res\?\.echo\) \{\s*\n\s*const next = linesRef\.current\.filter/)
+    // The echo drop (the line leaves the transcript and main's ledger) goes through one helper at both sites.
+    expect(listenSrc).toMatch(/if \(res\?\.echo\) \{\s*\r?\n\s*dropCommittedLine\(committedAt\)/)
+    expect(listenSrc).toMatch(
+      /const dropCommittedLine = [\s\S]*?retractCommittedLine\([\s\S]*?linesRef\.current\.filter/
+    )
   })
 })
 

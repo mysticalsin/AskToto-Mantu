@@ -194,3 +194,59 @@ describe('holdForCancel', () => {
     expect(streams.size).toBe(0)
   })
 })
+
+describe('conversation-context gate (G13)', () => {
+  function gated(message: () => string | null) {
+    const streams = new Map<string, { abort: () => void }>()
+    const req: { id: string; brainContext?: string } = { id: 'ask-1' }
+    const onRefused = vi.fn()
+    const dispatch = createBrainContextDispatch({
+      getSettings: () => ({}) as Settings,
+      currentOwner: () => owner,
+      req,
+      streams,
+      onError: vi.fn(),
+      gate: { refusal: message },
+      onRefused
+    })
+    return { streams, dispatch, onRefused }
+  }
+
+  it('dispatches while the gate has no objection', () => {
+    const { dispatch, onRefused } = gated(() => null)
+    const run = vi.fn()
+    dispatch.dispatch(undefined, run)
+    expect(run).toHaveBeenCalledTimes(1)
+    expect(onRefused).not.toHaveBeenCalled()
+  })
+
+  it('refuses at dispatch, aborts the ask, and says so once however many legs try', () => {
+    const { dispatch, onRefused, streams } = gated(() => 'The conversation changed while this answer was starting.')
+    const abort = vi.fn()
+    streams.set('ask-1', { abort })
+    const run = vi.fn()
+    dispatch.dispatch(undefined, run)
+    dispatch.dispatch(undefined, run)
+    expect(run).not.toHaveBeenCalled()
+    expect(abort).toHaveBeenCalledTimes(1)
+    expect(streams.has('ask-1')).toBe(false)
+    expect(onRefused).toHaveBeenCalledTimes(1)
+    expect(onRefused).toHaveBeenCalledWith('The conversation changed while this answer was starting.')
+  })
+
+  it('re-checks after an async proof settles, so a snapshot that went stale meanwhile is not dispatched', async () => {
+    let stale = false
+    const { dispatch, onRefused } = gated(() => (stale ? 'stale' : null))
+    dispatch.set(readyEnvelope())
+    const proof = deferred<boolean>()
+    records.mockReturnValue(proof.promise)
+    sources.mockResolvedValue(true)
+    const run = vi.fn()
+    dispatch.dispatch(undefined, run)
+    stale = true
+    proof.resolve(true)
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(run).not.toHaveBeenCalled()
+    expect(onRefused).toHaveBeenCalledWith('stale')
+  })
+})

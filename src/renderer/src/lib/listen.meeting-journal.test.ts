@@ -171,6 +171,7 @@ const BROKER = { transport: 'broker-v1', engine: 'deepgram-nova3' } as const
 const CONSENT = { engine: 'deepgram-nova3', requestedTracks: ['system'], disclosureVersion: 'cloud-speech-v1' } as const
 
 let appendMeetingJournal: ReturnType<typeof vi.fn>
+let appendSessionLedgerLine: ReturnType<typeof vi.fn>
 
 async function settlePromises(): Promise<void> {
   for (let i = 0; i < 8; i++) await Promise.resolve()
@@ -238,6 +239,7 @@ beforeEach(() => {
   workers = []
   broker.session = null
   appendMeetingJournal = vi.fn(async () => ({ status: 'durable' }))
+  appendSessionLedgerLine = vi.fn(async () => ({ status: 'accepted' }))
   vi.useFakeTimers()
   vi.setSystemTime(STARTED_AT + 10_000)
   const track = {
@@ -259,7 +261,8 @@ beforeEach(() => {
       asrBundled: async () => true,
       speakerEmbed: async () => ({ name: 'Alice' }),
       onMeetingMicCaptureRevoked: () => () => {},
-      appendMeetingJournal: (payload: unknown) => appendMeetingJournal(payload)
+      appendMeetingJournal: (payload: unknown) => appendMeetingJournal(payload),
+      appendSessionLedgerLine: (payload: unknown) => appendSessionLedgerLine(payload)
     },
     addEventListener: () => {},
     removeEventListener: () => {}
@@ -292,6 +295,8 @@ describe('renderer live-journal write seam', () => {
     expect(payload.line.speech?.segment.final).toBe(true)
     expect(payload.line.text).toBe('We agreed to ship the pilot on Tuesday')
     expect(Object.keys(payload).sort()).toEqual(['line', 'startedAt'])
+    // Main sees a relay segment itself and feeds its own ledger from it: the renderer never forwards it.
+    expect(appendSessionLedgerLine).not.toHaveBeenCalled()
   })
 
   it('sends one append per final, in commit order', async () => {
@@ -328,6 +333,12 @@ describe('renderer live-journal write seam', () => {
     }
     expect(renderLocal(engine).lines.some((line) => line.text === 'a local engine sentence')).toBe(true)
     expect(appendMeetingJournal).not.toHaveBeenCalled()
+    // Main never sees a committed local line, so the renderer forwards it to the ledger main owns: text and
+    // identity only, never a name, and never as part of any ask.
+    expect(appendSessionLedgerLine).toHaveBeenCalledTimes(1)
+    const sent = appendSessionLedgerLine.mock.calls[0]![0] as Record<string, unknown>
+    expect(sent).toMatchObject({ op: 'final', startedAt: STARTED_AT, speaker: 'them', text: 'a local engine sentence' })
+    expect(Object.keys(sent).sort()).toEqual(['op', 'speaker', 'startedAt', 't', 'text'])
   })
 
   it('never lets the bridge change capture: a rejecting, throwing, hanging or missing bridge leaves lines untouched', async () => {

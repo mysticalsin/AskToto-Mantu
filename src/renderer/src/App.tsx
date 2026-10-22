@@ -140,20 +140,13 @@ import { HOTKEY_ACTIONS } from '@shared/ipc'
 import { useTapControl } from './lib/tap/tap-control'
 import type { TapProfile } from './lib/tap/classify'
 import { PROVIDERS, isDustReady, isSpotlightRefReady, providerBaseUrl, requiresUserBaseUrl } from '@shared/providers'
-import {
-  ASSIST_PROMPT,
-  buildNoDecisionPrompt,
-  EMAIL_RECAP_PROMPT,
-  COLD_CALL_COACHING_PROMPT,
-  BOOK_MEETING_PROMPT
-} from '@shared/prompts'
+import { EMAIL_RECAP_PROMPT, COLD_CALL_COACHING_PROMPT, BOOK_MEETING_PROMPT } from '@shared/prompts'
 import { isScreenCapturePermissionError } from '@shared/screen-capture'
 import { detectNoDecisionEnding } from '@shared/wrapup'
 import { transcriptStateKey } from '@shared/hash'
 import {
   FACT_CHECK_SCREEN_PROMPT,
   LOCAL_SCREEN_SUMMARY_PROMPT,
-  buildExplainPrompt,
   buildWhatNextPrompt,
   buildSpotlightRefPrompt,
   chooseQuickActionRoute,
@@ -170,9 +163,14 @@ import {
   CAPTURE_DISPLAY_MISMATCH_NOTICE,
   GUARD_LINE,
   SCREEN_CONTEXT_LOST_NOTICE,
+  TRANSCRIPT_SLOT,
+  assistPrompt,
+  explainAsk,
+  fieldContext,
   hasDisplayMismatch,
-  transcriptForPrompt,
-  transcriptTail,
+  noDecisionAsk,
+  promptContext,
+  screenRunContext,
   withContext
 } from './lib/ask-context'
 import { buildFactCheckRequest } from './lib/fact-check-request'
@@ -273,9 +271,6 @@ export function App(): JSX.Element {
     testKey,
     refresh
   } = useSettings()
-  // Secret redaction for transcript text embedded in prompts (the Settings promise). Main redacts only
-  // req.transcript and redactPrompt prompts, so renderer-built prompts opt in per site (Q01).
-  const redactTranscript = settings?.redactSensitive ?? true
   const latestSettingsRef = useRef(settings)
   latestSettingsRef.current = settings
   // This is deliberately an opaque main-owned capability. Until main provides a verified allowlisted
@@ -1326,7 +1321,7 @@ export function App(): JSX.Element {
     // Prefer a finished shadow suggestion (zero LLM wait) — same adopt rule as the manual "What to say
     // next" button. Only hit the network when nothing speculative is ready for this transcript state.
     if (tryAdoptSpeculative()) return
-    suggest.run({ mode: 'suggest', transcript: transcriptTail(listen.text()) })
+    suggest.run({ mode: 'suggest', context: fieldContext('conversation') })
   }
 
   // No-Decision Honk (innovation #5): once per meeting, when the conversation sounds like it's wrapping
@@ -1355,7 +1350,7 @@ export function App(): JSX.Element {
       setView('copilot')
       setCollapsed(false)
     }
-    suggest.run({ mode: 'answer', prompt: buildNoDecisionPrompt(listen.text()) + GUARD_LINE, redactPrompt: true })
+    suggest.run(noDecisionAsk())
     // eslint-disable-next-line react-hooks/exhaustive-deps -- fire on new transcript lines only
   }, [listen.lines])
 
@@ -1515,7 +1510,7 @@ export function App(): JSX.Element {
                 kind: opts?.kind,
                 history: opts?.history,
                 redactPrompt: opts?.redactPrompt,
-                transcript: transcriptTail(listen.text()), // fuse recent spoken context alongside the screen
+                context: screenRunContext(prompt, 'screen', true), // main fuses the recent speech too
                 wantsScreenContext: true
               })
               if (id && opts?.record) pendingUserRef.current = { id, q: opts.record }
@@ -1536,6 +1531,7 @@ export function App(): JSX.Element {
           image: shot.image,
           prompt,
           redactPrompt: opts?.redactPrompt,
+          context: screenRunContext(prompt, 'screen'),
           label: opts?.label,
           kind: opts?.kind,
           history: opts?.history
@@ -1578,6 +1574,7 @@ export function App(): JSX.Element {
           mode: 'answer',
           prompt,
           redactPrompt: opts?.redactPrompt,
+          context: screenRunContext(prompt, 'manual'),
           label: fallbackLabel,
           kind: opts?.kind,
           history: opts?.history
@@ -1594,16 +1591,10 @@ export function App(): JSX.Element {
 
   const assist = useCallback(async (): Promise<void> => {
     if (!requireProvider()) return
-    const tx = listen.text()
     setView('copilot')
     setCollapsed(false)
     setCaptureError(null)
-    const basePrompt =
-      ASSIST_PROMPT +
-      '\n\nLive transcript (THEM = the other person, YOU = me):\n"""\n' +
-      tx.slice(-4000) +
-      '\n"""' +
-      GUARD_LINE
+    const basePrompt = assistPrompt()
     // NOT gated on visionReady (the ACTIVE provider's own vision support): askScreen/suggest.run → the
     // main process fails over to a vision-capable provider when the active one can't read images (see the
     // typed screen-ask path). Gating here made Assist silently skip capture whenever a non-vision provider
@@ -1622,6 +1613,7 @@ export function App(): JSX.Element {
           mode: 'vision',
           prompt: basePrompt,
           redactPrompt: true,
+          context: promptContext('screen', 4000, false),
           image: shot.image,
           label: 'Viewed screen',
           history: copilotHistoryRef.current
@@ -1647,9 +1639,10 @@ export function App(): JSX.Element {
       mode: 'answer',
       prompt: basePrompt,
       redactPrompt: true,
+      context: promptContext('manual', 4000, false),
       history: copilotHistoryRef.current
     })
-  }, [suggest.run, listen.text, settings?.screenAsk, settings?.visionAvailable, requireProvider])
+  }, [suggest.run, settings?.screenAsk, settings?.visionAvailable, requireProvider])
 
   const submit = useCallback(() => {
     if (!requireProvider()) return
@@ -1674,7 +1667,8 @@ export function App(): JSX.Element {
       setCollapsed(false)
       suggest.run({
         mode: 'answer',
-        prompt: withContext(q, listen.text(), { redact: redactTranscript }),
+        prompt: withContext(q),
+        context: promptContext('manual', 3000, false),
         history: copilotHistoryRef.current
       })
     } else if (canUseScreen) {
@@ -1731,12 +1725,10 @@ export function App(): JSX.Element {
     ask.run,
     suggest.run,
     listen.listening,
-    listen.text,
     settings?.screenAsk,
     settings?.visionAvailable,
     settings?.askFollowUpMemory,
     settings?.askCaveman,
-    redactTranscript,
     askScreen,
     assist,
     requireProvider,
@@ -1822,7 +1814,7 @@ export function App(): JSX.Element {
     setView('copilot')
     setCollapsed(false)
     if (tryAdoptSpeculative()) return // pre-generated answer already ready — paint it with no round trip
-    suggest.run({ mode: 'suggest', transcript: transcriptTail(listen.text()) })
+    suggest.run({ mode: 'suggest', context: fieldContext('conversation') })
   }, [suggest.run, listen.text, requireProvider, tryAdoptSpeculative])
 
   // Instant-suggestion machinery (settings.instantSuggestions, default on):
@@ -1844,7 +1836,7 @@ export function App(): JSX.Element {
     if (ask.answer?.streaming || suggest.answer?.streaming || speculative.answer?.streaming) return
     const transcript = listen.text()
     const at = Date.now()
-    const runId = speculative.run({ mode: 'suggest', transcript: transcriptTail(transcript) })
+    const runId = speculative.run({ mode: 'suggest', context: fieldContext('conversation') })
     specWatermarkRef.current = {
       lineCount: lines.length,
       at,
@@ -1979,17 +1971,18 @@ export function App(): JSX.Element {
       // IMMEDIATELY — no round trip. A stale/absent one falls through to the normal live run. Shared
       // adopt rule (content-hash match) with answerNow via tryAdoptSpeculative.
       if (tryAdoptSpeculative()) return
-      suggest.run({ mode: 'suggest', transcript: transcriptTail(transcript), history: copilotHistoryRef.current })
+      suggest.run({ mode: 'suggest', context: fieldContext('manual'), history: copilotHistoryRef.current })
       return
     }
     const prompt = typed
       ? `Given this context, give me the exact next words to say:\n"""\n${typed}\n"""`
-      : buildWhatNextPrompt(transcript, 'transcript')
-    // Typed text is never redacted; the no-input prompt embeds the transcript tail, so main redacts it.
+      : buildWhatNextPrompt(TRANSCRIPT_SLOT, 'transcript')
+    // Typed text is never redacted; the no-input prompt embeds the transcript tail, which main fills in and redacts.
     const id = ask.run({
       mode: 'answer',
       prompt: prompt + GUARD_LINE,
       redactPrompt: !typed,
+      context: typed ? undefined : promptContext('manual', 3000),
       history: historyRef.current
     })
     // A short label, never the transcript-derived prompt, so history replays carry no unredacted speech.
@@ -2032,14 +2025,15 @@ export function App(): JSX.Element {
       // that list is not a workspace-mismatch dead-end. Main spawns the managed Dust CLI;
       // missing CLI installs, missing agent says the agent is not in this workspace.
       const typed = input.trim()
-      const transcript = listen.text()
-      const prompt = buildSpotlightRefPrompt(transcriptForPrompt(transcript, 3000, redactTranscript), typed)
+      const fromTranscript = !typed && !!listen.text().trim() // main fills the slot from its ledger, redacted
+      const prompt = buildSpotlightRefPrompt(fromTranscript ? TRANSCRIPT_SLOT : '', typed)
       ask.run({
         mode: 'answer',
         prompt: prompt + GUARD_LINE,
         agentOverride: refAgent,
         providerOverride: 'dust',
-        history: historyRef.current
+        history: historyRef.current,
+        context: fromTranscript ? promptContext('manual', 3000) : undefined
       })
       setInput('')
     })()
@@ -2048,7 +2042,6 @@ export function App(): JSX.Element {
     ask.fail,
     ask.run,
     listen.text,
-    redactTranscript,
     settings?.hasKeys,
     settings?.dustWorkspaceId,
     settings?.providerModelsSpotlightRef
@@ -3376,7 +3369,7 @@ export function App(): JSX.Element {
           // Fold the live transcript into the vision prompt when one exists, so the screen-grounded
           // answer is also aware of the conversation (reuses the same helper as in-meeting typed asks).
           const screenPrompt = transcript.trim()
-            ? withContext('Explain what is on my screen in simple terms.', transcript, { redact: redactTranscript })
+            ? withContext('Explain what is on my screen in simple terms.')
             : 'Explain what is on my screen in simple terms.'
           void askScreen(screenPrompt, {
             redactPrompt: true,
@@ -3386,17 +3379,15 @@ export function App(): JSX.Element {
           })
           return
         }
-        const { prompt, source } = buildExplainPrompt(typed, transcript)
-        // Only the transcript-sourced prompt is captured speech; a typed explain stays untouched.
-        const redactPrompt = source === 'transcript'
+        const explain = explainAsk(typed, !!transcript.trim()) // the transcript-sourced prompt is redacted in main
         if (route.target === 'copilot') {
           setView('copilot')
           setCollapsed(false)
-          suggest.run({ mode: 'answer', prompt: prompt + GUARD_LINE, redactPrompt, history: copilotHistoryRef.current })
+          suggest.run({ mode: 'answer', ...explain, history: copilotHistoryRef.current })
         } else {
           setView('answer')
           setCollapsed(false)
-          const id = ask.run({ mode: 'answer', prompt: prompt + GUARD_LINE, redactPrompt, history: historyRef.current })
+          const id = ask.run({ mode: 'answer', ...explain, history: historyRef.current })
           // A short label, never the transcript-derived prompt, so history replays carry no unredacted speech.
           pendingUserRef.current = { id, q: typed || 'Explain the key point of this conversation.' } // record so a follow-up keeps continuity
         }
@@ -3436,7 +3427,7 @@ export function App(): JSX.Element {
           const screenPrompt = settings?.localVisionReady
             ? LOCAL_SCREEN_SUMMARY_PROMPT
             : transcript.trim()
-              ? withContext('Summarize what is on my screen.', transcript, { redact: redactTranscript })
+              ? withContext('Summarize what is on my screen.')
               : 'Summarize what is on my screen.'
           void askScreen(screenPrompt, { redactPrompt: true, label: 'Viewed screen', history: historyRef.current })
           return
@@ -3478,7 +3469,6 @@ export function App(): JSX.Element {
       settings?.dustWorkspaceId,
       settings?.providerModels,
       settings?.localSummaryReady,
-      redactTranscript,
       suggest.run,
       ask.run,
       ask.fail,

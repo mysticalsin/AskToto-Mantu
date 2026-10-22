@@ -1,12 +1,13 @@
 import { app, type IpcMain, type IpcMainInvokeEvent } from 'electron'
 import { createMainTranscriptRevision } from '../features/meetings/main-transcript-revision'
+import { bindMeetingContexts, type MeetingContexts } from '../features/session-context/wiring'
 import { bindTranscriptCheckpointStore } from '../features/meetings/transcript-checkpoint-binding'
 import { bindMeetingEndClosure, bindOwnerRevocationClosure } from '../features/meetings/session-closure'
 import { onDraftMeetingFinalizing } from '../infra/storage/draft-transcript-write-state'
 import { createLanguageChangeAudit } from '../ipc/cloud-speech-language-audit'
 import { registerOwnerSessionIpc } from '../ipc/register-owner-session'
 import type { AuthorizeSender } from '../ipc/sender-auth'
-import { authSessionGeneration, requireAuth } from '../auth'
+import { authSessionGeneration, authStatus, requireAuth } from '../auth'
 import { auditLog, mainLog } from '../logger'
 import { bindMeetingMicRendererReset } from '../meeting-mic-capture-authority'
 import { getPublishedSettingsObservation } from '../settings-observation'
@@ -20,6 +21,8 @@ export interface OwnerSessionWiringDeps {
   ipcMain: Pick<IpcMain, 'handle'>
   assertMainWindow(event: IpcMainInvokeEvent): void
   currentInputSessionContext(): { authSessionGeneration: number; contextRevision: number }
+  /** The Private View switch (the single authority lives in index.ts); part of the context's permission set. */
+  privateView(): boolean
 }
 
 export interface OwnerSessionWiring {
@@ -31,6 +34,8 @@ export interface OwnerSessionWiring {
   readonly speechHooks: SpeechDesktopHooks
   /** The meeting speech policy + worker facade (kill switch, circuit breaker, invalidation, disposal). */
   readonly meetingSpeech: ReturnType<typeof bootstrapMeetingSpeech>
+  /** The main-owned transcript ledger and SessionContext per meeting (G13): ask, suggest, screen and follow-up read it. */
+  readonly meetingContexts: MeetingContexts['registry']
 }
 
 /** The `meetingSpeechWorker` kill switch from the last published settings (managed policy is already merged in). */
@@ -45,7 +50,7 @@ function meetingSpeechWorkerEnabled(): boolean {
  * registerIpc, before the speech bootstrap.
  */
 export function createOwnerSessionWiring(deps: OwnerSessionWiringDeps): OwnerSessionWiring {
-  const { ipcMain, assertMainWindow, currentInputSessionContext } = deps
+  const { ipcMain, assertMainWindow, currentInputSessionContext, privateView } = deps
   // The trusted speech budget must exist before any handler can save, autosave or read a meeting: without it a
   // broker-speech line is refused (fail closed). registerIpc runs before the first window shows and before any
   // boot-work job (draft recovery, retention, brain reads), so this is the earliest main seam that covers them all.
@@ -73,6 +78,20 @@ export function createOwnerSessionWiring(deps: OwnerSessionWiringDeps): OwnerSes
   bindMeetingSpeechInvalidation(ownerSession, meetingSpeech)
   bindTranscriptCheckpointStore(transcriptRevision.store)
   bindMeetingEndClosure(onDraftMeetingFinalizing, transcriptRevision.store)
+  const meetingContexts = bindMeetingContexts({
+    ipcMain,
+    authorizeSender,
+    requireAuth: () => requireAuth(),
+    ownerSession,
+    contextRevision: () => currentInputSessionContext().contextRevision,
+    privateView,
+    unsignedAllowed: () => {
+      const status = authStatus()
+      return !status.signedIn && !status.configured
+    },
+    onMeetingEnd: onDraftMeetingFinalizing,
+    onDegraded: (code) => mainLog.warn('[session-context] ledger degraded', code)
+  })
   // WP03 live meeting journal: one durable record per committed cloud final, behind the `liveMeetingJournal` switch.
   bootstrapLiveMeetingJournal({
     ipcMain,
@@ -94,8 +113,12 @@ export function createOwnerSessionWiring(deps: OwnerSessionWiringDeps): OwnerSes
     authorizeSender,
     inputCapture: { ownerSession, authorizeSender },
     meetingSpeech,
+    meetingContexts: meetingContexts.registry,
     speechHooks: {
-      onSegmentDelivered: transcriptRevision.onSegmentDelivered,
+      onSegmentDelivered: (owner, event) => {
+        transcriptRevision.onSegmentDelivered(owner, event)
+        meetingContexts.onSegmentDelivered(owner, event)
+      },
       onLanguageChange: createLanguageChangeAudit({
         resolveOwner: (frame) => ownerSession.current(frame),
         audit: (event, record) => auditLog(event, record)

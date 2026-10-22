@@ -2,7 +2,7 @@ import vm from 'node:vm'
 import ts from 'typescript'
 import { describe, expect, it, vi } from 'vitest'
 import { transcriptStateKey } from '@shared/hash'
-import { transcriptTail } from './lib/ask-context'
+import { fieldContext } from './lib/ask-context'
 import { retiringMeeting } from './lib/retiring-meeting'
 import { readModuleSource } from '../../test-helpers/module-source'
 
@@ -151,10 +151,14 @@ function actualCopilotMemo(context: vm.Context): { render: () => ReactElement | 
   return scheduler<ReactElement>(memo.callback, memo.dependencies, context, (render) => render())
 }
 
+// The renderer sends no transcript: a speculative suggestion declares the conversation context main derives from
+// its own ledger (G13), so the request is the mode and that declaration, nothing else.
+const SPECULATIVE_REQUEST = { mode: 'suggest', context: { kind: 'conversation', field: true, tailChars: 6000 } }
+
 function makeHarness() {
   const deferredStateUpdates: Array<() => void> = []
   const events: string[] = []
-  const runRequests: Array<{ mode: string; transcript: string }> = []
+  const runRequests: Array<{ mode: string; context?: unknown; transcript?: unknown }> = []
   let transcript = MEETING_A_TEXT
   let nextRun = 0
   let context!: vm.Context & Record<string, unknown>
@@ -178,7 +182,7 @@ function makeHarness() {
   const listenStart = vi.fn((..._args: unknown[]) => {
     events.push('listen.start')
   })
-  const speculativeRun = vi.fn((request: { mode: string; transcript: string }) => {
+  const speculativeRun = vi.fn((request: { mode: string; context?: unknown; transcript?: unknown }) => {
     runRequests.push(request)
     nextRun += 1
     events.push(`speculative.run:${nextRun}`)
@@ -222,7 +226,7 @@ function makeHarness() {
     },
     Copilot: 'Copilot',
     transcriptStateKey,
-    transcriptTail,
+    fieldContext,
     ...updates,
     settings: {
       instantSuggestions: true,
@@ -426,7 +430,7 @@ describe('actual App speculative meeting lifecycle', () => {
       h.setAnswer({ id: currentRunId, text: 'Fresh B suggestion.', streaming: false, error: null })
       expect(h.tryAdoptSpeculative()).toBe(true)
       expect(selectedSuggestion(h.copilotMemo.render())?.id).toBe(currentRunId)
-      expect(h.runRequests).toEqual([{ mode: 'suggest', transcript: MEETING_A_TEXT }])
+      expect(h.runRequests).toEqual([SPECULATIVE_REQUEST])
       expect(h.events.indexOf('listen.start')).toBeGreaterThan(h.events.indexOf('speculative.clear'))
       expect(h.reentrantAdoption()).toBe(false)
     } finally {
@@ -526,7 +530,7 @@ describe('actual App speculative meeting lifecycle', () => {
 
       settings.instantSuggestions = true
       h.speculationEffect.render()
-      const expected = [{ mode: 'suggest', transcript: MEETING_A_TEXT }]
+      const expected = [SPECULATIVE_REQUEST]
       expect(h.runRequests).toEqual(expected)
 
       h.speculationEffect.render()
@@ -651,7 +655,7 @@ describe('actual App speculative meeting lifecycle', () => {
 
       release(h)
       h.speculationEffect.render()
-      const expected = [{ mode: 'suggest', transcript: MEETING_A_TEXT }]
+      const expected = [SPECULATIVE_REQUEST]
       expect(h.runRequests).toEqual(expected)
 
       h.speculationEffect.render()

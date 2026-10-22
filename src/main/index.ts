@@ -730,6 +730,7 @@ import { registerImportAudioIpc } from './ipc/import-audio-ipc'
 import { RecoveredDraftCount } from './recovered-draft-count'
 import { registerInputCaptureIpc } from './ipc/input-capture-ipc'
 import { bindRendererResets, createOwnerSessionWiring, ownerSessionLifecycle } from './lifecycle/owner-session-wiring'
+import { applyAskContext, createAskContextGate } from './features/session-context/ask-context'
 import { recoverOrphanDrafts } from './features/meetings/draft-recovery'
 import { writeMeetingOnce } from './features/meetings/save-identity'
 import { holdAppSuspensionWhileVisible } from './lifecycle/overlay-suspension-hold'
@@ -5525,7 +5526,12 @@ let ipcRegistered = false
 function registerIpc(): void {
   if (ipcRegistered) return
   ipcRegistered = true
-  const owners = createOwnerSessionWiring({ ipcMain, assertMainWindow, currentInputSessionContext })
+  const owners = createOwnerSessionWiring({
+    ipcMain,
+    assertMainWindow,
+    currentInputSessionContext,
+    privateView: privateViewOn
+  })
   speechDesktop = startSpeechDesktopBootstrap({
     ipcMain,
     assertMainWindow,
@@ -7454,12 +7460,9 @@ function registerIpc(): void {
   })
 
   // --- Ask / LLM streaming ---
-  // Fresh-question boundary state (declared at module scope, shared with IPC.listeningState /
-  // IPC.askResetContext below). A plain typed/screen question OUTSIDE a live meeting must not inherit the
-  // previous question's Q&A: prior answers rode along in TWO independent carriers — the renderer's history
-  // array (replayed verbatim into the model's message list) and the server-side Dust conversation (reused
-  // for up to 2h regardless of topic) — and clearing only one leaks through the other. Enforced at main's
-  // single ask choke point so every renderer surface (typed ask, screen ask, fact-check) gets the same rule.
+  // Fresh-question boundary state (module scope, shared with IPC.listeningState / IPC.askResetContext). A plain
+  // question OUTSIDE a live meeting must not inherit the previous Q&A, which rode in TWO carriers: the renderer's
+  // history array and the server-side Dust conversation (reused up to 2h). Enforced at this single ask choke point.
   ipcMain.handle(IPC.askStart, async (e, raw) => {
     assertMainWindow(e)
     const id = raw && typeof raw === 'object' && 'id' in (raw as object) ? String((raw as { id: unknown }).id) : ''
@@ -7486,20 +7489,20 @@ function registerIpc(): void {
       // Brain context is main-only. Clear renderer input before any early return or mode gate so a
       // replay/fact-check/unavailable local store can never smuggle stale context into a provider prompt.
       req.brainContext = undefined
+      const contextGate = createAskContextGate()
       const brain = createBrainContextDispatch({
         getSettings,
         currentOwner: currentBrainContextOwner,
         req,
         streams,
-        onError: failAskStart
+        onError: failAskStart,
+        gate: contextGate,
+        onRefused: (message) => win?.webContents.send(IPC.streamError, { id: req.id, message })
       })
-      // MQA-182: Private View means Métis does not look at OR SEND your screen — and an already-captured
-      // frame is still your screen. The renderer keeps the last vision request verbatim so Retry / "Go
-      // deeper" can replay it (state.ts lastReqRef), and that replay used to reach the provider minutes
-      // after the user flipped the switch. getScreenshot() re-checks the switch after its own async
-      // capture for exactly this reason (see its post-capture check); every path that can send a frame has
-      // to re-check it at SEND time, and this handler is the trust boundary the renderer cannot bypass.
-      // Keyed on the payload, not the mode: the schema permits an image on a non-vision mode too.
+      // MQA-182: Private View means Métis does not look at OR SEND your screen, and an already-captured frame is
+      // still your screen. Retry / "Go deeper" replay the last vision request (state.ts lastReqRef) and used to
+      // reach the provider minutes after the switch flipped, so every frame-sending path re-checks at SEND time;
+      // this handler is the trust boundary. Keyed on the payload, not the mode: an image may ride any mode.
       if (req.image && privateViewOn()) {
         auditLog('capture.blocked', { reason: 'private_view', at: 'ask' })
         win?.webContents.send(IPC.streamError, { id: req.id, message: PRIVATE_VIEW_BLOCKED_MESSAGE })
@@ -7555,17 +7558,19 @@ function registerIpc(): void {
         }
         lastPlainAskAt = Date.now()
       }
-      // Local-first redaction (brief section I): strip high-confidence secrets from the captured transcript
-      // before it leaves the device for a cloud model. Only the auto-captured transcript — never the user's
-      // own typed prompt, and never the locally-saved meeting file (which keeps the verbatim original).
-      if (s.redactSensitive && req.transcript) req.transcript = redactSecrets(req.transcript)
+      // Conversation context is main-derived: the transcript comes from the SessionContext snapshot of main's ledger,
+      // redacted there when s.redactSensitive (never the typed prompt, never the saved meeting file).
+      const contextRefusal = applyAskContext(
+        req,
+        { registry: owners.meetingContexts, frame: e.senderFrame, redact: s.redactSensitive },
+        contextGate
+      )
+      if (contextRefusal) return void win?.webContents.send(IPC.streamError, { id: req.id, message: contextRefusal })
       // screenContext is a MAIN-ONLY field (like brainContext): never trust a value the renderer sent. Clear
       // it unconditionally after parse, then set it below strictly from main's own on-device screen cache.
       req.screenContext = undefined
-      // req.redactPrompt is set by callers whose "prompt" is itself transcript-derived rather than user-typed
-      // (e.g. fact-check's transcript-fallback ask, which stuffs the transcript tail into prompt when there's
-      // no typed claim) — redact it the same way so a secret-shaped pattern in that fallback text isn't sent
-      // to the provider. Typed-claim fact-check asks never set this flag, so normal prompts are untouched.
+      // req.redactPrompt marks a prompt that is itself transcript-derived rather than user-typed (e.g. the fact-check
+      // fallback): redact it too. Typed-claim asks never set it, so typed prompts are untouched.
       if (s.redactSensitive && req.redactPrompt) req.prompt = redactSecrets(req.prompt)
       // Overlap local sidecar start with the brain stamp below — when local will serve (or hedge),
       // kicking ensure NOW hides cold-load behind Receipt Mode work instead of serializing after it. This
@@ -7603,14 +7608,11 @@ function registerIpc(): void {
         }
         if (hold.release()) return
       }
-      // Screen fast-path (M13): the renderer asked to answer from the pre-analyzed on-device screen context.
-      // Inject main's OWN cached description (re-validated for freshness/window match), plus a short recent-
-      // conversation tail so the answer fuses what's on screen with what's being said. Best-effort: if the
-      // cache went stale between the renderer's screen:context probe and now, answer from the prompt alone.
-      // Deliberately a SIBLING of the brainContext gate above, not nested in it: the fact-check exclusion is
-      // scoped to brainContext (missing GROUNDING_RAIL), while this block carries its own untrusted-data
-      // guard (llm/shared.ts screenContextBlock). Nested, "fact-check what's on my screen" reached the model
-      // with zero screen data — a verdict about a screen it never saw (MQA-009).
+      // Screen fast-path (M13): inject main's OWN cached screen description (re-validated for freshness) plus a
+      // short recent-conversation tail, so the answer fuses the screen with what's being said. Best-effort: a
+      // stale cache answers from the prompt alone. A SIBLING of the brainContext gate above, not nested in it:
+      // the fact-check exclusion is scoped to brainContext, and this block has its own untrusted-data guard
+      // (llm/shared.ts screenContextBlock). Nested, "fact-check my screen" sent no screen data (MQA-009).
       if (req.mode === 'answer' && req.wantsScreenContext) {
         try {
           const ctx = screenPreprocess.currentFreshContext()
@@ -7631,13 +7633,10 @@ function registerIpc(): void {
           )
         }
       }
-      // MQA-180: the injection above is best-effort, and on a REPLAY it usually finds nothing — Retry / "Go
-      // deeper" re-send the renderer's intent flag verbatim (state.ts lastReqRef) long after the cached
-      // description expired, the user changed windows, or Private View went on. The renderer set its
-      // "Viewed screen" badge from that intent flag alone, so an ask that reached the provider with zero
-      // screen data still rendered as grounded. Main is the only side that knows what actually went out:
-      // report the verdict on stream:meta. `undefined` for every other ask — main has no verdict there and
-      // the renderer keeps what run() set (a vision ask carries its own image).
+      // MQA-180: that injection is best-effort and on a REPLAY (Retry / "Go deeper" re-send the intent flag long
+      // after the description expired) usually finds nothing, yet the renderer badged the answer "Viewed screen"
+      // from the flag alone. Main alone knows what went out: report it on stream:meta. `undefined` for every
+      // other ask (the renderer keeps what run() set; a vision ask carries its own image).
       const screenGrounded = req.mode === 'answer' && req.wantsScreenContext ? !!req.screenContext : undefined
       // M2-0412: the fleet model policy narrows the org allowlist for ask/chat; CLI providers and 'local'
       // are governed by their own connect/routing toggles and never narrowed.

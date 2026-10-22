@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { CloudSpeechSegmentEventSchema } from '@shared/cloud-speech'
 import { OWNER_SESSION_IPC } from '@shared/contracts/owner-session'
 import { IPC } from '@shared/ipc'
+import { SESSION_CONTEXT_IPC } from '@shared/session-context-request'
 import type { InputSessionStopReason } from '@shared/input-session'
 
 vi.mock('electron', () => ({
@@ -51,16 +52,18 @@ function wire() {
   const wiring = createOwnerSessionWiring({
     ipcMain,
     assertMainWindow: vi.fn(),
-    currentInputSessionContext: () => ({ authSessionGeneration: 1, contextRevision: 3 })
+    currentInputSessionContext: () => ({ authSessionGeneration: 1, contextRevision: 3 }),
+    privateView: () => false
   })
   return { ipcMain, wiring }
 }
 
 describe('owner session wiring', () => {
-  it('registers the owner-session status channel and the live journal write seam, nothing else', () => {
+  it('registers the owner-session status channel, the ledger line seam and the live journal write seam, nothing else', () => {
     const { ipcMain } = wire()
     expect(ipcMain.handle.mock.calls.map((call) => call[0])).toEqual([
       OWNER_SESSION_IPC.status,
+      SESSION_CONTEXT_IPC.appendLine,
       IPC.appendMeetingJournal
     ])
   })
@@ -76,10 +79,11 @@ describe('owner session wiring', () => {
     createOwnerSessionWiring({
       ipcMain,
       assertMainWindow: vi.fn(),
-      currentInputSessionContext: () => ({ authSessionGeneration: 1, contextRevision: 3 })
+      currentInputSessionContext: () => ({ authSessionGeneration: 1, contextRevision: 3 }),
+      privateView: () => false
     })
-    // Every handler (owner-session status, live journal seam) registers after the policy is installed.
-    expect(installedAtFirstHandler).toEqual([true, true])
+    // Every handler (owner-session status, ledger line seam, live journal seam) registers after the policy is installed.
+    expect(installedAtFirstHandler).toEqual([true, true, true])
     expect(getMeetingSpeechLimits()).toEqual(MEETING_SPEECH_LIMITS)
     expect(getMeetingSpeechReadLimitBytes()).toBe(MEETING_SPEECH_WORKER_BOUNDS.maxInputBytes)
   })
@@ -104,16 +108,46 @@ describe('owner session wiring', () => {
     expect(() => onSegmentDelivered?.(owner as never, { type: 'terminal' } as never)).not.toThrow()
   })
 
+  it('feeds delivered final speech to the main-owned context every output reads (G13)', () => {
+    const { wiring } = wire()
+    const owner = {
+      captureId: 'b8ff8685-725b-40e0-a8ef-f343bb10b64f',
+      generation: 1,
+      binding: { processId: 11, routingId: 2, frame: {} },
+      captureContext: { listenStartedAt: 1_700_000_000_000 }
+    }
+    const final = CloudSpeechSegmentEventSchema.parse({
+      type: 'segment',
+      captureId: owner.captureId,
+      captureGeneration: 1,
+      sequence: 1,
+      segment: {
+        stream: { generation: 1, track: 'system', epoch: 1 },
+        engine: 'deepgram-nova3',
+        index: 1,
+        revision: 1,
+        final: true,
+        text: 'wired through the real hook',
+        startMs: 0,
+        endMs: 400
+      }
+    })
+    wiring.speechHooks.onSegmentDelivered?.(owner as never, final)
+    const handle = wiring.meetingContexts.acquire({ processId: 11, routingId: 2 }, 'conversation')
+    expect(handle?.snapshot.transcript.segments).toHaveLength(1)
+    expect(handle?.check()).toEqual({ state: 'current' })
+  })
+
   it('binds its transcript store for draft checkpoints', async () => {
     wire()
     // No meeting is open, so the bound store answers 'sealed'; an unbound app would answer null.
     await expect(checkpointAfterDraftSave(1_700_000_000_000)).resolves.toEqual({ ok: false, error: 'sealed' })
   })
 
-  it('closes the store and ends the live journal session when a meeting ends', () => {
+  it('closes the store, the meeting context and the live journal session when a meeting ends', () => {
     vi.mocked(onDraftMeetingFinalizing).mockClear()
     wire()
-    expect(onDraftMeetingFinalizing).toHaveBeenCalledTimes(2)
+    expect(onDraftMeetingFinalizing).toHaveBeenCalledTimes(3)
     expect(typeof vi.mocked(onDraftMeetingFinalizing).mock.calls[0][0]).toBe('function')
   })
 })

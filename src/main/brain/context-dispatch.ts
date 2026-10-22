@@ -63,11 +63,29 @@ export interface BrainContextDispatchDeps {
   req: { id: string; brainContext?: string }
   streams: CancelRegistry
   onError: (err: unknown) => void
+  /** The ask's conversation-context gate (G13): checked at every provider dispatch, before anything is sent. */
+  gate?: { refusal(): string | null }
+  /** Told once, with the gate's message, when the gate refuses; the ask is then cancelled. */
+  onRefused?: (message: string) => void
 }
 
 /** Owns one ask's brain-context envelope and re-proves it before every provider dispatch. */
 export function createBrainContextDispatch(deps: BrainContextDispatchDeps) {
   let envelope: BrainContextEnvelope | undefined
+  let refused = false
+
+  /** True when the conversation context this ask was built from is no longer in force. Reports once and aborts. */
+  const refusedByGate = (): boolean => {
+    const message = deps.gate?.refusal()
+    if (!message) return false
+    if (!refused) {
+      refused = true
+      deps.streams.get(deps.req.id)?.abort()
+      deps.streams.delete(deps.req.id)
+      deps.onRefused?.(message)
+    }
+    return true
+  }
 
   // The owner comparison and the request update are synchronous and run last, in the same tick as the
   // dispatch that follows; only the file proofs (`filesCurrent`) are awaited beforehand.
@@ -106,12 +124,13 @@ export function createBrainContextDispatch(deps: BrainContextDispatchDeps) {
     refresh,
     /** Refresh, then run `dispatch`; skipped when the ask was cancelled while the proof was in flight. */
     dispatch: (race: { addCleanup(fn: () => void): void } | undefined, dispatch: () => void): void => {
+      if (refusedByGate()) return
       const refreshing = refresh()
       if (!refreshing) return dispatch()
       const hold = holdForCancel(deps.streams, deps.req.id, race)
       void refreshing
         .then(() => {
-          if (!hold.release()) dispatch()
+          if (!hold.release() && !refusedByGate()) dispatch()
         })
         .catch(deps.onError)
     }

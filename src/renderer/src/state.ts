@@ -16,6 +16,7 @@ import type {
 } from '@shared/ipc'
 import type { ProviderId } from '@shared/providers'
 import { reportDisplayReceiptWhenPainted } from './lib/display-receipt'
+import type { AskContextRequest } from '@shared/session-context-request'
 
 export function uid(): string {
   return Math.random().toString(36).slice(2) + Date.now().toString(36)
@@ -246,7 +247,10 @@ export interface AskRequest {
    *  user's typed question, which must never be altered. */
   redactPrompt?: boolean
   image?: string
+  /** Saved-meeting transcript, for summary and recap only. Live conversation context is `context`: main derives it. */
   transcript?: string
+  /** The conversation context main derives from its own ledger (a SessionContext snapshot); see session-context-request. */
+  context?: AskContextRequest
   history?: ChatTurn[]
   depth?: 'deeper' // set by "Go deeper" → ask for a fuller answer than the brief default
   agentOverride?: string // pins a specific Dust agent sId regardless of tier routing (e.g. Spotlight Ref)
@@ -446,6 +450,7 @@ export function useAsk(): {
           prompt: req.prompt ?? '',
           image: req.image,
           transcript: req.transcript,
+          context: req.context,
           depth: req.depth,
           kind: req.kind,
           redactPrompt: req.redactPrompt,
@@ -507,12 +512,18 @@ export function useAsk(): {
   // window — answers fresh, same as any other plain ask. Contamination-free beats replay-continuity.
   const retry = useCallback((): string => (lastReqRef.current ? run(lastReqRef.current) : ''), [run])
 
-  // "Go deeper": replay the last request (mode + image + transcript + history — subject to the same
-  // fresh-question boundary as retry above) with the depth flag set, so the model expands its answer.
-  const deeper = useCallback(
-    (): string => (lastReqRef.current ? run({ ...lastReqRef.current, depth: 'deeper' }) : ''),
-    [run]
-  )
+  // "Go deeper": replay the last request (mode + image + history — subject to the same fresh-question boundary
+  // as retry above) with the depth flag set, so the model expands its answer. It is a follow-up output: main
+  // builds its context from the conversation as it is now, never from what the first answer saw.
+  const deeper = useCallback((): string => {
+    const last = lastReqRef.current
+    if (!last) return ''
+    return run({
+      ...last,
+      depth: 'deeper',
+      ...(last.context ? { context: { ...last.context, kind: 'followup' } } : {})
+    })
+  }, [run])
 
   // Memoized so consumers (App.tsx passes this whole object around as a dependency) only see a new
   // identity when the answer itself actually changes — run/fail/retry/deeper/cancel/clear are already

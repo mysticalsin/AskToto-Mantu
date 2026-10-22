@@ -25,7 +25,7 @@ import { isWindows } from './keys'
 import { compileEntityCasingCandidates, applyEntityCasingCompiled } from './entity-casing'
 import { transcriptToText } from './transcript'
 import { evictOldest } from './bounded-map'
-import { journalCommittedLine } from './meeting-journal-seam'
+import { journalCommittedLine, retractCommittedLine } from './meeting-journal-seam'
 import { shouldUseBundledAsr } from './asr-offline'
 import { withDiagnosedThemNote } from './screen-permission-copy'
 import { sysRetryDelayMs } from './loopback-retry'
@@ -610,10 +610,9 @@ export function useListen(
     linesRef.current = next
     setLines(next)
   }, [])
-  // Speaker Intelligence (1C.2) — attaches a name resolved AFTER the fact (Whisper / cloud speakerEmbed
-  // round trip finishes after the line already committed) to the specific line it belongs to, identified
-  // by the `t` timestamp commitLine returned when it committed. Upgrades empty / session ("Speaker N") /
-  // unknown placeholders; never overwrites a confirmed person name.
+  // Speaker Intelligence (1C.2) — attaches a name resolved AFTER the line committed (Whisper / cloud
+  // speakerEmbed round trip) to its line, identified by the `t` commitLine returned. Upgrades empty /
+  // session ("Speaker N") / unknown placeholders; never overwrites a confirmed person name.
   const attachSpeakerName = useCallback((t: number, name: string): void => {
     const idx = linesRef.current.findIndex((l) => l.t === t && l.speaker === 'them' && canUpgradeSpeakerLabel(l.name))
     if (idx < 0) return
@@ -622,14 +621,20 @@ export function useListen(
     linesRef.current = next
     setLines(next)
   }, [])
+  // Operator echo through loopback: drop the line here and in main's ledger.
+  const dropCommittedLine = useCallback((t: number): void => {
+    retractCommittedLine(sessionStartedAtRef.current, t)
+    const next = linesRef.current.filter((line) => line.t !== t)
+    linesRef.current = next
+    setLines(next)
+  }, [])
 
   // Add a transcribed line + fire the auto-answer hook. Shared by the Whisper worker and Parakeet paths.
   // `name` is the optional Speaker Intelligence label (main-side voice embedding on THEM windows) — the
-  // same additive field the Teams-VTT backfill writes, so render/save paths need no change. Returns the
-  // committed line's `t` (its identity for attachSpeakerName above) so a caller can attach a
-  // Speaker-Intelligence name once it resolves later — null on every path that did NOT commit a line
-  // (phantom text, a suppressed dupe run, or a dead/stopped session), so a caller can skip that follow-up
-  // work entirely instead of resolving a name for a line that was never shown.
+  // same additive field the Teams-VTT backfill writes. Returns the committed line's `t` (its identity for
+  // attachSpeakerName above) so a caller can attach a name once it resolves later — null on every path that
+  // did NOT commit a line (phantom text, a suppressed dupe run, a dead/stopped session), so a caller can
+  // skip that follow-up work instead of resolving a name for a line that was never shown.
   const commitLine = useCallback(
     (
       text: string,
@@ -693,8 +698,7 @@ export function useListen(
         return !(l.provisional && l.speaker === line.speaker)
       })
       const next = [...withoutStale, line]
-      // Update the ref synchronously BEFORE firing onQ, so text() (read inside the handler) already
-      // includes the line that triggered the auto-answer.
+      // Update the ref BEFORE firing onQ, so text() (read in the handler) includes the triggering line.
       linesRef.current = next
       setLines(next)
       if (options?.segmentId) {
@@ -1075,9 +1079,7 @@ export function useListen(
               // Echo defense (parity with Parakeet/Apple): operator bleed through loopback must not stay
               // labeled as THEM. Whisper already committed the text before embed returns — drop the line.
               if (res?.echo) {
-                const next = linesRef.current.filter((line) => line.t !== committedAt)
-                linesRef.current = next
-                setLines(next)
+                dropCommittedLine(committedAt)
                 return
               }
               if (res?.name) attachSpeakerName(committedAt, res.name)
@@ -1808,9 +1810,7 @@ export function useListen(
                     .then((res) => {
                       if (speakerEmbedResultIsStale(speakerEpoch, sessionEpochRef.current)) return
                       if (res?.echo) {
-                        const next = linesRef.current.filter((row) => row.t !== committedAt)
-                        linesRef.current = next
-                        setLines(next)
+                        dropCommittedLine(committedAt)
                         return
                       }
                       if (res?.name) attachSpeakerName(committedAt, res.name)
