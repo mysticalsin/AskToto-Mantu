@@ -507,9 +507,9 @@ export function App(): JSX.Element {
   // invisible and the user only discovered it on reopening the meeting, by which point it was gone.
   const [recapSaveError, setRecapSaveError] = useState<string | null>(null)
   // Which Settings tab to open on (e.g. the bar's mode icon → 'personalize', calendar CTA → 'calendar').
-  const [settingsInitialTab, setSettingsInitialTab] = useState<'personalize' | 'calendar' | 'ai' | undefined>(
-    initialSettingsTabFromLaunch
-  )
+  const [settingsInitialTab, setSettingsInitialTab] = useState<
+    'personalize' | 'calendar' | 'ai' | 'profile' | undefined
+  >(initialSettingsTabFromLaunch)
   // Shown as a banner inside Settings — set when we redirect the user there for a specific reason
   // (e.g. no provider configured) so the redirect explains itself instead of looking broken.
   const [settingsNotice, setSettingsNotice] = useState<string | undefined>(undefined)
@@ -1360,7 +1360,7 @@ export function App(): JSX.Element {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- fire on new transcript lines only
   }, [listen.lines])
 
-  const openSettings = useCallback((tab?: 'personalize' | 'calendar' | 'ai', notice?: string): void => {
+  const openSettings = useCallback((tab?: 'personalize' | 'calendar' | 'ai' | 'profile', notice?: string): void => {
     setSettingsInitialTab(tab) // generic open (no tab) → default tab; callers can target a specific one
     setSettingsNotice(notice)
     setMinimized(false)
@@ -4215,6 +4215,7 @@ export function App(): JSX.Element {
         consentReminderOpen={consentReminderOpen}
         onConsentReminderOpenChange={setConsentReminderOpen}
         onAckConsentReminder={() => void patch({ lastConsentReminderAt: Date.now() })}
+        onOpenShortcuts={() => openSettings('profile')}
       />
       {showBarOrb ? (
         <div className="flex w-full justify-center">

@@ -11,6 +11,7 @@ import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { join, relative } from 'node:path'
 import { describe, it, expect } from 'vitest'
 import { sourceIndexOf } from '../../../../scripts/lib/source-layout'
+import { readModuleSource } from '../../../test-helpers/module-source'
 import {
   pickReadyProvider,
   detectHint,
@@ -48,6 +49,10 @@ const source = sourceFiles
   .map(
     (file) =>
       `// FILE: ${relative(rendererSrc, file).replace(/\\/g, '/')}\n${readFileSync(file, 'utf8').replace(/\r\n/g, '\n')}`
+  )
+  .concat(
+    // The shortcut labels moved to lib/ so the overlay's conflict toast can share them without importing Settings.
+    `\n// FILE: lib/shortcut-labels\n${readModuleSource(__dirname, '../lib/shortcut-labels').text.replace(/\r\n/g, '\n')}`
   )
   .join('\n')
 

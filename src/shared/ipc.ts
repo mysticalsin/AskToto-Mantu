@@ -262,15 +262,15 @@ export const IPC = {
   rightEdgeSurface: 'right-edge:surface',
   // Renderer finished the hide spring (or 400ms fallback) — now park the rest rect.
   overlayParkAfterHide: 'overlay:parkAfterHide',
-  // Renderer ErrorBoundary catch (React render-throw) → persisted crash-*.log, same sink as onFatal's
-  // main-process crashes. Distinct from render-process-gone (whole renderer dies): this is a caught JS
-  // exception the renderer survives, previously visible only via ASKTOTO_DEBUG_RENDERER console mirroring.
+  // Renderer ErrorBoundary catch, window error or unhandled rejection → persisted crash-*.log, same sink as
+  // onFatal's main-process crashes. Not render-process-gone (the renderer dies): a JS error it survives.
   rendererCrash: 'renderer:crash',
   hotkey: 'hotkey',
   metisCommandState: 'metis-command:state',
   metisCommandConfirm: 'metis-command:confirm',
   metisCommandCancel: 'metis-command:cancel',
   shortcutFailures: 'shortcuts:failures',
+  shortcutFailuresChanged: 'shortcuts:failuresChanged',
   permissionsGet: 'permissions:get',
   permissionsOpenSettings: 'permissions:openSettings',
   permissionsRequestUpfront: 'permissions:requestUpfront',

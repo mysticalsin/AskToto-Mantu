@@ -98,13 +98,27 @@ export function createSingleFlight(): (run: () => Promise<void>) => void {
   }
 }
 
+/** The tray's listen item names the action it performs now, not both ("Listen / Stop listening"). */
+export function trayListenBase(listening: boolean): string {
+  return listening ? 'Stop Listening' : 'Start Listening'
+}
+
 /** The tray menu's label for an Electron accelerator: Windows key names on win32, macOS modifier symbols
  *  elsewhere; an unbound shortcut ('') gives ''. */
 export function formatTrayAccelerator(accelerator: string, platform: NodeJS.Platform): string {
   if (!accelerator) return ''
   return platform === 'win32'
-    ? accelerator.replace(/CommandOrControl|CmdOrCtrl|Control/g, 'Ctrl').replace(/Command|Meta|Super/g, 'Win').replace(/Return/g, 'Enter')
-    : accelerator.replace(/CommandOrControl|CmdOrCtrl|Command|Meta/g, '⌘').replace(/Shift/g, '⇧').replace(/Alt/g, '⌥').replace(/Control/g, 'Ctrl').replace(/Return/g, '↵').replace(/\+/g, '')
+    ? accelerator
+        .replace(/CommandOrControl|CmdOrCtrl|Control/g, 'Ctrl')
+        .replace(/Command|Meta|Super/g, 'Win')
+        .replace(/Return/g, 'Enter')
+    : accelerator
+        .replace(/CommandOrControl|CmdOrCtrl|Command|Meta/g, '⌘')
+        .replace(/Shift/g, '⇧')
+        .replace(/Alt/g, '⌥')
+        .replace(/Control/g, 'Ctrl')
+        .replace(/Return/g, '↵')
+        .replace(/\+/g, '')
 }
 
 export interface TraySize {

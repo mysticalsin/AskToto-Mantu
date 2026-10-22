@@ -13,6 +13,7 @@ import {
   scheduleTrayAfterFirstPaint,
   TRAY_ICON_SIZE,
   trayIconPaths,
+  trayListenBase,
   TRAY_THUMBNAIL_TIMEOUT_MS,
   yieldToEventLoop,
   type TrayGateWindow,
@@ -106,12 +107,18 @@ describe('scheduleTrayAfterFirstPaint (M2-0422)', () => {
     })
     // Every stage boundary is a task boundary: each immediate, queued by the one before it, runs before the next
     // stage, so no two stages share a main-thread task.
-    const between = ['between-load-and-create', 'between-create-and-decorate', 'between-decorate-and-build', 'between-build-and-menu']
+    const between = [
+      'between-load-and-create',
+      'between-create-and-decorate',
+      'between-decorate-and-build',
+      'between-build-and-menu'
+    ]
     const queue = (i: number): void => {
-      if (i < between.length) setImmediate(() => {
-        order.push(between[i])
-        queue(i + 1)
-      })
+      if (i < between.length)
+        setImmediate(() => {
+          order.push(between[i])
+          queue(i + 1)
+        })
     }
     queue(0)
     await done
@@ -126,7 +133,12 @@ describe('scheduleTrayAfterFirstPaint (M2-0422)', () => {
       'between-build-and-menu',
       'menu:the-menu'
     ])
-    expect(labels).toEqual(['createTray.newTray', 'createTray.decorate', 'createTray.buildMenu', 'createTray.attachMenu'])
+    expect(labels).toEqual([
+      'createTray.newTray',
+      'createTray.decorate',
+      'createTray.buildMenu',
+      'createTray.attachMenu'
+    ])
     expect(fail).not.toHaveBeenCalled()
   })
 
@@ -152,37 +164,38 @@ describe('scheduleTrayAfterFirstPaint (M2-0422)', () => {
     expect(fail).toHaveBeenCalledExactlyOnceWith(new Error('status item refused'))
   })
 
-  it.each(['decorate', 'buildMenu', 'attachMenu'] as const)(
-    'buildTrayInStages reports a failing %s once, runs no later stage and times no stage after it',
-    async (failing) => {
-      const stages = ['create', 'decorate', 'buildMenu', 'attachMenu'] as const
-      const ran: string[] = []
-      const labels: string[] = []
-      const stage = (name: (typeof stages)[number]) => (): void => {
-        if (name === failing) throw new Error(`${name} failed`)
-        ran.push(name)
-      }
-      const fail = vi.fn()
-      await buildTrayInStages<string, void>({
-        loadIcon: async () => 'icon',
-        create: stage('create'),
-        decorate: stage('decorate'),
-        buildMenu: stage('buildMenu'),
-        attachMenu: stage('attachMenu'),
-        time: (label, fn) => {
-          labels.push(label)
-          return fn()
-        },
-        fail
-      })
-      const at = stages.indexOf(failing)
-      expect(ran).toEqual(stages.slice(0, at))
-      expect(labels).toEqual(
-        ['createTray.newTray', 'createTray.decorate', 'createTray.buildMenu', 'createTray.attachMenu'].slice(0, at + 1)
-      )
-      expect(fail).toHaveBeenCalledExactlyOnceWith(new Error(`${failing} failed`))
+  it.each([
+    'decorate',
+    'buildMenu',
+    'attachMenu'
+  ] as const)('buildTrayInStages reports a failing %s once, runs no later stage and times no stage after it', async (failing) => {
+    const stages = ['create', 'decorate', 'buildMenu', 'attachMenu'] as const
+    const ran: string[] = []
+    const labels: string[] = []
+    const stage = (name: (typeof stages)[number]) => (): void => {
+      if (name === failing) throw new Error(`${name} failed`)
+      ran.push(name)
     }
-  )
+    const fail = vi.fn()
+    await buildTrayInStages<string, void>({
+      loadIcon: async () => 'icon',
+      create: stage('create'),
+      decorate: stage('decorate'),
+      buildMenu: stage('buildMenu'),
+      attachMenu: stage('attachMenu'),
+      time: (label, fn) => {
+        labels.push(label)
+        return fn()
+      },
+      fail
+    })
+    const at = stages.indexOf(failing)
+    expect(ran).toEqual(stages.slice(0, at))
+    expect(labels).toEqual(
+      ['createTray.newTray', 'createTray.decorate', 'createTray.buildMenu', 'createTray.attachMenu'].slice(0, at + 1)
+    )
+    expect(fail).toHaveBeenCalledExactlyOnceWith(new Error(`${failing} failed`))
+  })
 
   it('buildTrayInStages reports an icon load rejection without creating a tray', async () => {
     const create = vi.fn()
@@ -262,7 +275,15 @@ describe('loadTrayIcon (M2-0031)', () => {
   })
 
   it('falls back to the in-process decode when the thumbnail is empty or rejects', async () => {
-    expect((await loadTrayIcon(loader(async () => image('thumb', true)), '/icon.png', 'darwin')).name).toBe('full@resized')
+    expect(
+      (
+        await loadTrayIcon(
+          loader(async () => image('thumb', true)),
+          '/icon.png',
+          'darwin'
+        )
+      ).name
+    ).toBe('full@resized')
     const rejecting = loader(() => Promise.reject(new Error('no thumbnailer')))
     expect((await loadTrayIcon(rejecting, '/icon.png', 'darwin')).name).toBe('full@resized')
   })
@@ -277,7 +298,11 @@ describe('loadTrayIcon (M2-0031)', () => {
 
   it('returns an empty in-process image without resizing it', async () => {
     const empty = image('empty', true)
-    const icon = await loadTrayIcon(loader(async () => image('thumb'), empty), '/icon.png', 'linux')
+    const icon = await loadTrayIcon(
+      loader(async () => image('thumb'), empty),
+      '/icon.png',
+      'linux'
+    )
     expect(icon).toBe(empty)
     expect(empty.resize).not.toHaveBeenCalled()
   })
@@ -318,7 +343,10 @@ describe('loadPresizedTrayIcon (M2-0031, M2-0517)', () => {
     })
   })
   const reader = (files: Record<string, Buffer>) =>
-    vi.fn(async (path: string) => files[path] ?? Promise.reject(Object.assign(new Error(`ENOENT: ${path}`), { code: 'ENOENT' })))
+    vi.fn(
+      async (path: string) =>
+        files[path] ?? Promise.reject(Object.assign(new Error(`ENOENT: ${path}`), { code: 'ENOENT' }))
+    )
   const recordingTimer = () => {
     const labels: string[] = []
     const time = <T>(label: string, fn: () => T): T => {
@@ -328,30 +356,31 @@ describe('loadPresizedTrayIcon (M2-0031, M2-0517)', () => {
     return { labels, time }
   }
 
-  it.each(['darwin', 'win32', 'linux'] as const)(
-    'on %s builds the pre-sized image from its read 1x and 2x bytes, without a path decode, resize or thumbnail',
-    async (platform) => {
-      const full = image('full')
-      const images = loader({ [PATHS.fullSize]: full })
-      const read = reader({ [PATHS.presized]: ONE_X, [PATH_2X]: TWO_X })
-      const { labels, time } = recordingTimer()
+  it.each([
+    'darwin',
+    'win32',
+    'linux'
+  ] as const)('on %s builds the pre-sized image from its read 1x and 2x bytes, without a path decode, resize or thumbnail', async (platform) => {
+    const full = image('full')
+    const images = loader({ [PATHS.fullSize]: full })
+    const read = reader({ [PATHS.presized]: ONE_X, [PATH_2X]: TWO_X })
+    const { labels, time } = recordingTimer()
 
-      const icon = await loadPresizedTrayIcon(images, PATHS, platform, time, read)
+    const icon = await loadPresizedTrayIcon(images, PATHS, platform, time, read)
 
-      expect(read.mock.calls.map(([path]) => path)).toEqual([PATHS.presized, PATH_2X])
-      expect(images.createFromBuffer).toHaveBeenCalledExactlyOnceWith(ONE_X, { scaleFactor: 1 })
-      expect(icon.name).toBe('tray-1x')
-      expect(icon.representations).toEqual([
-        { scaleFactor: 1, buffer: ONE_X },
-        { scaleFactor: 2, buffer: TWO_X }
-      ])
-      expect(icon.resize).not.toHaveBeenCalled()
-      expect(full.resize).not.toHaveBeenCalled()
-      expect(images.createFromPath).not.toHaveBeenCalled()
-      expect(images.createThumbnailFromPath).not.toHaveBeenCalled()
-      expect(labels).toEqual(['createTray.loadIcon'])
-    }
-  )
+    expect(read.mock.calls.map(([path]) => path)).toEqual([PATHS.presized, PATH_2X])
+    expect(images.createFromBuffer).toHaveBeenCalledExactlyOnceWith(ONE_X, { scaleFactor: 1 })
+    expect(icon.name).toBe('tray-1x')
+    expect(icon.representations).toEqual([
+      { scaleFactor: 1, buffer: ONE_X },
+      { scaleFactor: 2, buffer: TWO_X }
+    ])
+    expect(icon.resize).not.toHaveBeenCalled()
+    expect(full.resize).not.toHaveBeenCalled()
+    expect(images.createFromPath).not.toHaveBeenCalled()
+    expect(images.createThumbnailFromPath).not.toHaveBeenCalled()
+    expect(labels).toEqual(['createTray.loadIcon'])
+  })
 
   it('starts both reads before either settles and builds the image only once both have, inside the timed stage', async () => {
     const images = loader()
@@ -427,14 +456,23 @@ describe('loadPresizedTrayIcon (M2-0031, M2-0517)', () => {
   it('falls back to the full-size icon when the pre-sized bytes decode to an empty image', async () => {
     const images = loader({ [PATHS.fullSize]: image('full') })
 
-    const icon = await loadPresizedTrayIcon(images, PATHS, 'linux', undefined, reader({ [PATHS.presized]: EMPTY_PNG, [PATH_2X]: TWO_X }))
+    const icon = await loadPresizedTrayIcon(
+      images,
+      PATHS,
+      'linux',
+      undefined,
+      reader({ [PATHS.presized]: EMPTY_PNG, [PATH_2X]: TWO_X })
+    )
 
     expect(icon.name).toBe('full@resized')
     expect(images.createFromPath.mock.calls.map(([path]) => path)).toEqual([PATHS.fullSize])
   })
 
   it('names the pre-sized image under tray/ and the full-size icon beside it in the resources directory', () => {
-    expect(trayIconPaths(join('res'))).toEqual({ presized: join('res', 'tray', 'tray.png'), fullSize: join('res', 'icon.png') })
+    expect(trayIconPaths(join('res'))).toEqual({
+      presized: join('res', 'tray', 'tray.png'),
+      fullSize: join('res', 'icon.png')
+    })
   })
 
   it('names the @2x sibling of a PNG as Electron does', () => {
@@ -490,5 +528,12 @@ describe('formatTrayAccelerator (M2-0515)', () => {
   it('gives an empty label for an unbound shortcut on every platform', () => {
     expect(formatTrayAccelerator('', 'win32')).toBe('')
     expect(formatTrayAccelerator('', 'darwin')).toBe('')
+  })
+})
+
+describe('trayListenBase (D10-11)', () => {
+  it('names the action the item performs now, so the label matches /^Stop Listening/ while listening', () => {
+    expect(trayListenBase(true)).toMatch(/^Stop Listening/)
+    expect(trayListenBase(false)).toMatch(/^Start Listening/)
   })
 })

@@ -335,9 +335,13 @@ describe('MQA-161: the hedge backup is picked against every provider the primary
     const entry = indexSrc.slice(attemptAt, eligibilityAt).replace(/\/\/[^\n]*/g, '')
     expect(entry).toMatch(/race\?\.leg === 'primary' &&[\s\S]*primaryChain\.push\(provider\)/)
     const deferral = /if \(!refreshed\) return brain\.dispatch\([^\n]*\n/
+    // D5-3: a leg that already lost makes no attempt at all, so its pending retry cannot dispatch. That guard
+    // is the first statement and the only other return allowed before the first eligibility read.
+    const loserGuard = /if \(race && race\.gate\.isLoser\(race\.leg\)\) return\s*\n/
     expect(entry).toMatch(deferral)
     expect(entry.search(/primaryChain\.push\(provider\)/)).toBeLessThan(entry.search(deferral))
-    expect(entry.replace(deferral, '')).not.toMatch(/\breturn\b/)
+    expect(entry.search(loserGuard)).toBeLessThan(entry.search(/primaryChain\.push\(provider\)/))
+    expect(entry.replace(deferral, '').replace(loserGuard, '')).not.toMatch(/\breturn\b/)
   })
 
   it('MQA-161 — startHedgeLeg excludes the whole chain, not just the original primary id', () => {

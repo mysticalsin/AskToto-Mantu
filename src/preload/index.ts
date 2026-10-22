@@ -10,7 +10,8 @@ import {
   type MeetingsFolderPickResult,
   type RetentionPreviewResult,
   type SettingsOsState,
-  type SystemSettingsPane
+  type SystemSettingsPane,
+  type TeamFolderRefusal
 } from '../shared/contracts/settings-os-state'
 import {
   IPC,
@@ -218,6 +219,7 @@ const api = {
   dismissFailoverNotice: (): Promise<{ ok: true }> => ipcRenderer.invoke(IPC.dismissFailoverNotice),
   getPermissions: (): Promise<PlatformPermissions> => ipcRenderer.invoke(IPC.permissionsGet),
   getShortcutFailures: (): Promise<ShortcutFailure[]> => ipcRenderer.invoke(IPC.shortcutFailures),
+  onShortcutFailures: (cb: (f: ShortcutFailure[]) => void): Unsub => sub(IPC.shortcutFailuresChanged, cb),
   openPermissionSettings: (kind: HelperKind): Promise<void> => ipcRenderer.invoke(IPC.permissionsOpenSettings, kind),
   /** C32/G10: open the exact pane plus the guided helper beside it (pane only where there is no helper). */
   openPermissionHelper: (kind: HelperKind): Promise<boolean> => ipcRenderer.invoke(PERMISSION_HELPER_IPC.open, kind),
@@ -471,7 +473,8 @@ const api = {
   exportRecapJson: (markdown: string): Promise<RecapExport> => ipcRenderer.invoke(IPC.exportRecapJson, markdown),
   /** Never saves a folder Métis cannot write to: the reason comes back for Settings to show inline. */
   pickFolder: (): Promise<MeetingsFolderPickResult<PublicSettings>> => ipcRenderer.invoke(IPC.pickFolder),
-  addTeamTranscriptFolder: (): Promise<PublicSettings> => ipcRenderer.invoke(IPC.addTeamTranscriptFolder),
+  addTeamTranscriptFolder: (): Promise<PublicSettings | TeamFolderRefusal> =>
+    ipcRenderer.invoke(IPC.addTeamTranscriptFolder),
   removeTeamTranscriptFolder: (folder: string): Promise<PublicSettings> =>
     ipcRenderer.invoke(IPC.removeTeamTranscriptFolder, folder),
   // shell.openPath resolves to '' on success or a non-empty OS error string on failure — callers need the

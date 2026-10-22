@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { sourceIndexOf } from '../../scripts/lib/source-layout'
+import { readModuleSource } from '../test-helpers/module-source'
 
 /**
  * Source-contract pins for the 2026-09-05 bank-grade hardening pass (see .rocket-fuel/METIS-BANK-GRADE-RECEIPT.md).
@@ -55,9 +56,11 @@ describe('overlay window reports a wedged renderer', () => {
 describe('session-long de-duplication sets are bounded', () => {
   it('notifiedImportJobs and notifiedKeys are BoundedSets, not bare Sets', () => {
     expect(src).toMatch(/const notifiedImportJobs = new BoundedSet<string>\(\d+\)/)
-    expect(src).toMatch(/const notifiedKeys = new BoundedSet<string>\([\d_]+\)/)
+    // The meeting notifier's dedupe set lives with its tick logic in calendar/meeting-alert (D2-9 extraction).
+    const alert = readModuleSource(__dirname, './calendar/meeting-alert').text
+    expect(alert).toMatch(/const notifiedKeys = new BoundedSet<string>\([\d_]+\)/)
     expect(src).not.toMatch(/const notifiedImportJobs = new Set</)
-    expect(src).not.toMatch(/const notifiedKeys = new Set</)
+    expect(alert).not.toMatch(/const notifiedKeys = new Set</)
   })
 })
 

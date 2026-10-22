@@ -3,6 +3,7 @@ import { NewMeetingToast } from './NewMeetingToast'
 import { OperatorGateToast } from './OperatorGateToast'
 import { RecoveredDraftToast } from './RecoveredDraftToast'
 import { RecordingConsentReminder } from './RecordingConsentReminder'
+import { ShortcutFailureToast, useShortcutFailureToast } from './ShortcutFailureToast'
 import { UpdateReadyToast } from './UpdateReadyToast'
 import { VisibilityToast, type VisibilityToastState } from './VisibilityToast'
 import type { UpdateReadyState } from '../lib/update-ready'
@@ -32,11 +33,14 @@ export interface OverlayToastsProps {
   consentReminderOpen: boolean
   onConsentReminderOpenChange: (open: boolean) => void
   onAckConsentReminder: () => void
+  /** The shortcut-conflict toast's action: opens Settings on the tab that lists the keyboard shortcuts. */
+  onOpenShortcuts: () => void
 }
 
 /** Every transient toast of the overlay, in one stable wrapper that widens the minimized pill's window. */
 export function OverlayToasts(props: OverlayToastsProps): JSX.Element {
   const { updateReady } = props
+  const shortcutToast = useShortcutFailureToast()
   const toasts = (
     <>
       <UpdateReadyToast
@@ -56,6 +60,11 @@ export function OverlayToasts(props: OverlayToastsProps): JSX.Element {
       <VisibilityToast state={props.visibilityToast} onDismiss={props.onDismissVisibility} />
       <MeetingOpenErrorToast message={props.openMeetingError} onDismiss={props.onDismissOpenMeetingError} />
       <OperatorGateToast message={props.operatorGateNotice} onDismiss={props.onDismissOperatorGate} />
+      <ShortcutFailureToast
+        message={shortcutToast.message}
+        onOpenShortcuts={props.onOpenShortcuts}
+        onDismiss={shortcutToast.dismiss}
+      />
       <RecordingConsentReminder
         listening={props.listening}
         lastReminderAt={props.lastConsentReminderAt}
@@ -87,7 +96,8 @@ export function OverlayToasts(props: OverlayToastsProps): JSX.Element {
       props.consentReminderOpen ||
       !!props.visibilityToast ||
       !!props.openMeetingError ||
-      !!props.operatorGateNotice)
+      !!props.operatorGateNotice ||
+      !!shortcutToast.message)
   return (
     <div
       data-hug-width={widen || undefined}

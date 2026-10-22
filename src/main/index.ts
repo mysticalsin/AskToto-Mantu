@@ -26,7 +26,6 @@ import {
   existsSync,
   writeFileSync,
   readdirSync,
-  unlinkSync,
   createReadStream,
   statSync,
   renameSync,
@@ -103,7 +102,6 @@ import {
   type ShortcutFailure,
   type PublicSettings,
   type Settings,
-  type CalendarEvent,
   type AskStart,
   type ImportAssetsProgress,
   type ListeningStatePayload,
@@ -699,6 +697,7 @@ import {
   buildTrayInStages,
   createSingleFlight,
   formatTrayAccelerator,
+  trayListenBase,
   loadPresizedTrayIcon,
   scheduleTrayAfterFirstPaint,
   trayIconPaths,
@@ -757,6 +756,8 @@ import {
   ssoBootstrapAllowed
 } from './auth'
 import { calendarToday } from './calendar'
+import { createMeetingAlert } from './calendar/meeting-alert'
+import { createRendererCrashThrottle, pruneCrashLogs } from './crash-log-prune'
 import * as importJobsSnapshotIpc from './import-jobs-snapshot-ipc'
 import { fetchTeamsTranscriptForMeeting } from './graph-transcript'
 import {
@@ -768,7 +769,7 @@ import {
   killParakeetHostForQuit
 } from './parakeet'
 import { createListeningStateHandler } from './listening-state-ipc'
-import { appleSpeechLocale, appleSpeechTranscribe } from './apple-speech'
+import { appleSpeechLocale, appleSpeechTranscribe, sweepAppleSpeechTemp } from './apple-speech'
 import {
   startCloudSttLive,
   stopCloudSttLive,
@@ -4413,6 +4414,7 @@ function sendHotkey(action: HotkeyAction): void {
 // `crash-${Date.now()}.log` and silently clobber one report. Monotonic per-process, resets on relaunch —
 // fine, since it only has to be unique within one run's batch of writes.
 let crashSeq = 0
+const allowRendererCrashFile = createRendererCrashThrottle()
 
 /**
  * Log + audit + dump any crash (main-process fatal or a renderer ErrorBoundary catch) to a shared sink.
@@ -4430,6 +4432,7 @@ function persistCrash(kind: CrashKind, detail: string, shortMessage: string, con
       `${new Date().toISOString()} ${kind}\n${redactedDetail}\n`,
       { mode: 0o600 }
     )
+    void pruneCrashLogs(app.getPath('userData')) // D10-13: keep the newest 5 in-session, not only at boot
   } catch {
     /* logging is best-effort — never throw out of the crash handler */
   }
@@ -5020,8 +5023,16 @@ function moveBy(dx: number, dy: number): void {
  * app's lifetime, so they're never removed.
  */
 function registerScreenListeners(): void {
+  // D10-12: `win` stays non-null (but destroyed) between recreateOverlayWindow()'s destroy() and its closed event.
   const reanchor = (): void => {
-    if (!win) return
+    if (!win || win.isDestroyed()) return
+    try {
+      reanchorOverlay(win)
+    } catch (e) {
+      mainLog.warn('[screen] reanchor failed:', e)
+    }
+  }
+  const reanchorOverlay = (win: BrowserWindow): void => {
     if (onboardingExclusiveLive()) {
       applyExclusiveOnboardingStage(win)
       return
@@ -5289,10 +5300,12 @@ function registerShortcuts(): void {
       shortcutFailures.push({ action, accel })
     }
   }
+  // D10-5: tell the overlay, so a dead hotkey is a toast and not a surprise found later in Settings. Boot may
+  // register before the overlay exists; the toast hook pulls IPC.shortcutFailures on mount for that case.
+  if (win && !win.isDestroyed()) win.webContents.send(IPC.shortcutFailuresChanged, shortcutFailures)
 }
 
 let notifTimer: ReturnType<typeof setInterval> | null = null
-let notifPrevPollMs = 0 // wall time of the previous notifier poll — used for edge-trigger logic
 
 // Long-lived background intervals (Dust token refresh, license heartbeat, brain reconcile, retention
 // sweep) each do network/DNS or disk work on a timer. If one fires exactly as the process is torn down
@@ -5304,85 +5317,35 @@ const trackTimer = <T extends ReturnType<typeof setInterval> | ReturnType<typeof
   backgroundTimers.push(t)
   return t
 }
-// Keys of events already notified this session. Bounded: the notifier polls every 30 s for the life of
-// the process, and every event that ever crossed its 60 s mark used to stay here forever.
-const notifiedKeys = new BoundedSet<string>(1_000)
-
-// Cache today's agenda (~30s) so startMeetingNotifier can cross-reference upcoming events against real
-// calendar data without hammering Graph on every 30s poll.
-let calendarCache: { events: CalendarEvent[]; ts: number } | null = null
-const CALENDAR_CACHE_TTL_MS = 30_000
 
 /**
  * Native notification scheduler: fires a system notification ~1 minute before each calendar event.
- * Polls every 30 s using the existing calendarCache (no extra Graph call when cache is warm).
- * Gated on the meetingNotifications setting; silently no-ops when notifications aren't supported.
+ * Polls every 30 s; calendar/meeting-alert.ts owns the cache, edge trigger, dedupe and the 5-minute
+ * back-off after an unavailable calendar. Gated on the meetingNotifications setting.
  */
 function startMeetingNotifier(): void {
   if (notifTimer) return
-  notifTimer = setInterval(async () => {
-    try {
-      if (!getSettings().meetingNotifications) return
-      if (!Notification.isSupported()) return
-
-      // Resolve today's events from the warm cache or a fresh Outlook fetch.
-      let events: CalendarEvent[] = []
-      if (calendarCache && Date.now() - calendarCache.ts <= CALENDAR_CACHE_TTL_MS) {
-        events = calendarCache.events
-      } else if (requireAuth()) {
-        let tz = 'UTC'
-        try {
-          tz = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'
-        } catch {
-          /* keep UTC */
-        }
-        const res = await calendarToday(tz)
-        if (res.ok && res.events) {
-          calendarCache = { events: res.events, ts: Date.now() }
-          events = res.events
-        }
+  const tick = createMeetingAlert({
+    now: Date.now,
+    enabled: () => !!getSettings().meetingNotifications && Notification.isSupported(),
+    requireAuth,
+    denyIfLimited: () => denyIfLimited('graph-calendar'),
+    timeZone: () => Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC',
+    fetchToday: calendarToday,
+    notify: (title, body) => {
+      try {
+        const alert = new Notification({ title, body })
+        // Reveals the overlay only: starting a meeting needs a user gesture (marked click or hotkey).
+        alert.on('click', () => reveal('notification-click', { focus: false }))
+        alert.show()
+      } catch {
+        /* notifications may be blocked by the OS */
       }
-
-      const now = Date.now()
-      // Snapshot and advance the previous-poll timestamp for the edge-trigger calculation below.
-      const prevPollMs = notifPrevPollMs
-      notifPrevPollMs = now
-      for (const ev of events) {
-        if (!ev.start) continue
-        const startMs = Date.parse(ev.start)
-        if (isNaN(startMs)) continue
-        // Edge-trigger: fire on the first poll where the 60 s mark has been crossed, regardless of
-        // poll-interval jitter. The old "60–90 s window" would silently miss a notification when a
-        // poll slipped past the 30 s interval (e.g. T=91 s then T=59 s skips the window entirely).
-        const msUntil = startMs - now
-        if (msUntil < -30_000) continue // event started > 30 s ago — too late to notify
-        if (msUntil > 60_000) continue // event is still > 60 s away — not yet due
-        // prevPollMs=0 means this is the first poll ever; treat prevMsUntil as ∞ so we fire immediately
-        // if an event is already within 60 s.
-        const prevMsUntil = prevPollMs > 0 ? startMs - prevPollMs : Number.POSITIVE_INFINITY
-        if (prevMsUntil <= 60_000) continue // threshold was already crossed at the previous poll
-        const key = `${ev.subject}@${ev.start}`
-        if (notifiedKeys.has(key)) continue
-        notifiedKeys.add(key)
-        try {
-          // msUntil can be anywhere from -30s (event already started) to +60s here — "starts in 1 minute"
-          // was hardcoded and wrong for the already-started/starting-now end of that range (most visible
-          // right after launch, when the first poll fires immediately for any event already inside the
-          // window). Phrase from the real remaining time instead of a fixed string.
-          const body = msUntil <= 5_000 ? `${ev.subject} is starting now` : `${ev.subject} starts in 1 minute`
-          new Notification({
-            title: 'Meeting starting soon',
-            body
-          }).show()
-        } catch {
-          /* notifications may be blocked by the OS */
-        }
-      }
-    } catch (e) {
-      // calendarToday / Outlook fetch failure is transient (network, token expiry). Log a warning
-      // rather than letting the rejection escape as an unhandledRejection → bogus crash audit.
-      mainLog.warn('[meeting-notifier] tick failed:', e instanceof Error ? e.message : String(e))
-    }
+    },
+    warn: (message, error) => mainLog.warn(message, error)
+  })
+  notifTimer = setInterval(() => {
+    tick().catch((e) => mainLog.warn('[meeting-notifier] tick failed:', e instanceof Error ? e.message : String(e)))
   }, 30_000)
   if (typeof notifTimer.unref === 'function') notifTimer.unref()
 }
@@ -5408,7 +5371,7 @@ function buildTrayMenu(): Menu {
         sendHotkey('settings')
       }
     },
-    { label: label('Listen / Stop listening', 'toggle-listen'), click: () => sendHotkey('toggle-listen') },
+    { label: label(trayListenBase(listeningActive), 'toggle-listen'), click: () => sendHotkey('toggle-listen') },
     {
       label: "Today's agenda",
       click: () => {
@@ -7989,6 +7952,7 @@ function registerIpc(): void {
         race?: AttemptRace,
         refreshed = false
       ): void => {
+        if (race && race.gate.isLoser(race.leg)) return // a loser's pending retry/failover must not dispatch (D5-3)
         // Recorded on ENTRY, before any eligibility work: a provider the primary merely bounced off is still
         // one the hedge must not duplicate. It precedes the brain-context refresh so a proof in flight counts.
         if (race?.leg === 'primary' && !primaryChain.includes(provider)) primaryChain.push(provider)
@@ -9200,6 +9164,7 @@ function registerIpc(): void {
   ipcMain.handle(IPC.rendererCrash, (e, raw: unknown) => {
     assertMainWindow(e)
     if (!requireAuth()) return
+    if (!allowRendererCrashFile()) return // one renderer crash file per 10 s (D10-13)
     const r = raw as { message?: unknown; stack?: unknown; componentStack?: unknown } | null
     const message = typeof r?.message === 'string' ? r.message : 'unknown renderer error'
     const stack = typeof r?.stack === 'string' ? r.stack : ''
@@ -9450,23 +9415,7 @@ if (!app.requestSingleInstanceLock()) {
           /* cosmetic only */
         }
       }
-      // Prune stale crash logs to the most recent 5 (best-effort; filenames sort lexicographically by ts, then
-      // by persistCrash's per-process tie-breaker suffix — both fixed-width-enough within a run to sort right).
-      try {
-        const ud = app.getPath('userData')
-        const crashLogs = readdirSync(ud)
-          .filter((f) => /^crash-\d+-\d+\.log$/.test(f))
-          .sort()
-        for (const f of crashLogs.slice(0, Math.max(0, crashLogs.length - 5))) {
-          try {
-            unlinkSync(join(ud, f))
-          } catch {
-            /* ignore */
-          }
-        }
-      } catch {
-        /* best-effort — never block startup */
-      }
+      void pruneCrashLogs(app.getPath('userData')) // stale crash logs: keep the newest 5 (best-effort)
       // MQA-175: the JS-level handlers below cannot see every death. A native C++ exception — Chromium's
       // OSCrypt raising std::out_of_range on a sync-mangled encrypted file, the shape that killed six
       // consecutive launches of the shipped 1.5.4 Windows build — unwinds past V8 entirely, so nothing in
@@ -9516,6 +9465,7 @@ if (!app.requestSingleInstanceLock()) {
       // Remove decrypted-transcript temp copies orphaned by a previous hard-kill after first show; the sweep
       // can touch the profile filesystem and first paint does not depend on it.
       bootWork.run('sweepStaleTempFiles', sweepStaleTempFiles)
+      bootWork.run('sweepAppleSpeechTemp', sweepAppleSpeechTemp) // leftover meeting speech in TMPDIR (D9-12)
       // Promote any orphaned crash-recovery drafts into real meetings BEFORE the retention sweep, so a
       // recovered meeting is visible in History and immediately subject to the same retention policy.
       // M2-0518: both read (and decrypt) the meetings root, so they start behind the first show, in this order.

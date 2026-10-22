@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { readModuleSource } from '../test-helpers/module-source'
 
 /**
  * Source-contract test for LOCAL-ONLY native crash capture (same structural-proof pattern as
@@ -35,6 +36,9 @@ describe('crash-*.log filenames are deduped and the prune regex stays in sync', 
   })
 
   it('the startup prune filter matches the crash-<ts>-<seq>.log shape', () => {
-    expect(source).toMatch(/\/\^crash-\\d\+-\\d\+\\\.log\$\/\.test\(f\)/)
+    // The prune moved out of index.ts (D10-13) so it can also run after each persisted crash; its filter
+    // must still match the `crash-${Date.now()}-${crashSeq++}.log` names persistCrash writes.
+    const prune = readModuleSource(__dirname, './crash-log-prune').text
+    expect(prune).toMatch(/const CRASH_LOG = \/\^crash-\(\\d\+\)-\(\\d\+\)\\\.log\$\//)
   })
 })
