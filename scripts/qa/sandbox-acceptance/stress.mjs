@@ -992,7 +992,9 @@ async function caseS5Search(env, ctx) {
   const search = (q) =>
     session.withPage((page) =>
       page.evaluate(async (query) => {
-        const hits = await window.toto.recallSearch(query)
+        // Q08: search returns { hits, total } (bounded, capped at 25); older builds returned the array itself.
+        const found = await window.toto.recallSearch(query)
+        const hits = Array.isArray(found) ? found : found.hits
         return hits.map((hit) => hit.file)
       }, q)
     )
@@ -1061,7 +1063,13 @@ async function caseS5External(env, ctx) {
   const folder = folderOf(c.layout)
   const hits = pick
     ? await second.withPage((page) =>
-        page.evaluate((q) => window.toto.recallSearch(q).then((found) => found.map((hit) => hit.file)), pick.word)
+        page.evaluate(
+          (q) =>
+            window.toto
+              .recallSearch(q)
+              .then((found) => (Array.isArray(found) ? found : found.hits).map((hit) => hit.file)),
+          pick.word
+        )
       )
     : []
   const page = await second.connect()
