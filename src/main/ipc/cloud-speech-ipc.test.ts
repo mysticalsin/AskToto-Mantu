@@ -339,6 +339,23 @@ describe('cloud speech main IPC authority boundary', () => {
     expect(relayHarness.create).not.toHaveBeenCalled()
   })
 
+  it('reports the resolved identity of a brokered start without the licence or the full device hash', async () => {
+    const h = makeHarness()
+    const session = readyRelay()
+    relayHarness.create.mockImplementation(async (options: { onAllocated?: (id: string) => void }) => {
+      options.onAllocated?.(session.identity.sessionId)
+      return { ok: true, value: session }
+    })
+    const result = (await h.invoke(CLOUD_SPEECH_IPC.start, [request])) as Record<string, unknown>
+    expect(result.resolvedIdentity).toEqual({
+      provider: 'deepgram-nova3',
+      transport: 'broker-v1',
+      account: 'operator-seat:device-hash',
+      model: 'nova-3'
+    })
+    expect(JSON.stringify(result)).not.toContain('METIS-OP-1.test')
+  })
+
   it('binds create to the selected route, actual tracks, approved language and main-stamped consent', async () => {
     const h = makeHarness()
     const session = readyRelay()

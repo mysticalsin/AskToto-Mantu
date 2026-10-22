@@ -15,6 +15,7 @@ import {
   type CloudSpeechEngine,
   type CloudSpeechStartRequest
 } from '@shared/cloud-speech'
+import { sttResolvedIdentity } from '@shared/contracts/stt-provider'
 import {
   SpeechBrokerClient,
   type SpeechBrokerClientOptions,
@@ -476,6 +477,12 @@ export function registerCloudSpeechIpc(options: CloudSpeechIpcOptions): CloudSpe
         ok: true,
         ...identity,
         engine,
+        // One identity per request: the engine, the licensed seat (hashed, shortened) and the route's model.
+        resolvedIdentity: sttResolvedIdentity({
+          provider: engine,
+          transport: 'broker-v1',
+          account: `operator-seat:${authority.credentials.deviceIdHash.slice(0, 12)}`
+        }),
         streams: sessionTracks.map(({ track, streamEpoch }) => ({ track, streamEpoch })),
         limits: {
           frameBytes: CLOUD_SPEECH_FULL_FRAME_BYTES,

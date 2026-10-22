@@ -9,19 +9,15 @@
  * WebSocket transport stays in the main cloud-stt adapter; this module is the
  * shared id + defaulting contract only.
  */
-import {
-  isCloudOnlyProfile,
-  type EnterpriseLiveProfile,
-  resolveEnterpriseLiveProfile
-} from './enterprise-live-profile'
+import { isCloudOnlyProfile, type EnterpriseLiveProfile, resolveEnterpriseLiveProfile } from './enterprise-live-profile'
 import type { ModelPolicyDocument } from './model-policy'
+import { DIRECT_STT_PROVIDER_IDS } from './contracts/stt-provider'
 
-export const CLOUD_STT_PROVIDERS = ['cloudflare-nova3', 'soniox', 'unconfigured'] as const
+export const CLOUD_STT_PROVIDERS = [...DIRECT_STT_PROVIDER_IDS, 'unconfigured'] as const
 export type CloudSttProviderId = (typeof CLOUD_STT_PROVIDERS)[number]
 
 /** Production default for managed cloud-only profiles (skill ref 05 comparator). */
-export const DEFAULT_CLOUD_ONLY_STT_PROVIDER: Exclude<CloudSttProviderId, 'unconfigured'> =
-  'cloudflare-nova3'
+export const DEFAULT_CLOUD_ONLY_STT_PROVIDER: Exclude<CloudSttProviderId, 'unconfigured'> = 'cloudflare-nova3'
 
 export function resolveCloudSttProvider(raw: unknown): CloudSttProviderId {
   if (raw === 'cloudflare-nova3' || raw === 'soniox') return raw
@@ -61,11 +57,17 @@ export function enforceSttPolicy(policy: ModelPolicyDocument | null, provider: C
 }
 
 /** True when Listen should use the cloud adapter id instead of Whisper/Parakeet/Apple. */
-export function shouldUseCloudSttEngine(
-  profile: EnterpriseLiveProfile | unknown,
-  storedProvider: unknown
-): boolean {
+export function shouldUseCloudSttEngine(profile: EnterpriseLiveProfile | unknown, storedProvider: unknown): boolean {
   const p = resolveEnterpriseLiveProfile(profile)
   if (!isCloudOnlyProfile(p)) return false
   return effectiveCloudSttProvider(p, storedProvider) !== 'unconfigured'
+}
+
+/**
+ * A managed profile gets its Cloudflare Nova-3 credentials from the licensed broker. The direct Cloudflare
+ * account token a user or admin seated on this device is the legacy path and must not open a managed
+ * session. The Soniox key seat is not gated: no brokered Soniox route exists (ASSUMED, G08).
+ */
+export function directTokenBlockedForManagedProfile(provider: string, managedProfile: boolean): boolean {
+  return managedProfile && provider === 'cloudflare-nova3'
 }

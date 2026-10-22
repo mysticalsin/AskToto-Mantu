@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import { CaptureSchema, SpeechSegmentSchema, SpeechStreamRefSchema, TrackSchema } from './contracts/speech'
+import { BROKERED_STT_PROVIDER_IDS, SttResolvedIdentitySchema } from './contracts/stt-provider'
 
 /** Versioned, fixed channels for the separately gated cloud speech path. */
 export const CLOUD_SPEECH_IPC = {
@@ -30,7 +31,7 @@ export const CLOUD_SPEECH_CAPTURE_CEILING_DURATION_SECONDS = 14_400
 export const CLOUD_SPEECH_CAPTURE_CEILING_MAX_SAMPLES =
   CLOUD_SPEECH_CAPTURE_CEILING_SAMPLE_RATE * CLOUD_SPEECH_CAPTURE_CEILING_DURATION_SECONDS
 
-export const CloudSpeechEngineSchema = z.enum(['deepgram-nova3', 'cloudflare-nova3'])
+export const CloudSpeechEngineSchema = z.enum(BROKERED_STT_PROVIDER_IDS)
 export type CloudSpeechEngine = z.infer<typeof CloudSpeechEngineSchema>
 
 const CaptureIdSchema = z.string().uuid()
@@ -222,6 +223,8 @@ export const CloudSpeechStartResultSchema = z
         captureId: CaptureIdSchema,
         captureGeneration: CounterSchema,
         engine: CloudSpeechEngineSchema,
+        /** Provider, account, transport and model this request resolved to (G08). */
+        resolvedIdentity: SttResolvedIdentitySchema.optional(),
         streams: z.array(StreamEpochSchema).min(1).max(2),
         limits: LimitsSchema
       })

@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { STT_CLOUD_PROVIDER_IDS } from '../stt-provider'
 
 /**
  * Capability contract (TASK-005, M2-0064): which engine is selected, allowed and ready, per capability.
@@ -12,14 +13,7 @@ import { z } from 'zod'
  */
 
 /** Route A is Deepgram Nova-3; Route B is Cloudflare Workers AI Nova-3. Their engine ids stay distinct. */
-export const SpeechEngineIdSchema = z.enum([
-  'deepgram-nova3',
-  'cloudflare-nova3',
-  'soniox',
-  'parakeet',
-  'whisper',
-  'apple'
-])
+export const SpeechEngineIdSchema = z.enum([...STT_CLOUD_PROVIDER_IDS, 'parakeet', 'whisper', 'apple'])
 export type SpeechEngineId = z.infer<typeof SpeechEngineIdSchema>
 
 /**

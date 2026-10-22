@@ -861,6 +861,51 @@ describe('CloudSttLiveSession', () => {
     await expect(session.closeGracefully(1_000)).resolves.toEqual({ timedOut: true })
   })
 
+  it('refuses a managed profile before any direct-token socket is opened', async () => {
+    TrackingMockWs.reset()
+    const session = new CloudSttLiveSession(
+      {
+        provider: 'cloudflare-nova3',
+        managedProfile: true,
+        cloudflareToken: 'synthetic-cf-token',
+        cloudflareAccountId: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+        gatewayId: 'default',
+        WebSocketImpl: TrackingMockWs as unknown as typeof WebSocket
+      },
+      { onFinal: () => {} }
+    )
+    const result = await session.start()
+    expect(result).toMatchObject({ ok: false, code: 'MANAGED_DIRECT_TOKEN' })
+    expect(TrackingMockWs.instances).toHaveLength(0)
+    expect(session.resolvedIdentity).toBeNull()
+  })
+
+  it('records the resolved identity of a direct-token start and returns it from the module start', async () => {
+    TrackingMockWs.reset()
+    const result = await startCloudSttLive(
+      {
+        provider: 'cloudflare-nova3',
+        managedProfile: false,
+        cloudflareToken: 'synthetic-cf-token',
+        cloudflareAccountId: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+        gatewayId: 'default',
+        WebSocketImpl: TrackingMockWs as unknown as typeof WebSocket
+      },
+      { onFinal: () => {} }
+    )
+    expect(result).toEqual({
+      ok: true,
+      identity: {
+        provider: 'cloudflare-nova3',
+        transport: 'direct-token',
+        account: 'cloudflare:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+        model: '@cf/deepgram/nova-3'
+      }
+    })
+    expect(JSON.stringify(result)).not.toContain('synthetic-cf-token')
+    await stopCloudSttLive()
+  })
+
   it('closes a partially-open pending session when Stop arrives before start resolves', async () => {
     OneOpenOneHangingWs.reset()
     const starting = startCloudSttLive(
@@ -911,7 +956,7 @@ describe('CloudSttLiveSession', () => {
       { onFinal: (line) => finals.push(line) }
     )
 
-    await expect(second).resolves.toEqual({ ok: true })
+    await expect(second).resolves.toMatchObject({ ok: true, identity: { transport: 'direct-token' } })
     await expect(first).resolves.toMatchObject({ ok: false })
     expect(OneOpenOneHangingWs.instances.map((ws) => ws.readyState)).toEqual([
       OneOpenOneHangingWs.CLOSED,

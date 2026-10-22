@@ -1,7 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import {
   CLOUD_STT_CREDENTIALS_MISSING,
+  CLOUD_STT_MANAGED_DIRECT_TOKEN_BLOCKED,
   DEFAULT_CLOUD_STT_GATEWAY_ID,
+  legacyDirectSttIdentity,
+  readLegacyCloudflareToken,
   parseCloudflareAccountId,
   resolveCloudflareAccountId,
   resolveCloudSttCredentials,
@@ -14,9 +17,7 @@ import { CLOUD_STT_UNCONFIGURED } from './adapter'
 describe('parseCloudflareAccountId', () => {
   it('extracts 32-hex account id from Workers AI base URL', () => {
     expect(
-      parseCloudflareAccountId(
-        'https://api.cloudflare.com/client/v4/accounts/0123456789abcdef0123456789abcdef/ai/v1'
-      )
+      parseCloudflareAccountId('https://api.cloudflare.com/client/v4/accounts/0123456789abcdef0123456789abcdef/ai/v1')
     ).toBe('0123456789abcdef0123456789abcdef')
   })
   it('returns null for Worker proxy URLs (no account path)', () => {
@@ -28,8 +29,7 @@ describe('resolveCloudflareAccountId', () => {
   it('prefers account id from account-scoped base URL', () => {
     expect(
       resolveCloudflareAccountId({
-        cloudflareBaseUrl:
-          'https://api.cloudflare.com/client/v4/accounts/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/ai/v1',
+        cloudflareBaseUrl: 'https://api.cloudflare.com/client/v4/accounts/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/ai/v1',
         cloudflareAccountId: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
       })
     ).toBe('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa')
@@ -76,8 +76,7 @@ describe('resolveCloudSttCredentials', () => {
     const r = resolveCloudSttCredentials({
       provider: 'cloudflare-nova3',
       cloudflareToken: 'cf-token',
-      cloudflareBaseUrl:
-        'https://api.cloudflare.com/client/v4/accounts/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/ai/v1',
+      cloudflareBaseUrl: 'https://api.cloudflare.com/client/v4/accounts/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/ai/v1',
       gatewayId: 'metis-gw'
     })
     expect(r).toEqual({
@@ -93,8 +92,7 @@ describe('resolveCloudSttCredentials', () => {
     const r = resolveCloudSttCredentials({
       provider: 'cloudflare-nova3',
       cloudflareToken: 'cf-token',
-      cloudflareBaseUrl:
-        'https://api.cloudflare.com/client/v4/accounts/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/ai/v1',
+      cloudflareBaseUrl: 'https://api.cloudflare.com/client/v4/accounts/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/ai/v1',
       gatewayId: null
     })
     expect(r).toEqual({
@@ -135,20 +133,16 @@ describe('resolveCloudSttCredentials', () => {
 
   it('reads gateway id: settings, then env, then default', () => {
     expect(resolveCloudSttGatewayId(' from-settings ')).toBe('from-settings')
-    expect(resolveCloudSttGatewayId('', { CF_AI_GATEWAY_ID: ' from-cf ' } as NodeJS.ProcessEnv)).toBe(
-      'from-cf'
+    expect(resolveCloudSttGatewayId('', { CF_AI_GATEWAY_ID: ' from-cf ' } as NodeJS.ProcessEnv)).toBe('from-cf')
+    expect(resolveCloudSttGatewayId(null, { METIS_CF_AI_GATEWAY_ID: 'from-metis' } as NodeJS.ProcessEnv)).toBe(
+      'from-metis'
     )
-    expect(
-      resolveCloudSttGatewayId(null, { METIS_CF_AI_GATEWAY_ID: 'from-metis' } as NodeJS.ProcessEnv)
-    ).toBe('from-metis')
     expect(resolveCloudSttGatewayId('', {} as NodeJS.ProcessEnv)).toBe(DEFAULT_CLOUD_STT_GATEWAY_ID)
     expect(resolveCloudSttGatewayId()).toBe(DEFAULT_CLOUD_STT_GATEWAY_ID)
   })
 
   it('prefers seated Soniox key over env', () => {
-    expect(resolveSonioxApiKey(' seated ', { SONIOX_API_KEY: 'env-key' } as NodeJS.ProcessEnv)).toBe(
-      'seated'
-    )
+    expect(resolveSonioxApiKey(' seated ', { SONIOX_API_KEY: 'env-key' } as NodeJS.ProcessEnv)).toBe('seated')
     expect(resolveSonioxApiKey('', { SONIOX_API_KEY: 'env-key' } as NodeJS.ProcessEnv)).toBe('env-key')
     expect(resolveSonioxApiKey(null, {} as NodeJS.ProcessEnv)).toBeNull()
   })
@@ -157,5 +151,81 @@ describe('resolveCloudSttCredentials', () => {
     expect(CLOUD_STT_CREDENTIALS_MISSING).toMatch(/Settings/)
     expect(CLOUD_STT_CREDENTIALS_MISSING).toMatch(/optional/i)
     expect(CLOUD_STT_CREDENTIALS_MISSING).not.toMatch(/—/)
+  })
+})
+
+describe('legacy direct-token gate on managed profiles', () => {
+  const nova = {
+    provider: 'cloudflare-nova3' as const,
+    cloudflareToken: 'synthetic-cf-token',
+    cloudflareBaseUrl: 'https://api.cloudflare.com/client/v4/accounts/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/ai/v1',
+    gatewayId: 'metis-gw'
+  }
+
+  it('refuses the direct Cloudflare token for a managed profile even when a token is seated', () => {
+    const r = resolveCloudSttCredentials({ ...nova, managedProfile: true })
+    expect(r).toEqual({ ok: false, error: CLOUD_STT_MANAGED_DIRECT_TOKEN_BLOCKED, code: 'MANAGED_DIRECT_TOKEN' })
+  })
+
+  it('keeps the refusal distinct from a missing credential and free of secrets', () => {
+    expect(CLOUD_STT_MANAGED_DIRECT_TOKEN_BLOCKED).not.toBe(CLOUD_STT_CREDENTIALS_MISSING)
+    expect(CLOUD_STT_MANAGED_DIRECT_TOKEN_BLOCKED).not.toMatch(/—/)
+    expect(CLOUD_STT_MANAGED_DIRECT_TOKEN_BLOCKED).not.toContain('synthetic-cf-token')
+  })
+
+  it('refuses before checking whether the token is present', () => {
+    const r = resolveCloudSttCredentials({ provider: 'cloudflare-nova3', managedProfile: true })
+    expect(r).toMatchObject({ ok: false, code: 'MANAGED_DIRECT_TOKEN' })
+  })
+
+  it('resolves exactly as before for an unmanaged profile', () => {
+    expect(resolveCloudSttCredentials({ ...nova, managedProfile: false })).toEqual(resolveCloudSttCredentials(nova))
+    expect(resolveCloudSttCredentials(nova)).toMatchObject({ ok: true, provider: 'cloudflare-nova3' })
+  })
+
+  it('does not gate the Soniox key seat or change the unconfigured refusal', () => {
+    expect(
+      resolveCloudSttCredentials({ provider: 'soniox', sonioxApiKey: 'synthetic-sx', managedProfile: true })
+    ).toMatchObject({
+      ok: true,
+      provider: 'soniox'
+    })
+    expect(resolveCloudSttCredentials({ provider: 'unconfigured', managedProfile: true })).toMatchObject({
+      ok: false,
+      code: 'UNCONFIGURED'
+    })
+  })
+
+  it('never reads the stored Cloudflare token for a managed profile', () => {
+    let reads = 0
+    const read = () => {
+      reads += 1
+      return 'synthetic-cf-token'
+    }
+    expect(readLegacyCloudflareToken(true, read)).toBeNull()
+    expect(reads).toBe(0)
+    expect(readLegacyCloudflareToken(false, read)).toBe('synthetic-cf-token')
+    expect(reads).toBe(1)
+  })
+
+  it('names the resolved identity of a direct-token request without exposing the secret', () => {
+    const resolved = resolveCloudSttCredentials(nova)
+    if (!resolved.ok) throw new Error('expected resolved credentials')
+    const identity = legacyDirectSttIdentity(resolved)
+    expect(identity).toEqual({
+      provider: 'cloudflare-nova3',
+      transport: 'direct-token',
+      account: 'cloudflare:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+      model: '@cf/deepgram/nova-3'
+    })
+    expect(JSON.stringify(identity)).not.toContain('synthetic-cf-token')
+    const soniox = resolveCloudSttCredentials({ provider: 'soniox', sonioxApiKey: 'synthetic-sx' })
+    if (!soniox.ok) throw new Error('expected resolved credentials')
+    expect(legacyDirectSttIdentity(soniox)).toEqual({
+      provider: 'soniox',
+      transport: 'direct-token',
+      account: 'soniox-key',
+      model: null
+    })
   })
 })

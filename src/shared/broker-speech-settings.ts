@@ -1,10 +1,11 @@
 import { z } from 'zod'
+import { BROKERED_STT_PROVIDER_IDS, DIRECT_STT_PROVIDER_IDS } from './contracts/stt-provider'
 
 /** Independent transport selector. Legacy settings keep using today's existing speech facade. */
 export const BrokerSpeechSettingsSchema = z
   .object({
     transport: z.enum(['legacy', 'broker-v1']),
-    engine: z.enum(['unconfigured', 'deepgram-nova3', 'cloudflare-nova3'])
+    engine: z.enum(['unconfigured', ...BROKERED_STT_PROVIDER_IDS])
   })
   .strict()
 export type BrokerSpeechSettings = z.infer<typeof BrokerSpeechSettingsSchema>
@@ -59,7 +60,7 @@ export const CloudSpeechSettingsSchema = z.object({
     })
     .default({ managed: false, inferenceMode: 'legacy', summaryOnly: false }),
   /** Existing provider selection remains in place for legacy cloud speech. */
-  cloudSttProvider: z.enum(['cloudflare-nova3', 'soniox', 'unconfigured']).default('unconfigured'),
+  cloudSttProvider: z.enum([...DIRECT_STT_PROVIDER_IDS, 'unconfigured']).default('unconfigured'),
   /** A finite load union preserves refusal without retaining arbitrary malformed user data. */
   brokerSpeech: BrokerSpeechSettingsLoadSchema
 })

@@ -16,7 +16,12 @@ import {
   normalizeSonioxMessage,
   type CloudSttScope
 } from './adapter'
-import { resolveCloudSttCredentials, type CloudSttResolvedCreds, CLOUD_STT_CREDENTIALS_MISSING } from './credentials'
+import {
+  CLOUD_STT_CREDENTIALS_MISSING,
+  legacyDirectSttIdentity,
+  resolveCloudSttCredentials,
+  type CloudSttResolvedCreds
+} from './credentials'
 import { float32ToPcm16le } from './pcm'
 import {
   mapCloudFinalsToLines,
@@ -24,6 +29,7 @@ import {
   type CloudSttMappedLine
 } from '../../shared/cloud-stt-line-map'
 import type { CloudSttProviderId } from '../../shared/cloud-stt-provider'
+import type { SttResolvedIdentity } from '../../shared/contracts/stt-provider'
 import { auditLog, mainLog } from '../logger'
 import { hostAllowed, requestHostname } from '../net/egress-policy'
 
@@ -40,6 +46,8 @@ export type CloudSttLiveStartOpts = {
   cloudflareAccountId?: string | null
   gatewayId?: string | null
   sonioxApiKey?: string | null
+  /** Trusted enterprise profile flag: a managed profile never opens the direct Cloudflare token path. */
+  managedProfile?: boolean
   /** Managed host policy; null/undefined preserves the un-managed no-policy behavior. */
   egressAllowlist?: readonly string[] | null
   /** Injected WebSocket ctor for tests (`ws`-compatible). */
@@ -107,6 +115,7 @@ export class CloudSttLiveSession {
   private closed = false
   private closing = false
   private creds: Extract<CloudSttResolvedCreds, { ok: true }> | null = null
+  private identity: SttResolvedIdentity | null = null
   private opts: CloudSttLiveStartOpts
   private handlers: CloudSttLiveHandlers
   private Ws: typeof WebSocket
@@ -132,8 +141,14 @@ export class CloudSttLiveSession {
    * Resolve credentials and open both track sockets. Returns honest error without throwing when
    * credentials are missing (CLOUD_ONLY must surface this, never boot local ASR).
    */
+  /** Who this session runs as; set once credentials resolve, null before and after a refused start. */
+  get resolvedIdentity(): SttResolvedIdentity | null {
+    return this.identity
+  }
+
   async start(): Promise<{ ok: true } | { ok: false; error: string; code: string }> {
     const resolved = resolveCloudSttCredentials({
+      managedProfile: this.opts.managedProfile,
       provider: this.opts.provider,
       cloudflareToken: this.opts.cloudflareToken,
       cloudflareBaseUrl: this.opts.cloudflareBaseUrl,
@@ -145,6 +160,7 @@ export class CloudSttLiveSession {
       return { ok: false, error: resolved.error, code: resolved.code }
     }
     this.creds = resolved
+    this.identity = legacyDirectSttIdentity(resolved)
     this.handlers.onStatus?.('connecting')
     try {
       await Promise.all([this.openTrack('you', false), this.openTrack('them', true)])
@@ -152,6 +168,7 @@ export class CloudSttLiveSession {
       return { ok: true }
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e)
+      this.identity = null
       this.close()
       return {
         ok: false,
@@ -627,7 +644,7 @@ export function getActiveCloudSttSession(): CloudSttLiveSession | null {
 export async function startCloudSttLive(
   opts: CloudSttLiveStartOpts,
   handlers: CloudSttLiveHandlers
-): Promise<{ ok: true } | { ok: false; error: string; code: string }> {
+): Promise<{ ok: true; identity?: SttResolvedIdentity } | { ok: false; error: string; code: string }> {
   const generation = ++activeGeneration
   if (active) {
     const prior = active
@@ -648,7 +665,7 @@ export async function startCloudSttLive(
     return result.ok ? { ok: false, error: 'Cloud STT session was replaced.', code: 'STALE' } : result
   }
   active = session
-  return result
+  return session.resolvedIdentity ? { ok: true, identity: session.resolvedIdentity } : result
 }
 
 export async function stopCloudSttLive(opts?: {

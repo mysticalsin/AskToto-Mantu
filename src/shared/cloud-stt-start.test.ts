@@ -44,9 +44,23 @@ describe('cloud speech start acknowledgement', () => {
   })
   it('reports only the provider actually selected by main', () => {
     expect(cloudSttStartAcknowledgement({ ok: true }, 'soniox')).toEqual({ ok: true, provider: 'soniox' })
+    const identity = { provider: 'soniox', transport: 'direct-token', account: 'soniox-key', model: null } as const
+    expect(cloudSttStartAcknowledgement({ ok: true, identity }, 'soniox')).toEqual({
+      ok: true,
+      provider: 'soniox',
+      resolvedIdentity: identity
+    })
     expect(cloudSttStartAcknowledgement({ ok: true }, 'cloudflare-nova3')).toEqual({
       ok: true,
       provider: 'cloudflare-nova3'
+    })
+  })
+  it('refuses an identity that names a different provider than the one acknowledged', () => {
+    const identity = { provider: 'cloudflare-nova3', transport: 'direct-token', account: 'x', model: null } as const
+    expect(cloudSttStartAcknowledgement({ ok: true, identity }, 'soniox')).toEqual({
+      ok: false,
+      error: 'Cloud speech provider was not acknowledged.',
+      code: 'INVALID_PROVIDER'
     })
   })
   it('never acknowledges an unconfigured or unknown successful provider', () => {
