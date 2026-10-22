@@ -149,7 +149,13 @@ export function publicMeetingTextAsync(text: string): Promise<string> {
   return workerOrInline(
     (service) => service.project(text),
     () => publicMeetingText(text)
-  ).catch(() => Promise.reject(new Error('Meeting text could not be projected safely.')))
+  ).catch((error: unknown) => {
+    // The message stays generic, but a resource refusal keeps its name so History can tell it (retry later) from
+    // bytes that can never project.
+    const refused = new Error('Meeting text could not be projected safely.')
+    if (error instanceof Error && error.name === 'RESOURCE_LIMIT') refused.name = 'RESOURCE_LIMIT'
+    return Promise.reject(refused)
+  })
 }
 
 export function encryptMeetingEnvelopeAsync(

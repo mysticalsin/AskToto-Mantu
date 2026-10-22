@@ -33,7 +33,7 @@ export function registerHistoryIpc(deps: HistoryIpcDependencies): void {
   })
   ipcMain.handle(IPC.recallSearch, (e, q: string) => {
     assertMainWindow(e)
-    return requireAuth() ? searchMeetingsLatest(String(q ?? '')) : []
+    return requireAuth() ? searchMeetingsLatest(String(q ?? '')) : { hits: [], total: 0 }
   })
   ipcMain.handle(IPC.recallOpen, async (e, file: string) => {
     assertMainWindow(e)

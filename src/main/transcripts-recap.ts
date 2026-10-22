@@ -4,43 +4,66 @@ function escapeHtml(s: string): string {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 }
 
+/** Escapes first, then turns **bold** into <strong>, so no markup from the model text ever survives. */
+function inlineHtml(text: string): string {
+  return escapeHtml(text).replace(/\*\*([^*\n]+?)\*\*/g, '<strong>$1</strong>')
+}
+
+type ListLevel = { indent: number; tag: 'ul' | 'ol' }
+
 /**
- * Minimal, deterministic markdown→HTML for RECAP_PROMPT's fixed shape only (## headings, "-"/"*" bullet
- * lists, plain paragraphs) — not a general markdown parser. Used solely to print a recap to PDF via
- * Electron's webContents.printToPDF(); no npm dependency needed for that one job.
+ * Minimal, deterministic markdown→HTML for the recap shapes the prompts and the app's Markdown view produce:
+ * ## and ### headings, "-"/"*" bullets and "1." numbered items (nested by indentation), **bold**, plain
+ * paragraphs — not a general markdown parser. Used solely to print a recap to PDF via Electron's
+ * webContents.printToPDF(); no npm dependency needed for that one job.
  */
 export function recapMarkdownToHtml(markdown: string, title?: string): string {
   const body: string[] = []
-  let inList = false
-  for (const raw of markdown.split('\n')) {
+  // Open lists, outermost first. Each item is left open (`<li>…`) so a deeper list can nest inside it.
+  let levels: ListLevel[] = []
+  let list = ''
+  const closeLevel = (): void => {
+    const top = levels[levels.length - 1]
+    list += `</li></${top.tag}>`
+    levels = levels.slice(0, -1)
+  }
+  const flushList = (): void => {
+    while (levels.length) closeLevel()
+    if (list) body.push(list)
+    list = ''
+  }
+  const addItem = (indent: number, tag: 'ul' | 'ol', text: string): void => {
+    while (levels.length && levels[levels.length - 1].indent > indent) closeLevel()
+    const top = levels[levels.length - 1]
+    if (top && top.indent === indent && top.tag === tag) {
+      list += `</li><li>${inlineHtml(text)}`
+      return
+    }
+    if (top && top.indent === indent) closeLevel() // same depth, other list kind: start the other kind
+    list += `<${tag}><li>${inlineHtml(text)}`
+    levels = [...levels, { indent, tag }]
+  }
+  for (const raw of markdown.split(/\r?\n/)) {
     const line = raw.trimEnd()
-    const h2 = /^##\s+(.*)/.exec(line)
-    const bullet = /^[-*]\s+(.*)/.exec(line)
-    if (h2) {
-      if (inList) {
-        body.push('</ul>')
-        inList = false
-      }
-      body.push(`<h2>${escapeHtml(h2[1])}</h2>`)
-    } else if (bullet) {
-      if (!inList) {
-        body.push('<ul>')
-        inList = true
-      }
-      body.push(`<li>${escapeHtml(bullet[1])}</li>`)
+    const heading = /^(#{2,})\s+(.*)/.exec(line)
+    const item = /^(\s*)([-*]|\d+[.)])\s+(.*)/.exec(line)
+    if (heading) {
+      flushList()
+      const tag = heading[1].length === 2 ? 'h2' : 'h3'
+      body.push(`<${tag}>${inlineHtml(heading[2])}</${tag}>`)
+    } else if (item) {
+      addItem(item[1].replace(/\t/g, '    ').length, /^\d/.test(item[2]) ? 'ol' : 'ul', item[3])
     } else if (line.trim()) {
-      if (inList) {
-        body.push('</ul>')
-        inList = false
-      }
-      body.push(`<p>${escapeHtml(line)}</p>`)
+      flushList()
+      body.push(`<p>${inlineHtml(line)}</p>`)
     }
   }
-  if (inList) body.push('</ul>')
+  flushList()
   const style =
     'body{font-family:-apple-system,Helvetica,Arial,sans-serif;color:#1a1a1a;padding:32px;line-height:1.5}' +
     'h1{font-size:20px;margin:0 0 4px}h2{font-size:14px;text-transform:uppercase;letter-spacing:.02em;' +
-    'color:#444;margin:20px 0 8px}ul{margin:0 0 8px;padding-left:20px}li{margin-bottom:4px}p{margin:0 0 8px}'
+    'color:#444;margin:20px 0 8px}h3{font-size:13px;color:#333;margin:14px 0 6px}' +
+    'ul,ol{margin:0 0 8px;padding-left:20px}li{margin-bottom:4px}p{margin:0 0 8px}'
   const heading = title ? `<h1>${escapeHtml(title)}</h1>` : ''
   const csp =
     "default-src 'none'; script-src 'none'; style-src 'unsafe-inline'; img-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-src 'none'"

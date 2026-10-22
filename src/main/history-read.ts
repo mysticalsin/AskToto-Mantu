@@ -17,6 +17,13 @@ import { classifyAll, storageAt } from './infra/storage/meetings-storage'
 import type { FileClass } from './infra/storage/gateway'
 import { getSettings } from './store'
 import type { MeetingSummary, RecallHit } from '@shared/ipc'
+import {
+  RECALL_SEARCH_MAX_CHARS,
+  RECALL_SEARCH_MAX_TERMS,
+  RECALL_SEARCH_RESULT_CAP,
+  type RecallSearchResult
+} from '@shared/recall-search'
+import { ByteBudgetCache, READ_CACHE_MAX_BYTES } from './history-read-cache'
 import { readMeetingFields as frontmatter, stripMeetingFrontmatter } from './features/meetings/meeting-document'
 
 // `meeting-summary` is a first-class saved meeting under managed summary-only retention. Keep the accepted
@@ -102,11 +109,11 @@ interface CacheEntry {
   size: number
   read: Read | null
 }
-// Least-recently-used, so a pathological folder (or repeated folder switches) cannot grow it without
-// limit and a full cache drops one cold entry instead of every warm one. A Map iterates in insertion
-// order, so re-inserting on every hit keeps the coldest entry first.
+// Least-recently-used and byte-bounded (history-read-cache.ts), so a pathological folder cannot grow it
+// without limit, a large library cannot keep its decrypted text resident, and a full cache drops the cold
+// entries instead of every warm one. An entry is accounted at its file size when it holds text.
 const READ_CACHE_MAX = 2000
-const readCache = new Map<string, CacheEntry>()
+const readCache = new ByteBudgetCache<CacheEntry>(READ_CACHE_MAX, READ_CACHE_MAX_BYTES)
 const newestFirstDateCollator = new Intl.Collator()
 
 export function compareMeetingRowsNewestFirst(a: Pick<HistoryRow, 'date'>, b: Pick<HistoryRow, 'date'>): number {
@@ -114,18 +121,11 @@ export function compareMeetingRowsNewestFirst(a: Pick<HistoryRow, 'date'>, b: Pi
 }
 
 function cachedRead(path: string): CacheEntry | undefined {
-  const entry = readCache.get(path)
-  if (entry) {
-    readCache.delete(path)
-    readCache.set(path, entry)
-  }
-  return entry
+  return readCache.get(path)
 }
 
 function cacheRead(path: string, entry: CacheEntry): void {
-  readCache.delete(path)
-  readCache.set(path, entry)
-  if (readCache.size > READ_CACHE_MAX) readCache.delete(readCache.keys().next().value as string)
+  readCache.set(path, entry, entry.read?.text ? entry.size : 0)
 }
 
 /** Sentinel for "this file could not be READ at all" — an unhydrated OneDrive Files-On-Demand
@@ -146,6 +146,19 @@ function notDownloadedRow(file: string): Read | null {
 function unavailableRow(file: string): Read | null {
   const stub = lockedStub(file, 'Unavailable')
   return stub ? { text: '', sum: { ...stub, unavailable: true } } : null
+}
+
+/** The row for a file whose bytes read fine but cannot be projected: the same bytes fail every time, so the
+ *  verdict is cached against (mtimeMs, size) like any other, and the row says so instead of "try again". */
+function unprojectableRow(file: string): Read | null {
+  const stub = lockedStub(file, 'Could not read this meeting file')
+  return stub ? { text: '', sum: { ...stub, unavailable: true } } : null
+}
+
+/** A thrown projection error is permanent for these bytes, except a resource refusal (the worker was busy or
+ *  over budget), which a later listing may well get past. */
+export function isTransientProjectionError(error: unknown): boolean {
+  return error instanceof Error && error.name === 'RESOURCE_LIMIT'
 }
 
 /** Read + decode one file (async), parse its frontmatter. Null if it isn't a saved meeting.
@@ -189,8 +202,9 @@ async function readMeeting(
     readCache.delete(path)
     return unavailableRow(file)
   }
-  cacheRead(path, { mtimeMs, size, read })
-  return read
+  const verdict = read === UNPROJECTABLE ? unprojectableRow(file) : read
+  cacheRead(path, { mtimeMs, size, read: verdict })
+  return verdict
 }
 
 /** Reads one listing's files: a single batched classify, then a read of each file classified local. Aborting
@@ -210,12 +224,14 @@ export async function readMeetings(
 
 /** The gateway says this file's bytes are not on this device (or would not arrive in time). */
 const NOT_LOCAL = Symbol('not-local')
+/** The file read fine but its speech-provenance projection threw: permanent for these bytes. */
+const UNPROJECTABLE = Symbol('unprojectable')
 
 async function readMeetingUncached(
   folder: string,
   file: string,
   signal?: AbortSignal
-): Promise<Read | null | typeof UNREADABLE | typeof NOT_LOCAL> {
+): Promise<Read | null | typeof UNREADABLE | typeof NOT_LOCAL | typeof UNPROJECTABLE> {
   const maxBytes = getMeetingSpeechReadLimitBytes()
   const raw = await storageAt(folder).read(file, { signal, ...(maxBytes ? { maxBytes } : {}) })
   if (raw.status !== 'ok') {
@@ -235,8 +251,8 @@ async function readMeetingUncached(
     let text: string
     try {
       text = await publicMeetingTextAsync(decoded.text)
-    } catch {
-      return UNREADABLE
+    } catch (error) {
+      return isTransientProjectionError(error) ? UNREADABLE : UNPROJECTABLE
     }
     if (!text) {
       // decodeSaved returns '' both for "not a meeting file" and for a REAL meeting encrypted at rest
@@ -285,14 +301,22 @@ export async function listMeetings(): Promise<HistoryRow[]> {
     .sort(compareMeetingRowsNewestFirst)
 }
 
-/** Keyword search across saved meetings; returns scored hits with a snippet. */
-export async function searchMeetings(query: string, signal?: AbortSignal): Promise<RecallHit[]> {
-  const folder = resolveMeetingsFolder(getSettings())
-  const terms = query
+/** The search terms: the query cut at the character cap, lowercased, one-character words dropped, at most the
+ *  term cap. Bounding them bounds the scoring work a pasted wall of text could cost the main process. */
+export function parseSearchTerms(query: string): string[] {
+  return query
+    .slice(0, RECALL_SEARCH_MAX_CHARS)
     .toLowerCase()
     .split(/\s+/)
     .filter((t) => t.length > 1)
-  if (!terms.length) return []
+    .slice(0, RECALL_SEARCH_MAX_TERMS)
+}
+
+/** Keyword search across saved meetings; returns the best scored hits with a snippet, and how many matched. */
+export async function searchMeetings(query: string, signal?: AbortSignal): Promise<RecallSearchResult> {
+  const folder = resolveMeetingsFolder(getSettings())
+  const terms = parseSearchTerms(query)
+  if (!terms.length) return { hits: [], total: 0 }
   const read = await readMeetings(folder, await meetingFiles(folder, signal), signal)
   const hits: RecallHit[] = []
   for (const r of read) {
@@ -321,14 +345,14 @@ export async function searchMeetings(query: string, signal?: AbortSignal): Promi
       .trim()
     hits.push({ ...sum, snippet, score })
   }
-  return hits.sort((a, b) => b.score - a.score).slice(0, 25)
+  return { hits: hits.sort((a, b) => b.score - a.score).slice(0, RECALL_SEARCH_RESULT_CAP), total: hits.length }
 }
 
 let activeSearch: AbortController | null = null
 
 /** The IPC search: a newer keystroke aborts the search still queued at the storage gateway, whose caller
- *  gets `[]`. */
-export function searchMeetingsLatest(query: string): Promise<RecallHit[]> {
+ *  gets no hits. */
+export function searchMeetingsLatest(query: string): Promise<RecallSearchResult> {
   activeSearch?.abort()
   const search = (activeSearch = new AbortController())
   return searchMeetings(query, search.signal).finally(() => {

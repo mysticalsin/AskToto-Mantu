@@ -185,6 +185,20 @@ describe('inline fallback of the async meeting speech wrappers', () => {
     })
   })
 
+  it('a refused projection keeps its generic message but stays recognisable as a resource refusal', async () => {
+    configureMeetingSpeechPersistence(failingService('RESOURCE_LIMIT'))
+    const framed = renderMeetingTranscript(lines)
+    await expect(publicMeetingTextAsync(framed)).rejects.toMatchObject({
+      name: 'RESOURCE_LIMIT',
+      message: 'Meeting text could not be projected safely.'
+    })
+    configureMeetingSpeechPersistence(failingService('WORKER_FAILED'))
+    await expect(publicMeetingTextAsync(framed)).resolves.toEqual(expect.any(String))
+    await expect(publicMeetingTextAsync('<!-- /metis-speech-provenance -->')).rejects.toMatchObject({
+      name: 'Error'
+    })
+  })
+
   it('does not swallow a non-worker error such as a wrong-key decrypt', async () => {
     const { envelope } = await runAll()
     const json = envelope.subarray('ATKENC2\n'.length)

@@ -241,7 +241,7 @@ describe('recall — managed summary-only meetings', () => {
     const file = basename(saved)
 
     expect((await listMeetings()).map((meeting) => meeting.file)).toContain(file)
-    expect((await searchMeetings('processing region')).map((meeting) => meeting.file)).toContain(file)
+    expect((await searchMeetings('processing region')).hits.map((meeting) => meeting.file)).toContain(file)
     expect(readFileSync(saved, 'utf8')).not.toContain('VERBATIM_MUST_NOT_SURVIVE')
 
     const firstRead = await recallRead(file)
@@ -842,7 +842,7 @@ describe('recall — undecryptable rows degrade gracefully', () => {
     await saveMeeting(testSettings, goodMeeting)
     writeCorruptEncryptedFile('2024-01-01_000000-corrupt.md')
 
-    const hits = await searchMeetings('decrypts')
+    const { hits } = await searchMeetings('decrypts')
     expect(hits).toHaveLength(1)
     expect(hits[0].title).toBe('Readable meeting')
   })
@@ -1016,10 +1016,10 @@ describe('recall — a transient read failure never hides a meeting (MQA-033)', 
     const file = await saveMeeting(testSettings, meeting)
 
     unreadablePaths.add(file)
-    expect(await searchMeetings('march')).toHaveLength(0) // nothing to match on while it can't be read
+    expect((await searchMeetings('march')).hits).toHaveLength(0) // nothing to match on while it can't be read
 
     unreadablePaths.delete(file)
-    const hits = await searchMeetings('march')
+    const { hits } = await searchMeetings('march')
     expect(hits).toHaveLength(1)
     expect(hits[0].title).toBe('Renault kickoff')
   })
@@ -1536,8 +1536,8 @@ describe('recall — dataless files are listed, never read (M2-0193)', () => {
     cloudOnly.add(remote)
     reads.length = 0
 
-    expect(await searchMeetings('march')).toHaveLength(0)
-    expect(await searchMeetings('marc')).toHaveLength(0)
+    expect((await searchMeetings('march')).hits).toHaveLength(0)
+    expect((await searchMeetings('marc')).hits).toHaveLength(0)
     expect(reads).toEqual([])
   })
 
@@ -1569,7 +1569,7 @@ describe('recall — dataless files are listed, never read (M2-0193)', () => {
     const row = (await listMeetings()).find((m) => m.file === basename(odd))
     expect(row?.title).toContain('Unavailable')
     expect(row?.unavailable).toBe(true)
-    expect(await searchMeetings('march')).toHaveLength(0)
+    expect((await searchMeetings('march')).hits).toHaveLength(0)
     expect(await recallRead(basename(odd))).toEqual({ ok: false, error: 'Could not read the meeting file.' })
     expect(reads).toEqual([])
   })
@@ -1596,12 +1596,55 @@ describe('recall — dataless files are listed, never read (M2-0193)', () => {
     expect(row?.notDownloaded).toBeUndefined()
   })
 
+  const plainMeeting = (name: string, body: string): string => {
+    const file = join(folder, name)
+    writeFileSync(
+      file,
+      `---\ntype: meeting-transcript\ntitle: "${name}"\ndate: 2026-03-01T10:00:00Z\n---\n\n${body}\n`,
+      'utf8'
+    )
+    return file
+  }
+
+  it('search caps terms at 16 and reports total', async () => {
+    for (let i = 0; i < 27; i += 1) plainMeeting(`2026-03-01_1000${String(i).padStart(2, '0')}-m${i}.md`, 'pilot march')
+    plainMeeting('2026-03-02_100000-tail.md', 'needleword')
+    const found = await searchMeetings('march')
+    expect(found.hits).toHaveLength(25)
+    expect(found.total).toBe(27)
+
+    const filler = (n: number): string => Array.from({ length: n }, (_, i) => `filler${i}`).join(' ')
+    expect((await searchMeetings(`${filler(15)} needleword`)).hits.map((h) => h.file)).toEqual([
+      '2026-03-02_100000-tail.md'
+    ])
+    // The 17th term is dropped, so the one meeting that holds it no longer matches.
+    expect(await searchMeetings(`${filler(16)} needleword`)).toEqual({ hits: [], total: 0 })
+  })
+
+  it('projection error is cached for unchanged bytes', async () => {
+    const name = '2026-03-03_100000-broken.md'
+    const file = plainMeeting(name, '<!-- /metis-speech-provenance -->')
+    const row = (await listMeetings()).find((m) => m.file === name)
+    expect(row?.title).toContain('Could not read this meeting file')
+    expect(row?.unavailable).toBe(true)
+
+    const readsAfterFirst = reads.filter((p) => p === file).length
+    expect(readsAfterFirst).toBeGreaterThan(0)
+    await listMeetings()
+    await searchMeetings('broken')
+    expect(reads.filter((p) => p === file)).toHaveLength(readsAfterFirst)
+
+    // Changed bytes are read (and judged) again.
+    plainMeeting(name, 'now a readable body, longer than before')
+    expect((await listMeetings()).find((m) => m.file === name)?.title).toBe(name)
+  })
+
   it('a search superseded by a newer one returns nothing while the newer one answers', async () => {
     await saveMeeting(testSettings, meeting('Local sync', 1_700_000_000_000))
     const first = searchMeetingsLatest('march')
     const second = searchMeetingsLatest('march')
-    expect(await first).toEqual([])
-    expect(await second).toHaveLength(1)
+    expect(await first).toEqual({ hits: [], total: 0 })
+    expect((await second).hits).toHaveLength(1)
   })
 
   it('an aborted search returns nothing and reads nothing', async () => {
@@ -1609,7 +1652,7 @@ describe('recall — dataless files are listed, never read (M2-0193)', () => {
     reads.length = 0
     const controller = new AbortController()
     controller.abort()
-    expect(await searchMeetings('march', controller.signal)).toEqual([])
+    expect(await searchMeetings('march', controller.signal)).toEqual({ hits: [], total: 0 })
     expect(reads).toEqual([])
   })
 
@@ -1628,7 +1671,7 @@ describe('recall — dataless files are listed, never read (M2-0193)', () => {
       new Promise((resolve) => setTimeout(() => resolve('still classifying'), 1_000))
     ])
     release()
-    expect(settled).toEqual([])
+    expect(settled).toEqual({ hits: [], total: 0 })
     expect(reads).toEqual([])
   })
 
@@ -1747,7 +1790,7 @@ describe('recall — dataless files are listed, never read (M2-0193)', () => {
         expect(list.find((m) => m.file === first)?.notDownloaded).toBe(true)
         expect(list.find((m) => m.file === second)?.notDownloaded).toBe(true)
         expect(list.find((m) => m.file === local)?.title).toBe('Local sync')
-        expect((await searchMeetings('march')).map((m) => m.file)).toEqual([local])
+        expect((await searchMeetings('march')).hits.map((m) => m.file)).toEqual([local])
         expect((await openRead(local, send)).ok).toBe(true)
         expect(reads).not.toContain(secondPath)
         expect(events).toHaveLength(2)

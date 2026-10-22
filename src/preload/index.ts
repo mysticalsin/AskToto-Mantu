@@ -35,7 +35,6 @@ import {
   type SaveNote,
   type RecapExport,
   type MeetingSummary,
-  type RecallHit,
   type AnswerFeedback,
   type EvalMetrics,
   type StreamDelta,
@@ -110,6 +109,7 @@ import type { RightEdgeState, RightEdgeSurfaceState } from '@shared/right-edge-s
 import type { ProviderId } from '@shared/providers'
 import type { RecapStatus } from '@shared/recap-status'
 import type { RecallHydration } from '@shared/recall-hydration'
+import type { RecallSearchResult } from '@shared/recall-search'
 
 type Unsub = () => void
 function sub<T>(channel: string, cb: (payload: T) => void): Unsub {
@@ -479,7 +479,7 @@ const api = {
   openMeetingsFolder: (): Promise<string> => ipcRenderer.invoke(IPC.openPath),
   openBrainForClaude: (): Promise<{ ok: boolean; path: string }> => ipcRenderer.invoke(IPC.openBrainForClaude),
   recallList: (trace?: HistoryTrace): Promise<MeetingSummary[]> => ipcRenderer.invoke(IPC.recallList, trace),
-  recallSearch: (q: string): Promise<RecallHit[]> => ipcRenderer.invoke(IPC.recallSearch, q),
+  recallSearch: (q: string): Promise<RecallSearchResult> => ipcRenderer.invoke(IPC.recallSearch, q),
   recallOpen: (file: string): Promise<string> => ipcRenderer.invoke(IPC.recallOpen, file),
   recallRead: (file: string): Promise<RecallReadResult> => ipcRenderer.invoke(IPC.recallRead, file),
   // An explicit recallRead/recallOpen downloading one cloud-only meeting: hydrating, then done or failed.

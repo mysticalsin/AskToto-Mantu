@@ -211,7 +211,7 @@ describe('actual saved final speech provenance', () => {
       expect(text).not.toContain('captureGeneration')
       expect(text).not.toContain(input.lines[0].speech!.captureId)
     }
-    expect(await searchMeetings(input.lines[0].speech!.captureId)).toEqual([])
+    expect((await searchMeetings(input.lines[0].speech!.captureId)).hits).toEqual([])
   })
 
   it('refuses a stale text/event rewrite and preserves the prior complete file', async () => {
@@ -361,7 +361,7 @@ describe('actual saved final speech provenance', () => {
       'Meeting text could not be projected safely.'
     )
     expect((await readSourceText(file)).status).toBe('unreadable')
-    expect(await searchMeetings(input.lines[0].speech!.captureId)).toEqual([])
+    expect((await searchMeetings(input.lines[0].speech!.captureId)).hits).toEqual([])
     expect(readFileSync(file)).toEqual(before)
   })
 

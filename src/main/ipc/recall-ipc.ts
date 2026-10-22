@@ -29,7 +29,7 @@ import { publishAll, publishMeetingCard, removeWiki } from '../brain/publish'
 import { purgeBrain } from '../brain/store'
 import { safeMeetingBasename } from '../meeting-path'
 import { resolveMeetingsFolder, appendDebrief } from '../transcripts'
-import { readSavedMeeting } from '../history-actions'
+import { exportFailureMessage, readSavedMeeting } from '../history-actions'
 import { listMeetings } from '../history-read'
 import { isOwnedMeetingFile } from '../meeting-privacy'
 import {
@@ -115,8 +115,7 @@ export function registerRecallIpc(deps: RecallIpcDependencies): void {
       return { ok: true, path: res.filePath }
     } catch (err) {
       // Sanitized like recall.ts's siblings — never the raw err.message (it can carry absolute paths).
-      const code = (err as NodeJS.ErrnoException | null)?.code
-      return { ok: false, error: code === 'ENOENT' ? 'Meeting file not found.' : 'Could not export the meeting file.' }
+      return { ok: false, error: exportFailureMessage(err) }
     }
   })
 

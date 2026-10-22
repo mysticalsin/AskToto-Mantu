@@ -54,7 +54,26 @@ export async function readSavedMeeting(folder: string, safeName: string): Promis
     const decoded = await decodeSavedMeetingAsync(read.bytes, false, join(folder, safeName))
     return publicMeetingTextAsync(decoded.ok ? decoded.text : '')
   }
+  if (read.status === 'dataless' || read.status === 'unknown') throw new MeetingNotDownloadedError()
   const error = new Error(`meeting file ${read.status}`) as NodeJS.ErrnoException
   if (read.status === 'missing') error.code = 'ENOENT'
   throw error
+}
+
+export const MEETING_NOT_DOWNLOADED_MSG =
+  "This meeting isn't downloaded to this device. Download it first, then export."
+
+/** readSavedMeeting's refusal for a cloud-only meeting: Export never hydrates, so the way out is Download. */
+export class MeetingNotDownloadedError extends Error {
+  constructor() {
+    super('meeting file not downloaded')
+    this.name = 'MeetingNotDownloadedError'
+  }
+}
+
+/** The sentence History shows when exporting a meeting copy failed, without the raw error (it can carry paths). */
+export function exportFailureMessage(error: unknown): string {
+  if (error instanceof MeetingNotDownloadedError) return MEETING_NOT_DOWNLOADED_MSG
+  const code = (error as NodeJS.ErrnoException | null | undefined)?.code
+  return code === 'ENOENT' ? 'Meeting file not found.' : 'Could not export the meeting file.'
 }

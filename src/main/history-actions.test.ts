@@ -9,7 +9,13 @@ import { createFifo, releaseFifo } from '../../scripts/qa/fixtures/fifo.mjs'
 import { saveMeeting } from './transcripts'
 import { useStorageForTests } from './infra/storage/meetings-storage'
 import type { ContentPresence, DatalessDetector } from './infra/storage/dataless'
-import { MEETING_NOT_READABLE_MSG, meetingOpenTarget, readSavedMeeting } from './history-actions'
+import {
+  MEETING_NOT_DOWNLOADED_MSG,
+  MEETING_NOT_READABLE_MSG,
+  exportFailureMessage,
+  meetingOpenTarget,
+  readSavedMeeting
+} from './history-actions'
 
 vi.mock('electron')
 
@@ -159,6 +165,23 @@ describe('readSavedMeeting (History "Export copy")', () => {
     const error = await readSavedMeeting(folder, NAME).catch((e: NodeJS.ErrnoException) => e)
     expect(error).toBeInstanceOf(Error)
     expect((error as NodeJS.ErrnoException).code).toBeUndefined()
+  })
+
+  it('cloud-only export gives the download-first message', async () => {
+    useStorageForTests({ detector: everyFile('dataless') })
+    writeFileSync(join(folder, NAME), '# Weekly sync\n')
+    const error = await readSavedMeeting(folder, NAME).catch((e: unknown) => e)
+    expect(exportFailureMessage(error)).toBe(MEETING_NOT_DOWNLOADED_MSG)
+    expect(MEETING_NOT_DOWNLOADED_MSG).toBe(
+      "This meeting isn't downloaded to this device. Download it first, then export."
+    )
+  })
+
+  it('keeps the other export failures as they were', async () => {
+    const missing = await readSavedMeeting(folder, NAME).catch((e: unknown) => e)
+    expect(exportFailureMessage(missing)).toBe('Meeting file not found.')
+    expect(exportFailureMessage(new Error('boom'))).toBe('Could not export the meeting file.')
+    expect(exportFailureMessage(undefined)).toBe('Could not export the meeting file.')
   })
 })
 
