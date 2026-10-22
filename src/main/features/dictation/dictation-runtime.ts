@@ -18,6 +18,8 @@ import type { InputSessionAuthority } from '../../input-session-authority'
 import { auditLog } from '../../logger'
 import type { ChordWatcherEvent } from '../../voice/chord-watcher'
 import { createVoiceChordWiring, type VoiceChordWiring } from '../../voice/chord-wiring'
+import { currentDictationMemory } from './dictation-memory-registry'
+import type { DictationMemory, DictationMemorySink } from './dictation-memory'
 import { UNSUPPORTED_DICTATION_PORTS, type DictationHostPorts } from './dictation-ports'
 import { DictationSession, type DictationAuditPhase, type DictationSnapshot } from './dictation-session'
 
@@ -53,6 +55,11 @@ export interface DictationRuntimeDeps {
   chord?: VoiceChordWiring
   /** The OS ports. Absent in production until G23 and G24: dictation is then refused before the microphone opens. */
   ports?: DictationHostPorts
+  /**
+   * The encrypted segment journal and dictionary (G26). Resolved on every use, because the owner-session wiring that
+   * builds it runs after this runtime exists. Defaults to the process's installed memory; null journals nothing.
+   */
+  memory?(): DictationMemory | null
   now?(): number
   newTurnId?(): string
   audit?(phase: DictationAuditPhase, detail?: { reason?: string }): void
@@ -112,6 +119,13 @@ export function createDictationRuntime(deps: DictationRuntimeDeps): DictationRun
       onChordEvent: (event: ChordWatcherEvent) => session.onChordEvent(event),
       audit: (event, data) => auditLog(event, { ...data, chord: 'dictation' })
     })
+  const memory = deps.memory ?? currentDictationMemory
+  const memorySink: DictationMemorySink = {
+    segmentRecognized: (turnId, text) => memory()?.sink.segmentRecognized(turnId, text),
+    draftPreserved: (turnId, draft) => memory()?.sink.draftPreserved(turnId, draft),
+    inserted: (turnId, text) => memory()?.sink.inserted(turnId, text),
+    turnEnded: (turnId) => memory()?.sink.turnEnded(turnId)
+  }
   const session: DictationSession = new DictationSession({
     settings: () => ({ enabled: effectiveEnabled() }),
     gate: {
@@ -131,6 +145,7 @@ export function createDictationRuntime(deps: DictationRuntimeDeps): DictationRun
     },
     speech: { prewarm: () => deps.parakeet.ensure() },
     ports: deps.ports ?? UNSUPPORTED_DICTATION_PORTS,
+    memory: memorySink,
     push: {
       begin: (payload) => send(VOICE_ACTIONS_IPC.begin, payload),
       end: (payload) => send(VOICE_ACTIONS_IPC.end, payload)

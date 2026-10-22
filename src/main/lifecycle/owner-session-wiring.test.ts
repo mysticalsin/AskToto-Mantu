@@ -2,6 +2,7 @@ import { EventEmitter } from 'node:events'
 import { describe, expect, it, vi } from 'vitest'
 import { CloudSpeechSegmentEventSchema } from '@shared/cloud-speech'
 import { OWNER_SESSION_IPC } from '@shared/contracts/owner-session'
+import { DICTATION_MEMORY_IPC } from '@shared/dictation-memory'
 import { IPC } from '@shared/ipc'
 import { SESSION_CONTEXT_IPC } from '@shared/session-context-request'
 import type { InputSessionStopReason } from '@shared/input-session'
@@ -62,12 +63,13 @@ function wire() {
 }
 
 describe('owner session wiring', () => {
-  it('registers the owner-session status channel, the ledger line seam and the live journal write seam, nothing else', () => {
+  it('registers the owner-session status channel, the ledger line seam, the live journal write seam and the dictation memory seam (G26), nothing else', () => {
     const { ipcMain } = wire()
     expect(ipcMain.handle.mock.calls.map((call) => call[0])).toEqual([
       OWNER_SESSION_IPC.status,
       SESSION_CONTEXT_IPC.appendLine,
-      IPC.appendMeetingJournal
+      IPC.appendMeetingJournal,
+      ...Object.values(DICTATION_MEMORY_IPC)
     ])
   })
 
@@ -102,8 +104,11 @@ describe('owner session wiring', () => {
       currentInputSessionContext: () => ({ authSessionGeneration: 1, contextRevision: 3 }),
       privateView: () => false
     })
-    // Every handler (owner-session status, ledger line seam, live journal seam) registers after the policy is installed.
-    expect(installedAtFirstHandler).toEqual([true, true, true])
+    // Every handler (owner-session status, ledger line seam, live journal seam, the dictation memory seam) registers
+    // after the policy is installed.
+    expect(installedAtFirstHandler).toEqual(
+      Array.from({ length: 3 + Object.values(DICTATION_MEMORY_IPC).length }, () => true)
+    )
     expect(getMeetingSpeechLimits()).toEqual(MEETING_SPEECH_LIMITS)
     expect(getMeetingSpeechReadLimitBytes()).toBe(MEETING_SPEECH_WORKER_BOUNDS.maxInputBytes)
   })

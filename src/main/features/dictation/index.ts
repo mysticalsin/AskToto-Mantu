@@ -14,3 +14,12 @@ export {
   type DictationTargetUnavailable
 } from './dictation-ports'
 export type { DictationReason, DictationSnapshot, DictationUiState } from './dictation-session'
+export {
+  createDictationMemory,
+  type DictationMemory,
+  type DictationMemoryAuditRecord,
+  type DictationMemoryDeps,
+  type DictationMemorySink
+} from './dictation-memory'
+export { currentDictationMemory, installDictationMemory } from './dictation-memory-registry'
+export type { DictationKeyCustody } from './dictation-memory-crypto'

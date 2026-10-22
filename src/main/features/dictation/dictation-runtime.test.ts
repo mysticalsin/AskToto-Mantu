@@ -310,3 +310,48 @@ describe('dictation runtime: lifecycle (G22)', () => {
     expect(h.runtime.active()).toBe(false)
   })
 })
+
+describe('dictation runtime: the encrypted segment journal (G26)', () => {
+  const sinkFake = () => ({
+    segmentRecognized: vi.fn(),
+    draftPreserved: vi.fn(),
+    inserted: vi.fn(),
+    turnEnded: vi.fn()
+  })
+
+  async function dictate(h: ReturnType<typeof setup>): Promise<void> {
+    h.runtime.start()
+    h.wiring().onChordEvent?.(armed)
+    await flush()
+    h.state.lease = lease('dictation')
+    h.runtime.report({ turnId: 'turn-a', phase: 'capturing' })
+    h.wiring().onChordEvent?.({ type: 'released', reason: 'release' })
+    h.runtime.onTranscript('synthetic words')
+    await flush()
+  }
+
+  it('resolves the memory on every use, so a memory installed after the runtime was built still journals', async () => {
+    const sink = sinkFake()
+    const current: { value: { sink: ReturnType<typeof sinkFake> } | null } = { value: null }
+    const h = setup({ memory: () => current.value as never })
+    current.value = { sink }
+    await dictate(h)
+    expect(sink.segmentRecognized).toHaveBeenCalledWith('turn-a', 'synthetic words')
+    expect(sink.draftPreserved).not.toHaveBeenCalled()
+    expect(sink.turnEnded).toHaveBeenCalledWith('turn-a')
+  })
+
+  it('a runtime with no memory installed dictates exactly as before', async () => {
+    const h = setup({ memory: () => null })
+    await dictate(h)
+    expect(h.ports.insertion.insert).toHaveBeenCalledTimes(1)
+  })
+
+  it('a kept draft reaches the journal through the guard sink when the runtime is disposed', async () => {
+    const sink = sinkFake()
+    const h = setup({ memory: () => ({ sink }) as never })
+    await dictate(h)
+    h.runtime.dispose()
+    expect(sink.draftPreserved).toHaveBeenCalledWith('turn-a', expect.objectContaining({ text: 'synthetic words' }))
+  })
+})

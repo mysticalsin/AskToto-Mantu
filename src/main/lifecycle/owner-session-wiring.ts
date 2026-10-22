@@ -15,6 +15,7 @@ import { bindMeetingMicRendererReset } from '../meeting-mic-capture-authority'
 import { getPublishedSettingsObservation } from '../settings-observation'
 import type { SpeechDesktopHooks } from '../speech-desktop-boundary'
 import type { RendererResetSource } from '../features/meetings/session-closure'
+import { bootstrapDictationMemory } from './dictation-memory-wiring'
 import { bootstrapLiveMeetingJournal } from './live-meeting-journal-wiring'
 import { bindMeetingSpeechInvalidation, bootstrapMeetingSpeech } from './meeting-speech-persistence-wiring'
 import { bootMainMemoryPartitions } from './memory-partition-wiring'
@@ -118,6 +119,17 @@ export function createOwnerSessionWiring(deps: OwnerSessionWiringDeps): OwnerSes
     audit: (event, record) => auditLog(event, { ...record }),
     auditRecovery: (record) => auditLog('meeting.journal.recovery', { ...record }),
     currentOwnerKey: () => ownerSession.currentOwnerKey(),
+    onWillQuit: (listener) => app.once('will-quit', listener)
+  })
+  // G26 dictation memory: the encrypted segment journal (single recovery) and the owned-span personal dictionary.
+  bootstrapDictationMemory({
+    ipcMain,
+    authorizeSender,
+    requireAuth: () => requireAuth(),
+    ownerSession,
+    userDataPath: () => app.getPath('userData'),
+    currentOwnerKey: () => ownerSession.currentOwnerKey(),
+    audit: (record) => auditLog('dictation.memory', { ...record }),
     onWillQuit: (listener) => app.once('will-quit', listener)
   })
   return {

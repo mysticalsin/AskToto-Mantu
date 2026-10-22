@@ -2,6 +2,7 @@ import type { IpcRenderer } from 'electron'
 import { createCloudSpeechPreloadApi } from './cloud-speech'
 import { createTranscriptRevisionPreloadApi } from './transcript-revision'
 import { createMetricsPreloadApi } from './metrics'
+import { createDictationMemoryPreloadApi } from './dictation-memory'
 import { createVoiceActionsPreloadApi } from './voice-actions'
 import { createSessionContextPreloadApi } from './session-context'
 
@@ -12,6 +13,7 @@ export function createFeaturePreloadApis(ipc: IpcRenderer) {
     ...createTranscriptRevisionPreloadApi(ipc),
     ...createMetricsPreloadApi(ipc),
     ...createVoiceActionsPreloadApi(ipc),
+    ...createDictationMemoryPreloadApi(ipc),
     ...createSessionContextPreloadApi(ipc)
   }
 }

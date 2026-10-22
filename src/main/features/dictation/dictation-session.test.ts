@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { DictationInsertRequest, DictationTarget } from '../desktop-contract'
 import type { ChordWatcherEvent } from '../../voice/chord-watcher'
 import type { DictationInsertionResult, DictationTargetObservation } from './dictation-ports'
+import type { DictationMemorySink } from './dictation-memory'
 import { DictationSession, type DictationSessionDeps } from './dictation-session'
 
 // Synthetic fixtures only: no real application, window or text.
@@ -38,6 +39,7 @@ function setup(
     gate?: Partial<DictationSessionDeps['gate']>
     mint?: boolean
     enabled?: boolean
+    memory?: DictationMemorySink
   } = {}
 ) {
   const calls = {
@@ -94,7 +96,8 @@ function setup(
     newTurnId: () => `turn-${++n}`,
     now: () => NOW,
     audit: (phase, detail) => calls.audit.push([phase, detail]),
-    onDraftPreserved: (draft) => calls.drafts.push(draft.text)
+    onDraftPreserved: (draft) => calls.drafts.push(draft.text),
+    memory: over.memory
   }
   const session = new DictationSession(deps)
   session.refresh()
@@ -520,5 +523,101 @@ describe('DictationSession: the recognized text and the typed insertion port (G2
     const everything = JSON.stringify([ctx.calls.audit, ctx.session.snapshot(), ctx.calls.begin, ctx.calls.end])
     expect(everything).not.toContain(TEXT)
     expect(everything).not.toContain('synthetic dictated')
+  })
+})
+
+function recordingMemory(over: Partial<DictationMemorySink> = {}) {
+  const events: Array<[string, ...unknown[]]> = []
+  const sink: DictationMemorySink = {
+    segmentRecognized: (turnId, text) => events.push(['segment', turnId, text]),
+    draftPreserved: (turnId, draft) => events.push(['preserved', turnId, draft.text, draft.reason]),
+    inserted: (turnId, text) => events.push(['inserted', turnId, text]),
+    turnEnded: (turnId) => events.push(['ended', turnId]),
+    ...over
+  }
+  return { events, sink }
+}
+
+const verifiedPort = (request: DictationInsertRequest): Promise<DictationInsertionResult> =>
+  Promise.resolve({
+    outcome: 'verified',
+    evidenceId: 'port:synthetic',
+    receipt: {
+      operationId: request.args.operationId,
+      argsHash: request.argsHash,
+      targetFingerprint: request.args.targetFingerprint,
+      textHash: request.args.textHash
+    }
+  })
+
+describe('DictationSession: the encrypted segment journal sink (G26)', () => {
+  it('journals the recognized segment before the insertion is attempted, then reports the verified insertion and the end of the turn', async () => {
+    const memory = recordingMemory()
+    const ctx = setup({ memory: memory.sink, insert: verifiedPort })
+    await listenAndRelease(ctx)
+    ctx.session.onTranscript(TEXT)
+    await flush()
+    expect(memory.events).toEqual([
+      ['segment', 'turn-1', TEXT],
+      ['inserted', 'turn-1', TEXT],
+      ['ended', 'turn-1']
+    ])
+    expect(ctx.insert.mock.invocationCallOrder[0]).toBeGreaterThan(0)
+  })
+
+  it("wires the guard's onDraftPreserved sink: a draft kept after a failed insertion is journaled under its own turn", async () => {
+    const memory = recordingMemory()
+    const ctx = setup({ memory: memory.sink, insert: { outcome: 'unsupported' } })
+    await listenAndRelease(ctx)
+    ctx.session.onTranscript(TEXT)
+    await flush()
+    ctx.session.dispose()
+    expect(memory.events.filter(([kind]) => kind === 'preserved')).toEqual([['preserved', 'turn-1', TEXT, 'dispose']])
+    expect(ctx.calls.drafts).toEqual([TEXT])
+    expect(memory.events.some(([kind]) => kind === 'inserted')).toBe(false)
+  })
+
+  it('a draft superseded by the next dictation is journaled under the turn that dictated it', async () => {
+    const memory = recordingMemory()
+    const ctx = setup({ memory: memory.sink, insert: { outcome: 'no_effect', evidenceId: 'port:synthetic' } })
+    await listenAndRelease(ctx)
+    ctx.session.onTranscript(TEXT)
+    await flush()
+    ctx.session.stop()
+    ctx.session.onChordEvent(armed)
+    await flush()
+    const preserved = memory.events.filter(([kind]) => kind === 'preserved')
+    for (const event of preserved) expect(event[1]).toBe('turn-1')
+  })
+
+  it('a turn that ends without a transcript never journals anything', async () => {
+    const memory = recordingMemory()
+    const ctx = setup({ memory: memory.sink })
+    ctx.session.onChordEvent(armed)
+    await flush()
+    ctx.session.onChordEvent({ type: 'aborted', reason: 'other-input' })
+    expect(memory.events.filter(([kind]) => kind === 'segment')).toEqual([])
+  })
+
+  it('a throwing sink never changes the dictation: the insertion still happens and the turn still ends', async () => {
+    const boom = (): never => {
+      throw new Error('synthetic sink failure')
+    }
+    const memory = recordingMemory({ segmentRecognized: boom, inserted: boom, turnEnded: boom, draftPreserved: boom })
+    const ctx = setup({ memory: memory.sink, insert: verifiedPort })
+    await listenAndRelease(ctx)
+    ctx.session.onTranscript(TEXT)
+    await flush()
+    expect(ctx.insert).toHaveBeenCalledTimes(1)
+    expect(ctx.session.snapshot()).toMatchObject({ state: 'done' })
+    expect(ctx.session.active()).toBe(false)
+  })
+
+  it('without a sink the session behaves exactly as before', async () => {
+    const ctx = setup({ insert: verifiedPort })
+    await listenAndRelease(ctx)
+    ctx.session.onTranscript(TEXT)
+    await flush()
+    expect(ctx.session.snapshot()).toMatchObject({ state: 'done' })
   })
 })

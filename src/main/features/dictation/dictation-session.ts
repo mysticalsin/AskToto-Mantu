@@ -20,7 +20,9 @@
  *   revocation are all no-ops. One turn, one capture, one insertion attempt, never a retry.
  * - Every revocation ends the turn synchronously and revokes the guard's context, so nothing recognized earlier
  *   inserts later. A draft is never dropped: the guard keeps it for the person (`priorDrafts`).
- * - Nothing here logs, audits or snapshots text. State carries ids, machine reasons and fixed enums only.
+ * - Nothing here logs, audits or snapshots text. State carries ids, machine reasons and fixed enums only. The one
+ *   place the text goes is the encrypted segment journal (G26), through the typed `memory` sink, and only so an
+ *   interruption does not lose it.
  * - No arrow functions in class property initializers (bytecode build); timers are plain fields.
  */
 import type { CommandSpeechResult } from '@shared/command-speech'
@@ -38,6 +40,7 @@ import {
   type PriorDraft
 } from '../desktop-contract'
 import { DICTATION_ACTOR, DictationSessionContext } from './dictation-context'
+import type { DictationMemorySink } from './dictation-memory'
 import type {
   DictationHostPorts,
   DictationInsertionResult,
@@ -120,6 +123,12 @@ export interface DictationSessionDeps {
   audit?(phase: DictationAuditPhase, detail?: { reason?: string }): void
   /** Called synchronously for each draft kept after a dictation ended without a verified insertion. */
   onDraftPreserved?(draft: PriorDraft): void
+  /**
+   * The encrypted segment journal (G26). Told of each recognized segment before any insertion is attempted, of every
+   * draft the guard keeps, of a verified insertion and of the end of each turn. Every call is contained: a failing
+   * journal never changes a dictation. Absent, the session behaves as before.
+   */
+  memory?: DictationMemorySink
 }
 
 type Phase = 'starting' | 'listening' | 'thinking' | 'inserting'
@@ -135,6 +144,8 @@ interface Turn {
   lease: DictationLease | null
 }
 
+/** Guard operation ids (`dictation:N`, reset each launch) remembered for the drafts it keeps after their turn ended. */
+const OPERATION_MEMORY = 32
 const START_WATCHDOG_MS = 5_000
 const FLASH_MS = 4_000
 
@@ -231,6 +242,7 @@ export class DictationSession {
   #watchdog: ReturnType<typeof setTimeout> | null = null
   #flashTimer: ReturnType<typeof setTimeout> | null = null
   #disposed = false
+  readonly #turnOfOperation = new Map<string, string>()
   readonly #context: DictationSessionContext
   readonly #guard: DictationTargetGuard
 
@@ -238,7 +250,11 @@ export class DictationSession {
     this.#context = new DictationSessionContext(() => this.#enabled && !this.deps.gate.meetingReserved())
     this.#guard = new DictationTargetGuard(this.#context, {
       now: () => this.deps.now(),
-      onDraftPreserved: deps.onDraftPreserved
+      onDraftPreserved: (draft) => {
+        const turnId = this.#turnOfOperation.get(draft.operationId)
+        if (turnId !== undefined) this.#journal((sink) => sink.draftPreserved(turnId, draft))
+        deps.onDraftPreserved?.(draft)
+      }
     })
     this.#snapshot = this.#build()
   }
@@ -409,6 +425,8 @@ export class DictationSession {
     turn.claimed = true
     turn.phase = 'inserting'
     this.#set('inserting', null)
+    // Journaled before any insertion is attempted, so an interruption from here on loses nothing.
+    this.#journal((sink) => sink.segmentRecognized(turn.id, text))
     void this.#deliver(turn, turn.lease, text)
   }
 
@@ -494,6 +512,10 @@ export class DictationSession {
     } catch (error) {
       this.#refuse(reasonForGuardError(error))
       return
+    }
+    this.#turnOfOperation.set(turn.lease.id, turn.id)
+    if (this.#turnOfOperation.size > OPERATION_MEMORY) {
+      this.#turnOfOperation.delete(this.#turnOfOperation.keys().next().value as string)
     }
     if (!this.deps.activation.mint()) {
       this.#abandonDraft()
@@ -611,6 +633,7 @@ export class DictationSession {
       }
     }
     if (verified) {
+      this.#journal((sink) => sink.inserted(turn.id, text))
       this.#audit('finished')
       this.#endTurn()
       this.#flash(null, 'done')
@@ -671,7 +694,9 @@ export class DictationSession {
   }
 
   #endTurn(): void {
+    const ended = this.#turn
     this.#turn = null
+    if (ended) this.#journal((sink) => sink.turnEnded(ended.id))
     this.#clearCap()
     this.#clearWatchdog()
     this.deps.activation.revoke()
@@ -697,6 +722,17 @@ export class DictationSession {
   #clearFlash(): void {
     if (this.#flashTimer) clearTimeout(this.#flashTimer)
     this.#flashTimer = null
+  }
+
+  /** Tell the journal; whatever it does, the dictation goes on. */
+  #journal(call: (sink: DictationMemorySink) => void): void {
+    const sink = this.deps.memory
+    if (!sink) return
+    try {
+      call(sink)
+    } catch {
+      /* the journal is best effort for the session; it reports its own refusals */
+    }
   }
 
   #audit(phase: DictationAuditPhase, detail?: { reason?: string }): void {
