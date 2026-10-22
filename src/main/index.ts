@@ -7344,8 +7344,7 @@ function registerIpc(): void {
   // M2-0412: every on-device readiness decision consults the fleet policy's `localModel` entry.
   setLocalModelGate((modelId) => localModelAllowedByPolicy(getActiveModelPolicy(getSettings()), modelId))
 
-  // --- Cloud STT live WebSocket (Nova-3 / Soniox) ---
-  // Main holds Operator/CF credentials; renderer only streams Float32 PCM + receives finals.
+  // --- Cloud STT live WebSocket (Nova-3 / Soniox): main holds Operator/CF credentials; the renderer streams PCM ---
   ipcMain.handle(IPC.cloudSttStart, async (e, payload: unknown) => {
     assertMainWindow(e)
     if (!requireAuth()) return { ok: false, error: 'Not signed in', code: 'AUTH' }
@@ -7359,12 +7358,10 @@ function registerIpc(): void {
     }
     const settings = getSettings()
     const profile = resolveEnterpriseLiveProfile(settings.enterpriseLive ?? {})
-    // Provider authority is settings/profile only. The renderer may report its UI selection but cannot
-    // redirect a live audio stream to another backend by supplying `payload.provider`.
+    // Provider authority is settings/profile only: the renderer cannot redirect live audio via `payload.provider`.
     // M2-0412: the fleet policy's `stt` entry narrows this at session start only; live sessions are never rewritten.
     const provider = resolveCloudSttStartProvider(getActiveModelPolicy(settings), profile, settings.cloudSttProvider)
-    // An opaque capture identity scopes delayed force-stops to the session that requested them.
-    // Keep the bound modest because this comes from the renderer IPC boundary.
+    // An opaque capture id scopes delayed force-stops to its session; keep the bound modest (renderer IPC input).
     const captureId =
       typeof p.captureId === 'string' && p.captureId.length > 0 && p.captureId.length <= 128 ? p.captureId : undefined
     const owner: CloudSttIpcOwner = {
@@ -7403,8 +7400,11 @@ function registerIpc(): void {
               if (!isCurrentCloudSttOwner(owner, e.sender)) return
               e.sender.send(IPC.cloudSttInterim, { channel, text })
             },
-            onError: (message) => {
-              if (isCurrentCloudSttOwner(owner, e.sender)) e.sender.send(IPC.cloudSttError, { message })
+            onError: (message, info) => {
+              if (isCurrentCloudSttOwner(owner, e.sender)) e.sender.send(IPC.cloudSttError, { message, ...info })
+            },
+            onTrackRecovered: (channel) => {
+              if (isCurrentCloudSttOwner(owner, e.sender)) e.sender.send(IPC.cloudSttTrackRecovered, { channel })
             }
           }
         )

@@ -323,6 +323,116 @@ describe('CloudSttLiveSession', () => {
     session.close()
   })
 
+  describe('Q03 per-track reconnect (D2-4)', () => {
+    const novaOpts = (WebSocketImpl: unknown) => ({
+      provider: 'cloudflare-nova3' as const,
+      asrLanguage: 'English',
+      cloudflareToken: 'tok',
+      cloudflareBaseUrl: 'https://api.cloudflare.com/client/v4/accounts/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/ai/v1',
+      gatewayId: 'gw1',
+      WebSocketImpl: WebSocketImpl as typeof WebSocket
+    })
+
+    it('an unexpected track close reconnects that track with the current language', async () => {
+      vi.useFakeTimers()
+      try {
+        TrackingMockWs.reset()
+        const events: string[] = []
+        const infos: unknown[] = []
+        const session = new CloudSttLiveSession(novaOpts(TrackingMockWs), {
+          onFinal: () => {},
+          onError: (message, info) => {
+            events.push(`error:${message}`)
+            infos.push(info)
+          },
+          onTrackRecovered: (channel) => events.push(`recovered:${channel}`)
+        })
+        await expect(session.start()).resolves.toEqual({ ok: true })
+        const [you, them] = TrackingMockWs.instances
+        expect(TrackingMockWs.instances).toHaveLength(2)
+
+        session.updateLanguage('Spanish', null)
+        them.close()
+        expect(infos).toEqual([{ channel: 'them', recovering: true }])
+        expect(TrackingMockWs.instances).toHaveLength(2)
+
+        await vi.advanceTimersByTimeAsync(1_000)
+
+        expect(TrackingMockWs.instances).toHaveLength(3)
+        const reopened = TrackingMockWs.instances[2]
+        expect(new URL(reopened.url).searchParams.get('language')).toBe('es')
+        expect(new URL(reopened.url).searchParams.get('diarize')).toBe('true')
+        expect(events).toEqual([expect.stringContaining('error:'), 'recovered:them'])
+        expect(you.readyState).toBe(MockWs.OPEN)
+
+        session.pushFloat32('them', new Float32Array([0.1]))
+        expect(reopened.sent.filter(Buffer.isBuffer)).toHaveLength(1)
+        session.close()
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+
+    it('gives up after three failed reconnect attempts and reports a final non-recovering error', async () => {
+      vi.useFakeTimers()
+      try {
+        class FlakyWs extends TrackingMockWs {
+          private readonly refuse: boolean
+          constructor(url: string, opts?: unknown) {
+            super(url, opts)
+            this.refuse = TrackingMockWs.instances.length > 2
+            if (this.refuse) queueMicrotask(() => this.emit('error', new Error('refused')))
+          }
+          emit(event: string | symbol, ...args: unknown[]): boolean {
+            if (event === 'open' && this.refuse) return false
+            return super.emit(event, ...args)
+          }
+        }
+        TrackingMockWs.reset()
+        const infos: unknown[] = []
+        const recovered = vi.fn()
+        const session = new CloudSttLiveSession(novaOpts(FlakyWs), {
+          onFinal: () => {},
+          onError: (_message, info) => infos.push(info),
+          onTrackRecovered: recovered
+        })
+        await expect(session.start()).resolves.toEqual({ ok: true })
+        TrackingMockWs.instances[0].close()
+
+        await vi.advanceTimersByTimeAsync(1_000 + 3_000 + 9_000 + 1_000)
+
+        expect(TrackingMockWs.instances).toHaveLength(5)
+        expect(infos).toEqual([
+          { channel: 'you', recovering: true },
+          { channel: 'you', recovering: false }
+        ])
+        expect(recovered).not.toHaveBeenCalled()
+        session.close()
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+
+    it('does not reconnect once the session is closed', async () => {
+      vi.useFakeTimers()
+      try {
+        TrackingMockWs.reset()
+        const session = new CloudSttLiveSession(novaOpts(TrackingMockWs), { onFinal: () => {}, onError: () => {} })
+        await expect(session.start()).resolves.toEqual({ ok: true })
+        const closeCountBefore = TrackingMockWs.instances.length
+        const track = (session as unknown as { tracks: Map<string, { ws: MockWs }> }).tracks.get('you')!
+        // Emit the transport loss, then stop before the retry timer fires.
+        track.ws.emit('error', new Error('synthetic transport error'))
+        session.close()
+        await vi.advanceTimersByTimeAsync(60_000)
+        expect(TrackingMockWs.instances).toHaveLength(closeCountBefore)
+        expect(vi.getTimerCount()).toBe(0)
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+  })
+
   it('does not report transport loss for an explicit close', async () => {
     const errors: string[] = []
     const session = new CloudSttLiveSession(

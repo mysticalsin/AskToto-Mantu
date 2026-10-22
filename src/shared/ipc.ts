@@ -137,8 +137,7 @@ export const IPC = {
   parakeetFeed: 'parakeet:feed',
   parakeetProgress: 'parakeet:progress',
   // Apple Speech (SFSpeechRecognizer, on-device via the mac-helper sidecar) — opt-in third ASR engine.
-  // No status/ensure/progress channels: unlike Parakeet there is no bundled model to download: the
-  // helper binary either transcribes or the call resolves to '' (see main/apple-speech.ts).
+  // No status/progress channels: nothing to download; the helper transcribes or resolves '' (main/apple-speech.ts).
   appleSpeechFeed: 'apple-speech:feed',
   // Cloud STT live WebSocket (Nova-3 / Soniox) — main holds credentials; renderer streams PCM.
   cloudSttStart: 'cloud-stt:start',
@@ -147,6 +146,7 @@ export const IPC = {
   cloudSttUpdateLang: 'cloud-stt:update-lang',
   cloudSttFinal: 'cloud-stt:final',
   cloudSttError: 'cloud-stt:error',
+  cloudSttTrackRecovered: 'cloud-stt:track-recovered',
   cloudSttInterim: 'cloud-stt:interim',
   cloudSttSetSonioxKey: 'cloud-stt:set-soniox-key',
   cloudSttClearSonioxKey: 'cloud-stt:clear-soniox-key',

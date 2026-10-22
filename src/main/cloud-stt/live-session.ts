@@ -46,10 +46,19 @@ export type CloudSttLiveStartOpts = {
   WebSocketImpl?: typeof WebSocket
 }
 
+export type CloudSttTrackErrorInfo = { channel: CloudSttLineSpeaker; recovering: boolean }
+
 export type CloudSttLiveHandlers = {
   onFinal: (line: CloudSttMappedLine) => void
   onInterim?: (channel: CloudSttLineSpeaker, text: string) => void
-  onError?: (message: string) => void
+  /**
+   * `info.recovering` is true while main is still reconnecting `info.channel` (the text is a progress
+   * note, not a final failure) and false once the reconnect budget is spent. Session-wide errors such as
+   * the outbound queue overflow carry no `info`.
+   */
+  onError?: (message: string, info?: CloudSttTrackErrorInfo) => void
+  /** A dropped track was reopened; PCM for `channel` flows again. */
+  onTrackRecovered?: (channel: CloudSttLineSpeaker) => void
   onStatus?: (status: 'connecting' | 'open' | 'closed') => void
 }
 
@@ -69,6 +78,8 @@ export type CloudSttLiveStopResult = { timedOut: boolean }
 // Hard per-track queue ceiling: one accepted 30-second PCM16 frame is 960,000 bytes. This bounds queued
 // memory; it is not a latency target.
 const MAX_OUTBOUND_BUFFERED_PCM_BYTES = 1024 * 1024
+// Backoff before each reconnect attempt of a dropped track (Q03/D2-4): 1 s, 3 s, then 9 s.
+const TRACK_RECONNECT_DELAYS_MS: readonly number[] = [1_000, 3_000, 9_000]
 const OUTBOUND_QUEUE_OVERFLOW_ERROR =
   'Cloud STT transcription stopped because the network send queue exceeded its limit.'
 
@@ -106,6 +117,10 @@ export class CloudSttLiveSession {
   private gracefulCloseTimer: ReturnType<typeof setTimeout> | null = null
   private closedStatusSent = false
   private outboundQueueOverflow = false
+  private reconnectWaits = new Map<
+    CloudSttLineSpeaker,
+    { timer: ReturnType<typeof setTimeout>; resolve: (fired: boolean) => void }
+  >()
 
   constructor(opts: CloudSttLiveStartOpts, handlers: CloudSttLiveHandlers) {
     this.opts = opts
@@ -179,6 +194,7 @@ export class CloudSttLiveSession {
     if (this.closed) return
     this.closed = true
     this.closing = false
+    this.clearReconnectTimers()
     this.clearGracefulCloseTimer()
     const tracks = [...this.tracks.values()]
     this.tracks.clear()
@@ -209,6 +225,7 @@ export class CloudSttLiveSession {
     if (this.gracefulClose) return this.gracefulClose
 
     this.closing = true
+    this.clearReconnectTimers()
     this.gracefulClose = new Promise<CloudSttLiveStopResult>((resolve) => {
       this.resolveGracefulClose = resolve
     })
@@ -396,11 +413,58 @@ export class CloudSttLiveSession {
 
   private reportTrackTransportFailure(track: TrackSession, message: string): void {
     // A failed track must stop accepting PCM before notifying the renderer. The surviving track and
-    // already-delivered finals remain usable; recovery/fallback is still the caller's decision.
+    // already-delivered finals remain usable; this track is reopened below within a bounded budget.
     track.open = false
     if (track.transportFailureReported) return
     track.transportFailureReported = true
-    this.handlers.onError?.(message)
+    const reconnect = !this.closed && !this.closing && this.creds !== null && this.tracks.get(track.channel) === track
+    this.handlers.onError?.(message, { channel: track.channel, recovering: reconnect })
+    if (reconnect) void this.reconnectTrack(track)
+  }
+
+  /**
+   * Reopen one dropped track with the CURRENT options (so a language change applies), 3 attempts at
+   * 1 s, 3 s and 9 s. Never resurrects a track once the session is closing or closed; close() resolves
+   * every pending wait with false. A managed egress block is a policy decision, so it ends the budget.
+   */
+  private async reconnectTrack(failed: TrackSession): Promise<void> {
+    const channel = failed.channel
+    for (const delayMs of TRACK_RECONNECT_DELAYS_MS) {
+      if (!(await this.waitForReconnect(channel, delayMs)) || this.closed || this.closing) return
+      try {
+        failed.ws.terminate?.()
+      } catch {
+        /* the old socket is already dead */
+      }
+      try {
+        await this.openTrack(channel, failed.diarize)
+        if (!this.closed && !this.closing) this.handlers.onTrackRecovered?.(channel)
+        return
+      } catch (error) {
+        if (this.closed || this.closing) return
+        if (error instanceof CloudSttEgressError) break
+      }
+    }
+    this.handlers.onError?.(`Cloud STT could not reconnect (${channel}).`, { channel, recovering: false })
+  }
+
+  private waitForReconnect(channel: CloudSttLineSpeaker, delayMs: number): Promise<boolean> {
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        this.reconnectWaits.delete(channel)
+        resolve(true)
+      }, delayMs)
+      this.reconnectWaits.set(channel, { timer, resolve })
+    })
+  }
+
+  private clearReconnectTimers(): void {
+    const waits = [...this.reconnectWaits.values()]
+    this.reconnectWaits.clear()
+    for (const wait of waits) {
+      clearTimeout(wait.timer)
+      wait.resolve(false)
+    }
   }
 
   private onMessage(channel: CloudSttLineSpeaker, kind: 'nova' | 'soniox', data: WebSocket.RawData): void {
@@ -489,6 +553,7 @@ export class CloudSttLiveSession {
     if (this.closed) return
     this.closed = true
     this.closing = false
+    this.clearReconnectTimers()
     this.clearGracefulCloseTimer()
     const tracks = [...this.tracks.values()]
     this.tracks.clear()
@@ -509,6 +574,7 @@ export class CloudSttLiveSession {
     this.closed = true
     this.closing = false
     this.outboundQueueOverflow = true
+    this.clearReconnectTimers()
     this.clearGracefulCloseTimer()
     const tracks = [...this.tracks.values()]
     this.tracks.clear()

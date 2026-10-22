@@ -125,7 +125,7 @@ describe('Cap2 command authority boundary', () => {
   })
 
   it('keeps cloud STT transcript-only because renderer PCM has no hardware provenance', () => {
-    const callbacks = between(main, 'onFinal: (line) => {', 'onError: (message) => {')
+    const callbacks = between(main, 'onFinal: (line) => {', 'onError: (message, info) => {')
     expect(callbacks).toMatch(/if \(!isCurrentCloudSttOwner\(owner, e\.sender\)\) return/)
     expect(callbacks).toMatch(/e\.sender\.send\(IPC\.cloudSttFinal, line\)/)
     expect(callbacks).toMatch(/e\.sender\.send\(IPC\.cloudSttInterim, \{ channel, text \}\)/)

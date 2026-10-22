@@ -378,11 +378,23 @@ const api = {
     ipcRenderer.on(IPC.cloudSttFinal, h)
     return () => ipcRenderer.removeListener(IPC.cloudSttFinal, h)
   },
-  onCloudSttError: (cb: (message: string) => void): (() => void) => {
-    const h = (_e: unknown, d: { message?: string } | string): void =>
-      cb(typeof d === 'string' ? d : d?.message || 'Cloud STT error')
+  onCloudSttError: (
+    cb: (message: string, info?: { channel: 'you' | 'them'; recovering: boolean }) => void
+  ): (() => void) => {
+    const h = (_e: unknown, d: { message?: string; channel?: unknown; recovering?: unknown } | string): void => {
+      if (typeof d === 'string') return cb(d)
+      const channel = d?.channel === 'you' || d?.channel === 'them' ? d.channel : null
+      cb(d?.message || 'Cloud STT error', channel ? { channel, recovering: d?.recovering === true } : undefined)
+    }
     ipcRenderer.on(IPC.cloudSttError, h)
     return () => ipcRenderer.removeListener(IPC.cloudSttError, h)
+  },
+  onCloudSttTrackRecovered: (cb: (channel: 'you' | 'them') => void): (() => void) => {
+    const h = (_e: unknown, d: { channel?: unknown }): void => {
+      if (d?.channel === 'you' || d?.channel === 'them') cb(d.channel)
+    }
+    ipcRenderer.on(IPC.cloudSttTrackRecovered, h)
+    return () => ipcRenderer.removeListener(IPC.cloudSttTrackRecovered, h)
   },
   onCloudSttInterim: (cb: (channel: 'you' | 'them', text: string) => void): (() => void) => {
     const h = (_e: unknown, d: { channel: 'you' | 'them'; text: string }): void => cb(d.channel, d.text)
