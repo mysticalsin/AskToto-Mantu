@@ -34,7 +34,7 @@ import type { ChordRevokeCause, ChordWatcherEvent, ChordWatcherStatus } from './
 export type VoiceAvailability =
   | { ok: true }
   | { ok: false; reason: 'policy_blocked' | 'unsupported_engine' | 'unauthorized' }
-export type VoiceAuditPhase = 'started' | 'refused' | 'cancelled' | 'finished'
+export type VoiceAuditPhase = 'started' | 'refused' | 'cancelled' | 'finished' | 'device_changed'
 
 export interface VoiceSessionDeps {
   /** The effective setting: enabled already resolves the build default and managed policy. */
@@ -253,13 +253,27 @@ export class VoiceSession {
     }
   }
 
-  /** The renderer's report. It can only move the current turn toward failure; a stale turn id is ignored. */
+  /**
+   * The renderer's report. It can only move the current turn toward failure or, after a device change with speech
+   * already captured, on to recognition; a stale turn id is ignored.
+   */
   report(report: VoiceReport): void {
     const turn = this.#turn
     if (!turn || turn.id !== report.turnId) return
     if (report.phase === 'capturing') {
       turn.capturing = true
       this.#clearWatchdog()
+      return
+    }
+    if (report.phase === 'device_changed') {
+      // The input device went away after speech was captured: the renderer seals what it has and sends it for
+      // recognition, so the turn proceeds exactly as a release would. Nothing is dropped, and a turn that is
+      // already thinking (the person let go first) is left alone.
+      if (turn.phase !== 'listening') return
+      turn.capturing = true
+      this.#clearWatchdog()
+      this.#audit('device_changed')
+      this.#release()
       return
     }
     this.#cancelTurn(report.reason, 'report')

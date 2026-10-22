@@ -59,7 +59,10 @@ export const VOICE_REASONS = [
   'activation_required',
   'no_speech',
   'recognition_unavailable',
-  'timeout'
+  'timeout',
+  'device_missing',
+  'device_lost',
+  'device_busy'
 ] as const
 export const VoiceReasonSchema = z.enum(VOICE_REASONS)
 export type VoiceReason = z.infer<typeof VoiceReasonSchema>
@@ -83,11 +86,60 @@ const REASON_COPY: Readonly<Record<VoiceReason, string>> = {
   activation_required: "Voice actions aren't ready. Try again.",
   no_speech: "Didn't catch that. Hold the shortcut and speak.",
   recognition_unavailable: "On-device speech couldn't finish. Try again.",
-  timeout: 'Stopped. Nothing was done.'
+  timeout: 'Stopped. Nothing was done.',
+  device_missing: 'No microphone found. Connect one and try again.',
+  device_lost: 'Your microphone was disconnected. Try again.',
+  device_busy: 'Another app is using the microphone. Close it and try again.'
 }
 
 export function voiceReasonCopy(reason: VoiceReason): string {
   return REASON_COPY[reason]
+}
+
+/**
+ * The closed taxonomy of interactive voice failures (G18), for the Cmd+Shift+M panel and the hold-to-talk turn
+ * alike. It is a subset of VOICE_REASONS, never a second vocabulary, and each member has exactly one fixed
+ * message above. No cloud command recognizer exists (commands run on the device), so there is no offline reason.
+ *
+ * - microphone_unavailable: permission denied or restricted
+ * - device_missing: no input device; device_lost: it went away mid-turn; device_busy: another app holds it
+ * - speech_unavailable: the speech engine or its model is not there; recognition_unavailable: it failed
+ * - timeout, no_speech, policy_blocked
+ */
+export const VOICE_CAPTURE_FAILURES = [
+  'microphone_unavailable',
+  'device_missing',
+  'device_lost',
+  'device_busy',
+  'speech_unavailable',
+  'recognition_unavailable',
+  'timeout',
+  'no_speech',
+  'policy_blocked'
+] as const satisfies readonly VoiceReason[]
+
+/** The one recovery a failure offers: the guided Settings helper, or running the turn again. */
+export type VoiceRecovery = 'open_settings' | 'try_again'
+
+const RECOVERY: Partial<Record<VoiceReason, VoiceRecovery>> = {
+  microphone_unavailable: 'open_settings',
+  device_missing: 'try_again',
+  device_lost: 'try_again',
+  device_busy: 'try_again',
+  recognition_unavailable: 'try_again',
+  no_speech: 'try_again'
+}
+
+/** The single recovery action for a reason, or null when nothing the person can do here helps. */
+export function voiceReasonRecovery(reason: VoiceReason): VoiceRecovery | null {
+  return RECOVERY[reason] ?? null
+}
+
+/** A command microphone stop reason (renderer) as a voice reason. `cancelled` is not a failure: null. */
+export function commandMicReasonToVoice(reason: string | undefined): VoiceReason | null {
+  if (reason === undefined || reason === 'cancelled') return null
+  if (reason === 'unsupported_engine') return 'speech_unavailable'
+  return (VOICE_REASONS as readonly string[]).includes(reason) ? (reason as VoiceReason) : null
 }
 
 export const VoiceShortcutSchema = z.enum(['running', 'stopped', 'unavailable'])
@@ -127,10 +179,20 @@ export const VOICE_REPORT_REASONS = [
   'policy_blocked',
   'speech_unavailable',
   'recognition_unavailable',
-  'no_speech'
+  'no_speech',
+  'device_missing',
+  'device_lost',
+  'device_busy'
 ] as const
 export const VoiceReportSchema = z.discriminatedUnion('phase', [
   z.object({ turnId: z.string().min(1).max(64), phase: z.literal('capturing') }).strict(),
+  /**
+   * The input device went away after speech was captured (G18). The renderer is sealing what it has and will send
+   * it for recognition, so main treats the turn as released instead of failing it. It carries nothing else.
+   */
+  z
+    .object({ turnId: z.string().min(1).max(64), phase: z.literal('device_changed') })
+    .strict(),
   z
     .object({
       turnId: z.string().min(1).max(64),

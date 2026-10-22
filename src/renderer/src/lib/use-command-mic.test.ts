@@ -453,10 +453,10 @@ function createHarness(options: HarnessOptions = {}) {
         else listener.handleEvent(new Event('devicechange'))
       }
     },
-    async createController(maxDurationMs = 8_000) {
+    async createController(maxDurationMs = 8_000, extra: { onDeviceLostWithAudio?: () => Promise<unknown> } = {}) {
       vi.resetModules()
       const { CommandMicController } = await import('./use-command-mic')
-      const controller = new CommandMicController({ maxDurationMs }) as TestController
+      const controller = new CommandMicController({ maxDurationMs, ...extra }) as TestController
       const originalStart = controller.start.bind(controller)
       const originalFinish = controller.finish.bind(controller)
       const originalCancel = controller.cancel.bind(controller)
@@ -607,7 +607,7 @@ describe('bounded command microphone capture', () => {
     await vi.waitFor(() => expect(env.stopInputSession).toHaveBeenCalledOnce())
 
     expect(env.track.stop).toHaveBeenCalledOnce()
-    expect(controller.getSnapshot()).toEqual({ status: 'error', reason: 'microphone_unavailable' })
+    expect(controller.getSnapshot()).toEqual({ status: 'error', reason: 'device_lost' })
     expect(env.commandSpeechCancel).toHaveBeenCalledExactlyOnceWith(env.ids[0])
   })
 
@@ -630,7 +630,7 @@ describe('bounded command microphone capture', () => {
 
     await start(controller)
 
-    expect(controller.getSnapshot()).toEqual({ status: 'error', reason: 'microphone_unavailable' })
+    expect(controller.getSnapshot()).toEqual({ status: 'error', reason: 'device_missing' })
     expect(env.track.stop).toHaveBeenCalledOnce()
     expect(env.stopInputSession).toHaveBeenCalledExactlyOnceWith({ sessionId: env.ids[0] }, context)
     expect(env.commandSpeechStart).not.toHaveBeenCalled()
@@ -647,7 +647,7 @@ describe('bounded command microphone capture', () => {
     expect(env.nodes[0].connect).not.toHaveBeenCalled()
     expect(env.gains[0].connect).not.toHaveBeenCalled()
     expect(env.track.stop).toHaveBeenCalledOnce()
-    expect(controller.getSnapshot()).toEqual({ status: 'error', reason: 'microphone_unavailable' })
+    expect(controller.getSnapshot()).toEqual({ status: 'error', reason: 'device_lost' })
   })
 
   it('does not retain a timeout when audio-track discovery throws after permission is granted', async () => {
@@ -919,5 +919,157 @@ describe('voice turn capture started from a main-pushed begin', () => {
     await vi.waitFor(() => expect(env.commandSpeechFinish).toHaveBeenCalledOnce())
     finish.resolve({ ok: true })
     await vi.waitFor(() => expect(controller.getSnapshot()).toEqual({ status: 'done' }))
+  })
+})
+
+describe('interactive voice failure taxonomy at capture start (G18)', () => {
+  it.each([
+    ['NotFoundError', 'device_missing'],
+    ['OverconstrainedError', 'device_missing'],
+    ['NotReadableError', 'device_busy'],
+    ['NotAllowedError', 'microphone_unavailable'],
+    ['SecurityError', 'microphone_unavailable'],
+    ['SomethingElseError', 'microphone_unavailable']
+  ] as const)('a %s from the browser reads as %s', async (name, reason) => {
+    const env = createHarness()
+    env.getUserMedia.mockRejectedValueOnce(new DOMException('refused', name))
+    const controller = await env.createController()
+
+    await start(controller)
+    await vi.advanceTimersByTimeAsync(1_000)
+
+    expect(controller.getSnapshot()).toEqual({ status: 'error', reason })
+    expect(env.commandSpeechStart).not.toHaveBeenCalled()
+    expect(env.stopInputSession).toHaveBeenCalledExactlyOnceWith({ sessionId: env.ids[0] }, context)
+  })
+
+  it('a track that is already ended when capture starts reads as a lost device', async () => {
+    const env = createHarness()
+    env.track.setReadyState('ended')
+    const controller = await env.createController()
+
+    await start(controller)
+    await vi.advanceTimersByTimeAsync(1_000)
+
+    expect(controller.getSnapshot()).toEqual({ status: 'error', reason: 'device_lost' })
+  })
+})
+
+describe('accepted speech survives a device change (G18)', () => {
+  const frame = (sequence: number) => ({ type: 'frame', sequence, samples: new Float32Array([0.2, -0.2]) })
+
+  it.each([
+    ['the track ends', (env: ReturnType<typeof createHarness>) => env.track.emitEnded()],
+    ['the device list changes', (env: ReturnType<typeof createHarness>) => env.changeDevice()]
+  ] as const)('when %s after speech was captured, the captured audio is still recognized', async (_name, lose) => {
+    const env = createHarness()
+    const onDeviceLostWithAudio = vi.fn(async () => {
+      env.order.push('device.report')
+    })
+    const controller = await env.createController(8_000, { onDeviceLostWithAudio })
+    await start(controller)
+    env.nodes[0].emit(frame(0))
+    env.nodes[0].emit(frame(1))
+
+    lose(env)
+    await vi.waitFor(() => expect(controller.getSnapshot().status).toBe('done'))
+
+    expect(env.commandSpeechCancel).not.toHaveBeenCalled()
+    expect(env.commandSpeechFinish).toHaveBeenCalledExactlyOnceWith(env.ids[0], 2)
+    expect(onDeviceLostWithAudio).toHaveBeenCalledOnce()
+    expect(env.order.indexOf('device.report')).toBeLessThan(env.order.indexOf(`speech.finish:${env.ids[0]}:2`))
+    expect(env.order.indexOf('worklet.seal')).toBeLessThan(env.order.indexOf(`speech.finish:${env.ids[0]}:2`))
+    // The main lease stays until recognition resolved, so the captured PCM is not dropped on the way.
+    expect(env.order.indexOf(`session.stop:${env.ids[0]}`)).toBeGreaterThan(
+      env.order.indexOf(`speech.finish:${env.ids[0]}:2`)
+    )
+    expect(env.track.stop).toHaveBeenCalled()
+  })
+
+  it('counts audio that was still in the worklet when the device went away', async () => {
+    const env = createHarness()
+    env.sealFrames = [new Float32Array([0.3])]
+    const controller = await env.createController()
+    await start(controller)
+
+    env.track.emitEnded()
+    await vi.waitFor(() => expect(controller.getSnapshot().status).toBe('done'))
+
+    expect(env.commandSpeechFinish).toHaveBeenCalledExactlyOnceWith(env.ids[0], 1)
+  })
+
+  it('when nothing was captured yet, the turn fails with the device-lost reason and sends nothing', async () => {
+    const env = createHarness()
+    const onDeviceLostWithAudio = vi.fn(async () => {})
+    const controller = await env.createController(8_000, { onDeviceLostWithAudio })
+    await start(controller)
+
+    env.changeDevice()
+    await vi.waitFor(() => expect(controller.getSnapshot()).toEqual({ status: 'error', reason: 'device_lost' }))
+
+    expect(env.commandSpeechFinish).not.toHaveBeenCalled()
+    expect(env.commandSpeechCancel).toHaveBeenCalledExactlyOnceWith(env.ids[0])
+    expect(onDeviceLostWithAudio).not.toHaveBeenCalled()
+    expect(env.stopInputSession).toHaveBeenCalledOnce()
+  })
+
+  it('reports an honest no_speech when the captured audio held no speech, never a silent success', async () => {
+    const env = createHarness()
+    env.finishResult = { ok: false, reason: 'no_speech' }
+    const controller = await env.createController()
+    await start(controller)
+    env.nodes[0].emit(frame(0))
+
+    env.track.emitEnded()
+    await vi.waitFor(() => expect(controller.getSnapshot()).toEqual({ status: 'error', reason: 'no_speech' }))
+
+    expect(env.commandSpeechFinish).toHaveBeenCalledOnce()
+  })
+
+  it('a device change after the user already stopped does not recognize twice', async () => {
+    const env = createHarness()
+    const controller = await env.createController()
+    const finish = env.deferFinish()
+    await start(controller)
+    env.nodes[0].emit(frame(0))
+
+    const finishing = controller.finish()
+    await vi.waitFor(() => expect(env.commandSpeechFinish).toHaveBeenCalledOnce())
+    env.changeDevice()
+    env.track.emitEnded()
+    finish.resolve({ ok: true })
+    await finishing
+
+    expect(env.commandSpeechFinish).toHaveBeenCalledOnce()
+    expect(env.commandSpeechCancel).not.toHaveBeenCalled()
+  })
+
+  it('a hook that rejects cannot drop the captured audio', async () => {
+    const env = createHarness()
+    const controller = await env.createController(8_000, {
+      onDeviceLostWithAudio: () => Promise.reject(new Error('main unreachable'))
+    })
+    await start(controller)
+    env.nodes[0].emit(frame(0))
+
+    env.track.emitEnded()
+    await vi.waitFor(() => expect(controller.getSnapshot().status).toBe('done'))
+
+    expect(env.commandSpeechFinish).toHaveBeenCalledExactlyOnceWith(env.ids[0], 1)
+  })
+
+  it('a real revocation still cancels the captured audio', async () => {
+    const env = createHarness()
+    const controller = await env.createController()
+    await start(controller)
+    env.nodes[0].emit(frame(0))
+
+    env.revokeInput()
+    await vi.waitFor(() =>
+      expect(controller.getSnapshot()).toEqual({ status: 'error', reason: 'microphone_unavailable' })
+    )
+
+    expect(env.commandSpeechFinish).not.toHaveBeenCalled()
+    expect(env.commandSpeechCancel).toHaveBeenCalledOnce()
   })
 })

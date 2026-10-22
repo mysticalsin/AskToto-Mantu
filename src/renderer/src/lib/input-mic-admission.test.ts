@@ -206,6 +206,38 @@ describe('interactive microphone admission lifecycle', () => {
     expect(env.stopInputSession).toHaveBeenCalledOnce()
   })
 
+  it('releases the lease and stops the stream on a device change by default', async () => {
+    const env = setup()
+    const { acquireInteractiveMic } = await import('./input-mic-admission')
+    const pending = acquireInteractiveMic({ audio: true }, 'conversation')
+    await vi.waitFor(() => expect(env.getUserMedia).toHaveBeenCalledOnce())
+    env.capture.resolve(mediaStream(env.track))
+    await pending
+
+    env.changeDevice()
+
+    await vi.waitFor(() => expect(env.stopInputSession).toHaveBeenCalledOnce())
+    expect(env.track.stop).toHaveBeenCalledOnce()
+  })
+
+  it('hands a device change to the caller instead of releasing when the caller owns that decision (G18)', async () => {
+    const env = setup()
+    const onDeviceChange = vi.fn()
+    const { acquireInteractiveMic } = await import('./input-mic-admission')
+    const pending = acquireInteractiveMic({ audio: true }, 'command', 'push-to-talk', undefined, { onDeviceChange })
+    await vi.waitFor(() => expect(env.getUserMedia).toHaveBeenCalledOnce())
+    env.capture.resolve(mediaStream(env.track))
+    const admitted = await pending
+
+    env.changeDevice()
+
+    expect(onDeviceChange).toHaveBeenCalledOnce()
+    expect(env.stopInputSession).not.toHaveBeenCalled()
+    expect(env.track.stop).not.toHaveBeenCalled()
+    await admitted.admission.release()
+    expect(env.mediaDevices.removeEventListener).toHaveBeenCalledWith('devicechange', expect.any(Function))
+  })
+
   it('stops and releases the stream when main refuses post-capture confirmation', async () => {
     const env = setup()
     vi.mocked(window.toto.confirmInputSession).mockResolvedValue(false)

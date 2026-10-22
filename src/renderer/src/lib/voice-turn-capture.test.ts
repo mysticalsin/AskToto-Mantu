@@ -8,7 +8,11 @@ function setup() {
   let endCb: ((p: VoiceEnd) => void) | null = null
   const reports: VoiceReport[] = []
   const controllers: Array<ReturnType<typeof makeController>> = []
-  function makeController(options: { maxDurationMs: number; onSnapshot: (s: CommandMicSnapshot) => void }) {
+  function makeController(options: {
+    maxDurationMs: number
+    onSnapshot: (s: CommandMicSnapshot) => void
+    onDeviceLostWithAudio?: () => Promise<unknown>
+  }) {
     const controller = {
       options,
       start: vi.fn(async (_o?: { source?: string }) => {}),
@@ -102,7 +106,10 @@ describe('voice turn capture in the renderer', () => {
     ['microphone_unavailable', 'microphone_unavailable'],
     ['activation_required', 'activation_required'],
     ['unsupported_engine', 'speech_unavailable'],
-    ['policy_blocked', 'policy_blocked']
+    ['policy_blocked', 'policy_blocked'],
+    ['device_missing', 'device_missing'],
+    ['device_lost', 'device_lost'],
+    ['device_busy', 'device_busy']
   ] as const)('a capture error before release (%s) is reported to main as %s', (reason, expected) => {
     const h = setup()
     h.begin()
@@ -148,5 +155,46 @@ describe('voice turn capture in the renderer', () => {
     expect(h.subscribed()).toBe(false)
     expect(h.controllers[0]?.cancel).toHaveBeenCalledOnce()
     expect(h.controllers[0]?.dispose).toHaveBeenCalled()
+  })
+
+  describe('accepted speech survives a device change (G18)', () => {
+    it('tells main the turn is already captured, then lets main own the recognition result', async () => {
+      const h = setup()
+      h.begin()
+      h.controllers[0]?.emit({ status: 'listening' })
+      await h.controllers[0]?.options.onDeviceLostWithAudio?.()
+      expect(h.reports).toEqual([
+        { turnId: 't1', phase: 'capturing' },
+        { turnId: 't1', phase: 'device_changed' }
+      ])
+      // The user's later release must not seal a second time.
+      h.end({ turnId: 't1', cancelled: false })
+      expect(h.controllers[0]?.finish).not.toHaveBeenCalled()
+    })
+
+    it('still reports a capture-side failure after the device-changed seal, so the turn never hangs', async () => {
+      const h = setup()
+      h.begin()
+      h.controllers[0]?.emit({ status: 'listening' })
+      await h.controllers[0]?.options.onDeviceLostWithAudio?.()
+      h.controllers[0]?.emit({ status: 'error', reason: 'recognition_unavailable' })
+      expect(h.reports.at(-1)).toEqual({ turnId: 't1', phase: 'failed', reason: 'recognition_unavailable' })
+    })
+
+    it('a lost device with nothing captured is reported as the device-lost failure', () => {
+      const h = setup()
+      h.begin()
+      h.controllers[0]?.emit({ status: 'listening' })
+      h.controllers[0]?.emit({ status: 'error', reason: 'device_lost' })
+      expect(h.reports.at(-1)).toEqual({ turnId: 't1', phase: 'failed', reason: 'device_lost' })
+    })
+
+    it('a stale turn cannot send a device-changed report', async () => {
+      const h = setup()
+      h.begin()
+      h.begin({ turnId: 't2', maxMs: 15_000 })
+      await h.controllers[0]?.options.onDeviceLostWithAudio?.()
+      expect(h.reports.filter((r) => r.phase === 'device_changed')).toEqual([])
+    })
   })
 })

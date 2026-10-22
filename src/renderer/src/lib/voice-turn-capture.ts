@@ -6,7 +6,13 @@
  * the same frame path as the Cmd+Shift+M panel, never the meeting pipeline. It reports only that the capture
  * started or failed to; a report can move the current turn toward failure and nothing else.
  */
-import type { VoiceBegin, VoiceEnd, VoiceReport } from '@shared/voice/voice-turn'
+import {
+  VOICE_REPORT_REASONS,
+  commandMicReasonToVoice,
+  type VoiceBegin,
+  type VoiceEnd,
+  type VoiceReport
+} from '@shared/voice/voice-turn'
 import { CommandMicController, type CommandMicSnapshot, type CommandMicStartOptions } from './use-command-mic'
 
 interface TurnController {
@@ -23,6 +29,7 @@ export interface VoiceTurnCaptureDeps {
   createController(options: {
     maxDurationMs: number
     onSnapshot: (snapshot: CommandMicSnapshot) => void
+    onDeviceLostWithAudio?: () => Promise<unknown>
   }): TurnController
 }
 
@@ -32,23 +39,16 @@ interface Turn {
   status: CommandMicSnapshot['status']
   endRequested: boolean
   sealed: boolean
+  /** The device went away after speech was captured and main was told to recognize it (G18). */
+  deviceSealed: boolean
 }
 
 type ReportReason = Extract<VoiceReport, { phase: 'failed' }>['reason']
 
+/** The one vocabulary: a command microphone stop reason, if main accepts it from the renderer. */
 function reportReason(reason: CommandMicSnapshot['reason']): ReportReason | null {
-  switch (reason) {
-    case 'microphone_unavailable':
-    case 'activation_required':
-    case 'policy_blocked':
-    case 'recognition_unavailable':
-    case 'no_speech':
-      return reason
-    case 'unsupported_engine':
-      return 'speech_unavailable'
-    default:
-      return null
-  }
+  const voice = commandMicReasonToVoice(reason)
+  return voice !== null && (VOICE_REPORT_REASONS as readonly string[]).includes(voice) ? (voice as ReportReason) : null
 }
 
 function defaultDeps(): VoiceTurnCaptureDeps {
@@ -89,7 +89,9 @@ export function installVoiceTurnCapture(deps: VoiceTurnCaptureDeps = defaultDeps
       return
     }
     if (snapshot.status === 'error') {
-      const reason = turn.sealed ? null : reportReason(snapshot.reason)
+      // After the person's release main hears the recognition result itself. After a device-changed seal it does
+      // too, but a failure on the capture side (a frame that never arrived) would leave it waiting: report it.
+      const reason = turn.sealed && !turn.deviceSealed ? null : reportReason(snapshot.reason)
       if (reason) report({ turnId: turn.id, phase: 'failed', reason })
       retire(turn, false)
       return
@@ -104,11 +106,19 @@ export function installVoiceTurnCapture(deps: VoiceTurnCaptureDeps = defaultDeps
       controller: null,
       status: 'idle',
       endRequested: false,
-      sealed: false
+      sealed: false,
+      deviceSealed: false
     }
     const controller = deps.createController({
       maxDurationMs: payload.maxMs,
-      onSnapshot: (snapshot) => onSnapshot(turn, snapshot)
+      onSnapshot: (snapshot) => onSnapshot(turn, snapshot),
+      onDeviceLostWithAudio: async () => {
+        // Accepted speech survives a device change: main treats the turn as released and waits for recognition.
+        if (current !== turn || turn.deviceSealed) return
+        turn.sealed = true
+        turn.deviceSealed = true
+        await deps.report({ turnId: turn.id, phase: 'device_changed' })
+      }
     })
     turn.controller = controller
     current = turn

@@ -62,12 +62,22 @@ export interface AdmittedMicrophone {
   stopMedia(): void
 }
 
+export interface InteractiveMicOptions {
+  /**
+   * Who decides what a device change means. By default a device change releases the lease and stops the stream.
+   * A caller that must not lose audio it already accepted (the command capture, G18) passes this instead: the
+   * lease and the stream stay until the caller releases them, and the caller is told.
+   */
+  onDeviceChange?: () => void
+}
+
 /** Obtain main-process authority before opening the renderer microphone. */
 export async function acquireInteractiveMic(
   constraints: MediaStreamConstraints,
   purpose: InputPurpose,
   source: 'deliberate-talk' | 'push-to-talk' | 'application-probe' = 'deliberate-talk',
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  options: InteractiveMicOptions = {}
 ): Promise<AdmittedMicrophone> {
   if (signal?.aborted) throw new DOMException('Microphone admission was cancelled.', 'AbortError')
   ensureRevocationListener()
@@ -88,7 +98,8 @@ export async function acquireInteractiveMic(
     void admission.release()
   }
   const onDeviceChange = (): void => {
-    void admission.release()
+    if (options.onDeviceChange) options.onDeviceChange()
+    else void admission.release()
   }
   const detachListeners = (): void => {
     signal?.removeEventListener('abort', onAbort)

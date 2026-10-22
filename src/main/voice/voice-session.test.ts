@@ -396,6 +396,65 @@ describe('VoiceSession renderer reports', () => {
   })
 })
 
+describe('VoiceSession interactive failure taxonomy and device changes (G18)', () => {
+  it.each([
+    'device_missing',
+    'device_lost',
+    'device_busy'
+  ] as const)('a renderer-reported %s fails the turn with its one fixed message and no recognition', (reason) => {
+    const h = harness()
+    h.session.refresh()
+    h.emit('armed')
+    h.session.report({ turnId: 'turn-1', phase: 'failed', reason })
+    expect(h.last()).toMatchObject({ state: 'failed', reason, message: voiceReasonCopy(reason) })
+    expect(h.events.end).toEqual([{ turnId: 'turn-1', cancelled: true }])
+    expect(h.events.audit.at(-1)).toEqual({ phase: 'cancelled', reason })
+  })
+
+  it('a device change after speech was captured moves the turn on to recognition, like a release', () => {
+    const h = harness()
+    h.session.refresh()
+    h.emit('armed')
+    h.session.report({ turnId: 'turn-1', phase: 'capturing' })
+    h.session.report({ turnId: 'turn-1', phase: 'device_changed' })
+    expect(h.last()).toMatchObject({ state: 'thinking', turnId: 'turn-1' })
+    expect(h.events.end).toEqual([{ turnId: 'turn-1', cancelled: false }])
+    expect(h.session.claimTurn()).not.toBeNull()
+    expect(h.deps.stopVoiceLease).not.toHaveBeenCalled()
+  })
+
+  it('the later physical release does not end the turn twice, and recognition still resolves it', () => {
+    const h = harness()
+    h.session.refresh()
+    h.emit('armed')
+    h.session.report({ turnId: 'turn-1', phase: 'device_changed' })
+    h.emit('released')
+    expect(h.events.end).toEqual([{ turnId: 'turn-1', cancelled: false }])
+    h.session.onSpeechFinished({ ok: true })
+    expect(h.last()).toMatchObject({ state: 'idle' })
+  })
+
+  it('a device-changed report for another or an already ended turn is ignored', () => {
+    const h = harness()
+    h.session.refresh()
+    h.emit('armed')
+    h.session.report({ turnId: 'turn-9', phase: 'device_changed' })
+    expect(h.last()?.state).toBe('listening')
+    h.emit('aborted')
+    h.session.report({ turnId: 'turn-1', phase: 'device_changed' })
+    expect(h.last()?.state).toBe('idle')
+    expect(h.events.end.filter((e) => !e.cancelled)).toEqual([])
+  })
+
+  it('the audit trail records the device change as a machine reason only', () => {
+    const h = harness()
+    h.session.refresh()
+    h.emit('armed')
+    h.session.report({ turnId: 'turn-1', phase: 'device_changed' })
+    expect(h.events.audit).toContainEqual({ phase: 'device_changed' })
+  })
+})
+
 describe('VoiceSession refusals: no microphone, no activation, no lease', () => {
   const expectRefused = (h: ReturnType<typeof harness>, reason: string): void => {
     expect(h.deps.activation.mint).not.toHaveBeenCalled()

@@ -13,12 +13,22 @@ export type CommandMicStopReason =
   | 'policy_blocked'
   | 'no_speech'
   | 'recognition_unavailable'
+  | 'device_missing'
+  | 'device_lost'
+  | 'device_busy'
 
 export type CommandMicSnapshot = { status: CommandMicStatus; reason?: CommandMicStopReason }
 export type CommandMicOptions = { maxDurationMs?: number; finalizationMs?: number }
 /** `push-to-talk` is a voice turn whose activation main minted from the held chord; no click is involved. */
 export type CommandMicStartOptions = { source?: 'deliberate-talk' | 'push-to-talk' }
-type ControllerOptions = CommandMicOptions & { onSnapshot?: (snapshot: CommandMicSnapshot) => void }
+type ControllerOptions = CommandMicOptions & {
+  onSnapshot?: (snapshot: CommandMicSnapshot) => void
+  /**
+   * The input device went away after speech was captured (G18). Awaited once, after the captured audio is sealed
+   * and before it is sent for recognition, so the owner can move its own turn on. A rejection never drops audio.
+   */
+  onDeviceLostWithAudio?: () => Promise<unknown>
+}
 
 type ActiveCapture = {
   admission: InputMicAdmission
@@ -50,6 +60,18 @@ const DEFAULT_FINALIZATION_MS = 1_500
 const COMMAND_MIC_CONSTRAINTS: MediaStreamConstraints = {
   audio: { autoGainControl: true, channelCount: 1, echoCancellation: true, noiseSuppression: true }
 }
+/**
+ * What a failed getUserMedia means (G18): no input device, or another app holds it. A refusal (NotAllowedError)
+ * and anything unknown stay with the microphone permission reason, which is where the guided Settings helper is.
+ */
+export function micFailureReason(error: unknown): CommandMicStopReason | null {
+  const name = typeof (error as { name?: unknown } | null)?.name === 'string' ? (error as { name: string }).name : ''
+  if (name === 'NotFoundError' || name === 'OverconstrainedError' || name === 'DevicesNotFoundError')
+    return 'device_missing'
+  if (name === 'NotReadableError' || name === 'TrackStartError') return 'device_busy'
+  return null
+}
+
 let commandSpeechWorkletUrl: string | null = null
 function workletUrl(): string {
   if (!commandSpeechWorkletUrl) {
@@ -104,7 +126,10 @@ export class CommandMicController {
         const currentAvailability = await window.toto.commandMicAvailability().catch(() => availability)
         throw new Error(currentAvailability.ok ? 'activation_required' : currentAvailability.reason)
       }
-      capture = await acquireInteractiveMic(COMMAND_MIC_CONSTRAINTS, 'command', inputSource, abort.signal)
+      // A device change is not a revocation: speech already captured must still be recognized (G18).
+      capture = await acquireInteractiveMic(COMMAND_MIC_CONSTRAINTS, 'command', inputSource, abort.signal, {
+        onDeviceChange: () => void this.deviceLost(generation)
+      })
       sessionId = capture.admission.sessionId
       if (this.disposed || generation !== this.generation || capture.admission.revoked) throw new Error('cancelled')
       context = new AudioContext()
@@ -127,7 +152,8 @@ export class CommandMicController {
           ? capture.stream.getAudioTracks()
           : capture.stream.getTracks()
       const track = audioTracks[0]
-      if (!track || track.readyState === 'ended') throw new Error('microphone_unavailable')
+      if (!track) throw new Error('device_missing')
+      if (track.readyState === 'ended') throw new Error('device_lost')
       // Build the full audio graph before starting Main's bounded capture deadline. Keep it
       // disconnected until Main accepts the exact lease so no first PCM frame can be lost.
       const start = await window.toto.commandSpeechStart(sessionId)
@@ -157,7 +183,7 @@ export class CommandMicController {
         resolveSealed,
         sealed,
         failed: false,
-        onTrackEnded: () => this.cancelForGeneration(generation, 'microphone_unavailable'),
+        onTrackEnded: () => void this.deviceLost(generation),
         finalizing: false,
         mediaReleased: false,
         mediaTeardown: null
@@ -169,7 +195,7 @@ export class CommandMicController {
       const stillOwned = (): boolean =>
         this.active === active && !this.disposed && generation === this.generation && !active.admission.revoked
       const requireLiveTrack = (): void => {
-        if (track.readyState === 'ended') throw new Error('microphone_unavailable')
+        if (track.readyState === 'ended') throw new Error('device_lost')
       }
       if (!stillOwned()) return
       requireLiveTrack()
@@ -188,6 +214,9 @@ export class CommandMicController {
       if (this.admissionAbort === abort) this.admissionAbort = null
       const message = error instanceof Error ? error.message : ''
       const reason = /^Microphone admission denied: unauthorized$/.test(message) ? 'unauthorized' : message
+      const deviceReason =
+        micFailureReason(error) ??
+        (reason === 'device_lost' || reason === 'device_missing' ? (reason as CommandMicStopReason) : null)
       if (startedInMain && sessionId) void window.toto.commandSpeechCancel(sessionId).catch(() => {})
       const active = this.active
       if (active?.generation === generation) this.release(active)
@@ -228,12 +257,21 @@ export class CommandMicController {
               ? 'activation_required'
               : reason === 'recognition_unavailable'
                 ? 'recognition_unavailable'
-                : 'microphone_unavailable'
+                : (deviceReason ?? 'microphone_unavailable')
       this.publish({ status: 'error', reason: mapped })
     }
   }
 
   async finish(expectedGeneration?: number): Promise<void> {
+    return this.seal(expectedGeneration, false)
+  }
+
+  /** The device went away (track ended or the device list changed). Never reachable once sealing has begun. */
+  private deviceLost(generation: number): Promise<void> {
+    return this.seal(generation, true)
+  }
+
+  private async seal(expectedGeneration: number | undefined, deviceLost: boolean): Promise<void> {
     const active = this.active
     if (!active || active.finalizing || (expectedGeneration !== undefined && active.generation !== expectedGeneration))
       return
@@ -243,6 +281,17 @@ export class CommandMicController {
     active.node.port.postMessage('seal')
     await Promise.race([active.sealed, new Promise<void>((resolve) => setTimeout(resolve, 750))])
     await active.frameQueue
+    if (deviceLost && this.active === active && !active.failed && !active.admission.revoked) {
+      // Accepted speech survives a device change: what was captured is still recognized. Only a device that went
+      // away before anything was captured fails the turn, with its own reason.
+      if (active.frameCount === 0) {
+        await this.cancelForGeneration(active.generation, 'device_lost')
+        return
+      }
+      await Promise.resolve()
+        .then(() => this.options.onDeviceLostWithAudio?.())
+        .catch(() => {})
+    }
     if (this.active !== active || active.failed || active.admission.revoked) {
       if (this.active === active) await this.cancelForGeneration(active.generation, 'recognition_unavailable')
       return
