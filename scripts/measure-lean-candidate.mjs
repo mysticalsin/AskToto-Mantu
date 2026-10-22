@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto'
 import { lstat, mkdir, readFile, readdir, writeFile } from 'node:fs/promises'
 import { dirname, join, relative, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { selectLeanInstallers } from './lib/lean-installer-selection.mjs'
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
 const [target, arch, outputArgument] = process.argv.slice(2)
@@ -56,10 +57,7 @@ if (
   throw new Error('Packaged inventory does not match the requested candidate measurement target')
 }
 
-const extension = target === 'mac' ? '.dmg' : '.exe'
-const installers = (await walk(outputRoot))
-  .filter((path) => path.toLowerCase().endsWith(extension) && !path.includes(`${sep}win-unpacked${sep}`))
-  .sort()
+const installers = selectLeanInstallers(await walk(outputRoot), target).sort()
 if (installers.length !== 1) throw new Error(`Expected exactly one lean installer, found ${installers.length}`)
 const installer = installers[0]
 const installerBytes = await readFile(installer)

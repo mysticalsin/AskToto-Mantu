@@ -13,6 +13,7 @@ const sha = (value: string) => createHash('sha256').update(value).digest('hex')
 const execFileAsync = promisify(execFile)
 const STAGED_PLACEHOLDER_DIRECTORIES = [
   'cloudflare-embed',
+  'operator-embed',
   'operator',
   'license-lease',
   'managed-node/darwin-arm64',

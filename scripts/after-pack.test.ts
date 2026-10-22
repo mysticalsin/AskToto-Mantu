@@ -64,7 +64,7 @@ describe('afterPack Windows runtime verification', () => {
       ],
       expect.objectContaining({ stdio: 'inherit' })
     )
-    for (const name of ['operator', 'license-lease', 'cloudflare-embed']) {
+    for (const name of ['operator', 'operator-embed', 'license-lease', 'cloudflare-embed']) {
       expect(existsSync(join(resources, name))).toBe(false)
     }
   })
@@ -94,7 +94,7 @@ describe('afterPack Windows runtime verification', () => {
         '--executable=Metis.exe',
         '--arch=x64'
       ])
-      for (const name of ['operator', 'license-lease', 'cloudflare-embed']) {
+      for (const name of ['operator', 'operator-embed', 'license-lease', 'cloudflare-embed']) {
         expect(lstatSync(join(resources, name)).isDirectory()).toBe(true)
       }
     })
@@ -158,7 +158,7 @@ describe('lean provisioned-key directory creation', () => {
     await ensureLeanPackageCoreDirectories(root)
     await ensureLeanPackageCoreDirectories(root)
     expect(readFileSync(key, 'utf8')).toBe('public-test-key')
-    for (const name of ['operator', 'license-lease', 'cloudflare-embed']) {
+    for (const name of ['operator', 'operator-embed', 'license-lease', 'cloudflare-embed']) {
       expect(lstatSync(join(root, name)).isDirectory()).toBe(true)
       expect(existsSync(join(root, name, '.gitkeep'))).toBe(false)
     }

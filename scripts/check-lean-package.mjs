@@ -9,6 +9,7 @@ import { assertMacHelperSpeechUsage } from './lib/mac-helper-privacy.mjs'
 import { isForbiddenInferencePath } from './lib/forbidden-inference-path.mjs'
 import { assertMachOArchitectures } from './lib/macho-architecture.mjs'
 import { parseLeanCheckerArgs } from './lib/lean-checker-args.mjs'
+import { leanAppIdentity } from './lib/lean-app-identity.mjs'
 import { constants as fsConstants } from 'node:fs'
 import { packageInventoryIdentity, validatePackageInventory } from './lib/package-inventory.mjs'
 import { assertRuntimeTrustPins } from './lib/runtime-trust-pins.mjs'
@@ -144,7 +145,14 @@ for (const [relativePath, label] of requiredResources) {
 if (platform === 'darwin') {
   await access(join(resourcesRoot, 'ffmpeg', archFolder, 'ffmpeg'), fsConstants.X_OK)
 }
-for (const relativePath of ['operator', 'license-lease', 'cloudflare-embed', 'skills', 'intelligence']) {
+for (const relativePath of [
+  'operator',
+  'operator-embed',
+  'license-lease',
+  'cloudflare-embed',
+  'skills',
+  'intelligence'
+]) {
   let stat
   try {
     stat = await lstat(join(resourcesRoot, relativePath))
@@ -284,11 +292,14 @@ if (platform === 'darwin') {
   const bundleIdentifier = execFileSync('plutil', ['-extract', 'CFBundleIdentifier', 'raw', '-o', '-', infoPlistPath], {
     encoding: 'utf8'
   }).trim()
-  if (bundleIdentifier !== 'com.mantu.asktoto') {
-    throw new Error(`macOS bundle identifier must remain com.mantu.asktoto, got ${JSON.stringify(bundleIdentifier)}`)
+  const appIdentity = leanAppIdentity()
+  if (bundleIdentifier !== appIdentity.bundleIdentifier) {
+    throw new Error(
+      `macOS bundle identifier must remain ${appIdentity.bundleIdentifier}, got ${JSON.stringify(bundleIdentifier)}`
+    )
   }
   const expectedAppArch = arch === 'x64' ? 'x64' : 'arm64'
-  const appExecutable = join(appRoot, 'Contents', 'MacOS', 'Metis')
+  const appExecutable = join(appRoot, 'Contents', 'MacOS', appIdentity.executableName)
   assertMachOArchitectures(await readFile(appExecutable), [expectedAppArch], 'Metis application executable')
   const electronFramework = join(
     appRoot,

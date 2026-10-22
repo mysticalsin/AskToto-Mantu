@@ -8,6 +8,7 @@ import { join, parse, resolve } from 'node:path'
 /** Electron Builder drops these exact tracked zero-byte directory placeholders from extraResources. */
 const LEAN_PACKAGE_DIRECTORY_PLACEHOLDERS = Object.freeze([
   'cloudflare-embed',
+  'operator-embed',
   'operator',
   'license-lease',
   'managed-node/darwin-arm64',
@@ -21,7 +22,7 @@ const LEAN_PACKAGE_DIRECTORY_PLACEHOLDERS = Object.freeze([
 export async function ensureLeanPackageCoreDirectories(resourcesRoot) {
   const root = await lstat(resourcesRoot)
   if (root.isSymbolicLink() || !root.isDirectory()) throw new Error('Lean package resource root is invalid')
-  for (const name of ['operator', 'license-lease', 'cloudflare-embed']) {
+  for (const name of ['operator', 'operator-embed', 'license-lease', 'cloudflare-embed']) {
     const directory = join(resourcesRoot, name)
     try {
       await mkdir(directory, { mode: 0o755 })

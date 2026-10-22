@@ -94,15 +94,17 @@ jobs:
           DMG_SHA256: ${{ inputs.dmg_sha256 }}
         run: |
           node scripts/qa/provenance.mjs verify provenance/provenance.json assets mac
-          dmg=$(ls assets/*.dmg)
+          # A lean candidate holds one DMG per architecture (the hosted runner is Apple Silicon); an older candidate holds one universal DMG.
+          dmg=$(ls assets/*-arm64.dmg 2>/dev/null || ls assets/*.dmg)
           [ "$(shasum -a 256 "$dmg" | cut -d' ' -f1)" = "$DMG_SHA256" ] \
             || { echo "::error::The candidate DMG does not match the requested sha256."; exit 1; }
       - name: Install from the DMG into a fresh directory
         run: |
           mkdir -p hk-m-report
-          shasum -a 256 assets/*.dmg > hk-m-report/SHA256SUMS.txt
+          dmg=$(ls assets/*-arm64.dmg 2>/dev/null || ls assets/*.dmg)
+          shasum -a 256 "$dmg" > hk-m-report/SHA256SUMS.txt
           volume="$RUNNER_TEMP/volume"
-          hdiutil attach -nobrowse -readonly -mountpoint "$volume" assets/*.dmg > /dev/null
+          hdiutil attach -nobrowse -readonly -mountpoint "$volume" "$dmg" > /dev/null
           bundle=$(cd "$volume" && ls -d *.app)
           mkdir -p "$RUNNER_TEMP/hk-m"
           ditto "$volume/$bundle" "$RUNNER_TEMP/hk-m/Metis.app"
@@ -153,15 +155,17 @@ jobs:
           DMG_SHA256: ${{ inputs.dmg_sha256 }}
         run: |
           node scripts/qa/provenance.mjs verify provenance/provenance.json assets mac
-          dmg=$(ls assets/*.dmg)
+          # A lean candidate holds one DMG per architecture (the hosted runner is Apple Silicon); an older candidate holds one universal DMG.
+          dmg=$(ls assets/*-arm64.dmg 2>/dev/null || ls assets/*.dmg)
           [ "$(shasum -a 256 "$dmg" | cut -d' ' -f1)" = "$DMG_SHA256" ] \
             || { echo "::error::The candidate DMG does not match the requested sha256."; exit 1; }
       - name: Install from the DMG into a fresh directory
         run: |
           mkdir -p hk-m-report
-          shasum -a 256 assets/*.dmg > hk-m-report/SHA256SUMS.txt
+          dmg=$(ls assets/*-arm64.dmg 2>/dev/null || ls assets/*.dmg)
+          shasum -a 256 "$dmg" > hk-m-report/SHA256SUMS.txt
           volume="$RUNNER_TEMP/volume"
-          hdiutil attach -nobrowse -readonly -mountpoint "$volume" assets/*.dmg > /dev/null
+          hdiutil attach -nobrowse -readonly -mountpoint "$volume" "$dmg" > /dev/null
           bundle=$(cd "$volume" && ls -d *.app)
           mkdir -p "$RUNNER_TEMP/hk-m"
           ditto "$volume/$bundle" "$RUNNER_TEMP/hk-m/Metis.app"

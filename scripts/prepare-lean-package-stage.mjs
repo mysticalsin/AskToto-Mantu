@@ -79,6 +79,11 @@ await copyTree('resources/runtime-trust/acquisition-receipt.json', 'runtime-trus
 await copyTree('THIRD_PARTY_NOTICES.md', 'THIRD_PARTY_NOTICES.md')
 await copyTree('skills', 'skills')
 await copyTree('build/cloudflare-embed', 'cloudflare-embed')
+// The build-embedded Operator enrolment blob (scripts/embed-operator-enroll-token.mjs). Empty (a .gitkeep that
+// is removed below) on a build with no token, which then enrols through SSO only; otherwise the AES-GCM
+// blob enroll.json, inventoried like every other staged core file and checked by
+// scripts/check-embedded-operator-enroll.mjs against the packaged copy.
+await copyTree('build/operator-embed', 'operator-embed')
 await copyTree('resources/operator', 'operator')
 await copyTree('resources/license-lease', 'license-lease')
 await copyTree(`resources/ffmpeg/${targetFolder}`, `ffmpeg/${targetFolder}`)

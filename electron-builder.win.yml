@@ -4,6 +4,9 @@
 # ASCII for filesystem, updater, and enterprise-deployment compatibility.
 extends: ./electron-builder.yml
 productName: Métis
+# The release profile is lean: scripts/lean-release.mjs win x64 packages this config with METIS_PACKAGE_PROFILE=lean, and
+# scripts/before-pack.mjs then replaces win.extraResources below with the staged lean core. The list below is the
+# legacy full profile (dist:win, release:win).
 # Keep the Windows app directory allowlist explicit in the child config. electron-builder treats a
 # nested `win.files` override as a target-only pattern and can otherwise fall back to `**/*`, pulling
 # OneDrive worktrees, video files, and ignored local model caches into app.asar. The foreign Darwin

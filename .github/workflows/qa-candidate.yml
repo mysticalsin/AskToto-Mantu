@@ -7,6 +7,10 @@ name: QA candidate
 # consume these bytes by sha256, and promote-candidate.yml publishes the same bytes. This workflow never
 # signs with a Developer ID, publishes, or pushes a tag.
 #
+# Every installer is the lean package profile (G11): no bundled local model, speech model or inference runtime.
+# macOS builds one DMG and zip per architecture (the lean inventory is single-architecture); the QA identity zip
+# is arm64 only. scripts/lean-release.mjs runs the one build plan the lean-candidates lane also measures.
+#
 # A pull request that changes the lane's own files runs it as a self-test. Such a run builds the PR's
 # merge commit and can never be promoted.
 run-name: ${{ github.event_name == 'pull_request' && format('QA candidate self-test (PR {0})', github.event.pull_request.number) || format('QA candidate {0}', inputs.commit) }}
@@ -22,6 +26,8 @@ on:
     paths:
       - .github/workflows/qa-candidate.yml
       - build/qa-identity.electron-builder.yml
+      - scripts/lean-release.mjs
+      - scripts/lib/lean-release-plan.mjs
       - scripts/qa/provenance.mjs
       - scripts/qa/release-line.mjs
       - scripts/qa/st-1.mjs
@@ -141,9 +147,11 @@ jobs:
       matrix:
         include:
           - variant: mac
-            script: dist
+            arches: arm64 x64
+            flags: ''
           - variant: mac-qa-identity
-            script: dist:qa-identity
+            arches: arm64
+            flags: --qa-identity
     steps:
       - name: Build once
         run: |
@@ -172,16 +180,6 @@ jobs:
           node-version: 22.22.3
           cache: npm
       - run: npm ci
-      # Same key as build.yml. fetch-models.mjs reuses cached files only after its exact manifest gate.
-      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
-        with:
-          path: |
-            resources/models
-            resources/asr
-            resources/ort
-            resources/llama
-            resources/local-llm
-          key: runtime-assets-${{ runner.os }}-${{ hashFiles('scripts/fetch-models.mjs', 'resources/runtime-assets-manifest.json') }}-${{ hashFiles('scripts/fetch-llama-server.mjs') }}-${{ hashFiles('scripts/fetch-local-model.mjs', 'scripts/local-model-assets.mjs') }}
       # A stable identity keeps one designated requirement across candidates, so TCC grants persist.
       # Without the secret the candidate is ad-hoc signed, and provenance says so.
       - name: Import the stable QA signing identity
@@ -218,12 +216,16 @@ jobs:
             exit 1
           fi
           echo "ASKTOTO_MAC_SIGN_IDENTITY=$fingerprint" >> "$GITHUB_ENV"
-      - name: Build the ${{ matrix.variant }} installers
-        run: npm run ${{ matrix.script }}
+      # The lean profile bundles no model or inference runtime, so no model cache or fetch step precedes this.
+      - name: Build the lean ${{ matrix.variant }} installers
+        run: |
+          for arch in ${{ matrix.arches }}; do
+            node scripts/lean-release.mjs mac "$arch" ${{ matrix.flags }}
+          done
         env:
-          # QA-identity builds embed a `staging`-channel enrolment token (dist:qa-identity runs
-          # embed-operator-enroll-token.mjs --qa). Unset, the QA build enrols through SSO only. The plain `dist`
-          # variant never embeds a token.
+          # QA-identity builds embed a `staging`-channel enrolment token (scripts/lean-release.mjs runs
+          # embed-operator-enroll-token.mjs --qa for --qa-identity). Unset, the QA build enrols through SSO only.
+          # The plain variant never embeds a token.
           METIS_OPERATOR_ENROLL_TOKEN_QA: ${{ secrets.METIS_OPERATOR_ENROLL_TOKEN_QA }}
           METIS_OPERATOR_ENROLL_URL_QA: ${{ vars.METIS_OPERATOR_ENROLL_URL_QA }}
       - name: Refuse any installer over GitHub's per-asset limit
@@ -278,18 +280,10 @@ jobs:
           node-version: 22.22.3
           cache: npm
       - run: npm ci
-      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
-        with:
-          path: |
-            resources/models
-            resources/asr
-            resources/ort
-            resources/llama
-            resources/local-llm
-          key: runtime-assets-${{ runner.os }}-${{ hashFiles('scripts/fetch-models.mjs', 'resources/runtime-assets-manifest.json') }}-${{ hashFiles('scripts/fetch-llama-server.mjs') }}-${{ hashFiles('scripts/fetch-local-model.mjs', 'scripts/local-model-assets.mjs') }}
-      # No signing secret reaches this job, so electron-builder leaves both installers unsigned.
-      - name: Build the win installers
-        run: npm run dist:win
+      # No signing secret reaches this job, so electron-builder leaves both installers unsigned. The lean profile
+      # bundles no model or inference runtime, so no model cache or fetch step precedes the build.
+      - name: Build the lean win installers
+        run: node scripts/lean-release.mjs win x64
       - name: Refuse any installer over GitHub's per-asset limit
         run: npm run check:release
         env:
@@ -413,6 +407,12 @@ jobs:
               [ "$(shasum -a 1 "$RUNNER_TEMP/certificate/c0" | cut -d' ' -f1)" = "$expected" ] \
                 || { echo "::error::$installer is not signed with the QA certificate its provenance records."; exit 1; }
             fi
+            # The hosted macOS runner is Apple Silicon. An Intel installer is verified above by sha256 and
+            # signature, and at build time by the lean package gates (architecture, inventory, enrolment blob);
+            # launching it needs an Intel host, which this lane does not have.
+            case "$name" in
+              *-x64.*) echo "::notice::$name targets Intel and is not launched on this Apple Silicon runner."; continue ;;
+            esac
             ASKTOTO_MAC_LAUNCH_GATE=1 node scripts/check-packaged-launch.mjs "$app" \
               --report "launch-reports/$name.launch.json" \
               --installer "$name" \
@@ -428,6 +428,7 @@ jobs:
           status=0
           for installer in assets/*; do
             name=$(basename "$installer")
+            case "$name" in *-x64.*) continue ;; esac
             sha=$(jq -r --arg v "$VARIANT" --arg n "$name" '.builds[] | select(.variant == $v) | .assets[] | select(.name == $n) | .sha256' provenance/provenance.json)
             jq -e --arg n "$name" --arg h "$sha" '.installer == $n and .verdict == "PASS" and .artifact_sha256 == $h' "launch-reports/$name.launch.json" > /dev/null \
               || { echo "::error::$name has no PASS launch report bound to its provenance sha256."; status=1; }
@@ -721,9 +722,9 @@ jobs:
         if: always()
         run: |
           mkdir -p stat-flags-report
-          dmg=$(find assets-mac -maxdepth 1 -name '*.dmg' -print -quit)
+          dmg=$(find assets-mac -maxdepth 1 -name '*-arm64.dmg' -print -quit)
           if [ -z "$dmg" ]; then
-            echo "::error::candidate-mac did not contain a dmg."
+            echo "::error::candidate-mac did not contain an arm64 dmg."
             exit 1
           fi
           volume="$RUNNER_TEMP/dmg-volume"
@@ -1027,9 +1028,9 @@ jobs:
       - name: Install the DMG into a fresh directory
         id: install
         run: |
-          dmgs=(assets/*.dmg)
+          dmgs=(assets/*-arm64.dmg)
           if [ "${#dmgs[@]}" -ne 1 ] || [ ! -f "${dmgs[0]}" ]; then
-            echo "::error::candidate-mac must hold exactly one DMG, found ${#dmgs[@]}."
+            echo "::error::candidate-mac must hold exactly one arm64 DMG, found ${#dmgs[@]}."
             exit 1
           fi
           target="$RUNNER_TEMP/history-design"

@@ -73,6 +73,14 @@ asarUnpack:
   # FITO-185-W: Chromium media pipeline cannot decode <video>/<audio> from inside app.asar
   # (OS open). Unpack Vite-emitted Act 1 hero mp4 so file:// can play after asar→unpacked rewrite.
   - '**/*.mp4'
+# PACKAGE PROFILES. The release profile is `lean` (METIS_PACKAGE_PROFILE=lean, built by scripts/lean-release.mjs
+# through scripts/lib/lean-release-plan.mjs): scripts/before-pack.mjs replaces this whole extraResources list with a
+# staged core set (build/lean-stage/resources) that carries no local model, speech model or inference runtime. The
+# local LLM, Whisper and Parakeet are optional components, described in
+# src/main/features/components/speech-pack/optional-component-descriptors.ts and offered with consent.
+# Everything below is the LEGACY `full` profile (dist, dist:local, dist:win, release*): it stays buildable for 1.9.x
+# hotfixes and so an install upgraded in place from 1.9.7 keeps working. Do not add a payload here without saying
+# which profile it is for.
 extraResources:
   - from: build/speech-pack-profile.json
     to: speech-pack-profile.json
@@ -163,7 +171,8 @@ extraResources:
   # enrols through SSO only), and otherwise holding the AES-256-GCM blob enroll.json written by
   # scripts/embed-operator-enroll-token.mjs. scripts/check-embedded-operator-enroll.mjs gates every chain.
   # Obfuscated, not secret: the token is scoped to enrolment on the Worker, `reporting` tier, capped, revocable.
-  # The lean package profile stages its own resources and never carries it.
+  # The lean package profile stages this directory too (scripts/prepare-lean-package-stage.mjs), empty or holding
+  # the blob, and scripts/check-embedded-operator-enroll.mjs checks the packaged copy against what was staged.
   - from: build/operator-embed
     to: operator-embed
   # Operator skill-pack signing public key (src/main/operator-skill-key.ts) and license-lease public key

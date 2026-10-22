@@ -159,7 +159,12 @@ test("stage moves exactly the variant's installers and records size and sha256",
 
 test('a D-34 hotfix version stages the same asset names under the hotfix version', async () => {
   const hotfix = '1.9.7-hotfix.1'
-  assert.deepEqual(VARIANTS.mac.assets(hotfix), ['Metis-1.9.7-hotfix.1.dmg', 'Metis-1.9.7-hotfix.1.zip'])
+  assert.deepEqual(VARIANTS.mac.assets(hotfix), [
+    'Metis-1.9.7-hotfix.1-arm64.dmg',
+    'Metis-1.9.7-hotfix.1-arm64.zip',
+    'Metis-1.9.7-hotfix.1-x64.dmg',
+    'Metis-1.9.7-hotfix.1-x64.zip'
+  ])
   assert.deepEqual(VARIANTS['mac-qa-identity'].assets(hotfix), ['Metis-QA-1.9.7-hotfix.1.zip'])
   assert.deepEqual(VARIANTS.win.assets(hotfix), ['Metis-Setup-1.9.7-hotfix.1.exe'])
   assert.deepEqual(VARIANTS['win-portable'].assets(hotfix), ['Metis-Portable-1.9.7-hotfix.1.exe'])
@@ -171,8 +176,10 @@ test('a D-34 hotfix version stages the same asset names under the hotfix version
     const outDir = join(root, 'candidate')
     await stageBuild({ variant: 'mac', repoRoot: root, releaseDir, outDir, env: env(), nodeVersion: NODE_VERSION })
     assert.deepEqual(readdirSync(join(outDir, 'assets')).sort(), [
-      'Metis-1.9.7-hotfix.1.dmg',
-      'Metis-1.9.7-hotfix.1.zip'
+      'Metis-1.9.7-hotfix.1-arm64.dmg',
+      'Metis-1.9.7-hotfix.1-arm64.zip',
+      'Metis-1.9.7-hotfix.1-x64.dmg',
+      'Metis-1.9.7-hotfix.1-x64.zip'
     ])
   } finally {
     cleanup(root)
@@ -667,7 +674,7 @@ test('a PASS record for one promotable asset never covers a different asset or p
     const { records, env: e } = await stageAll(root, releaseDir)
     const provenance = assembleProvenance(records, e)
     const assets = promotableAssets(provenance)
-    assert.equal(assets.length, 3, 'fixture must stage both mac and win assets to exercise cross-asset coverage')
+    assert.equal(assets.length, 5, 'fixture must stage both mac and win assets to exercise cross-asset coverage')
 
     const [missing, ...covered] = assets
     const partialCoverage = passEvidenceFor(provenance, covered)
@@ -770,10 +777,10 @@ test('prepare-release publishes only the shipping installers with SHA256SUMS.txt
     const uploaded = readdirSync(uploadDir).sort()
     const promotableAssetNames = promotableAssets(provenance).map((asset) => asset.name)
     assert.deepEqual(uploaded, [...promotableAssetNames, 'SHA256SUMS.txt', 'provenance.json'].sort())
-    assert.equal(uploaded.length, 5)
+    assert.equal(uploaded.length, 7)
 
     const sums = readFileSync(join(uploadDir, 'SHA256SUMS.txt'), 'utf8').split('\n').filter(Boolean)
-    assert.equal(sums.length, 3)
+    assert.equal(sums.length, 5)
 
     assert.deepEqual(readFileSync(join(uploadDir, 'provenance.json')), Buffer.from(provenanceBytes))
 
@@ -782,7 +789,7 @@ test('prepare-release publishes only the shipping installers with SHA256SUMS.txt
     assert.ok(existsSync(portableElsewhere))
 
     const manifest = JSON.parse(readFileSync(join(outDir, 'manifest.json'), 'utf8'))
-    assert.equal(manifest.length, 5)
+    assert.equal(manifest.length, 7)
     for (const entry of manifest) {
       assert.ok(typeof entry.name === 'string' && typeof entry.size === 'number' && /^[0-9a-f]{64}$/.test(entry.sha256))
     }

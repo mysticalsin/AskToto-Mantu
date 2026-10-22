@@ -101,7 +101,10 @@ jobs:
             gh release download "$RELEASE_TAG" --repo "$RELEASE_REPO" --pattern 'SHA256SUMS*' --dir "$RUNNER_TEMP/m2-0008-sums"
             node scripts/qa/verify-sha256sums.mjs "$RUNNER_TEMP/m2-0008-artifact" "$(find "$RUNNER_TEMP/m2-0008-sums" -type f -name 'SHA256SUMS*' -print -quit)"
           fi
-          artifact="$(find "$RUNNER_TEMP/m2-0008-artifact" -type f -name '*.dmg' -print -quit)"
+          # A lean candidate holds one DMG per architecture; this Apple Silicon runner measures the arm64 one.
+          # A published 1.9.x release holds a single universal DMG.
+          artifact="$(find "$RUNNER_TEMP/m2-0008-artifact" -type f -name '*-arm64.dmg' -print -quit)"
+          [ -n "$artifact" ] || artifact="$(find "$RUNNER_TEMP/m2-0008-artifact" -type f -name '*.dmg' -print -quit)"
           test -n "$artifact"
           printf '%s  %s\n' "$EXPECTED_SHA256" "$artifact" | shasum -a 256 -c -
           volume="$RUNNER_TEMP/m2-0008-volume"

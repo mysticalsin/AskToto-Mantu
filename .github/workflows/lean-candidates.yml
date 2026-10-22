@@ -36,7 +36,12 @@ jobs:
           scripts/lib/macho-architecture.test.ts
           scripts/lib/lean-checker-args.test.ts
           scripts/lib/lean-package-stage.test.ts
+          scripts/lib/lean-release-plan.test.ts
+          scripts/lib/lean-app-identity.test.ts
+          scripts/lib/lean-installer-selection.test.ts
+          scripts/lean-release.test.ts
           scripts/lean-builder-exclusions.test.ts
+          scripts/lean-operator-embed.contract.test.ts
 
   candidate:
     name: Unsigned ${{ matrix.target }} ${{ matrix.arch }} candidate
@@ -95,6 +100,11 @@ jobs:
         run: npm run fetch:managed-node -- ${{ matrix.target }}
       - name: Build Mantu Intelligence resources
         run: npm run build:intelligence
+      # Lean candidates carry no enrolment token: they run on every pull request and enrol through SSO only. The
+      # step still runs so a blob left by an earlier local build can never reach a package, and the check below
+      # proves the staged resources carry exactly what the build staged.
+      - name: Clear any stale Operator enrolment blob
+        run: node scripts/embed-operator-enroll-token.mjs
       - name: Build profile-compiled application
         run: npm run build
         shell: bash
@@ -119,6 +129,14 @@ jobs:
         run: >-
           npx electron-builder --config electron-builder.win.yml --win nsis --x64 --publish never
           -c.npmRebuild=false -c.directories.output=release/lean-win-x64
+      - name: Check the Operator enrolment blob state in the package
+        shell: bash
+        run: |
+          dir="release/lean-${{ matrix.target }}-${{ matrix.arch }}"
+          if [ "${{ matrix.target }}" = mac ]; then
+            if [ "${{ matrix.arch }}" = arm64 ]; then dir="$dir/mac-arm64"; else dir="$dir/mac"; fi
+          fi
+          node scripts/check-embedded-operator-enroll.mjs "$dir"
       - name: Measure final installer and app tree
         shell: bash
         run: node scripts/measure-lean-candidate.mjs ${{ matrix.target }} ${{ matrix.arch }} release/lean-${{ matrix.target }}-${{ matrix.arch }}

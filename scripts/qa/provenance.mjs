@@ -33,7 +33,13 @@ export const VARIANTS = Object.freeze({
     promotable: true,
     platform: 'mac',
     configs: ['electron-builder.yml'],
-    assets: (version) => [`Metis-${version}.dmg`, `Metis-${version}.zip`]
+    // Lean packages are single-architecture (G11): one DMG and zip per architecture, named by it.
+    assets: (version) => [
+      `Metis-${version}-arm64.dmg`,
+      `Metis-${version}-arm64.zip`,
+      `Metis-${version}-x64.dmg`,
+      `Metis-${version}-x64.zip`
+    ]
   },
   'mac-qa-identity': {
     promotable: false,
