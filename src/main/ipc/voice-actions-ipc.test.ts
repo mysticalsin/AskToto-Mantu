@@ -17,7 +17,8 @@ function setup() {
       enabled: true,
       shortcut: 'running' as const
     })),
-    report: vi.fn(() => ({ ok: true }))
+    report: vi.fn(() => ({ ok: true })),
+    setChordRecorderActive: vi.fn(() => ({ ok: true }))
   }
   registerVoiceActionsIpc(
     {
@@ -31,16 +32,20 @@ function setup() {
 }
 
 describe('voice actions IPC', () => {
-  it('registers exactly getState and report', () => {
-    expect([...setup().handlers.keys()].sort()).toEqual([VOICE_ACTIONS_IPC.getState, VOICE_ACTIONS_IPC.report].sort())
+  it('registers exactly getState, report and the chord recorder flag (none of which can start a turn)', () => {
+    expect([...setup().handlers.keys()].sort()).toEqual(
+      [VOICE_ACTIONS_IPC.getState, VOICE_ACTIONS_IPC.report, VOICE_ACTIONS_IPC.recorder].sort()
+    )
   })
 
   it('both handlers refuse a sender that is not the main window, before touching the runtime', () => {
     const { call, runtime } = setup()
     expect(() => call(VOICE_ACTIONS_IPC.getState, undefined, false)).toThrow('untrusted sender')
     expect(() => call(VOICE_ACTIONS_IPC.report, { turnId: 'x', phase: 'capturing' }, false)).toThrow('untrusted sender')
+    expect(() => call(VOICE_ACTIONS_IPC.recorder, { active: true }, false)).toThrow('untrusted sender')
     expect(runtime.snapshot).not.toHaveBeenCalled()
     expect(runtime.report).not.toHaveBeenCalled()
+    expect(runtime.setChordRecorderActive).not.toHaveBeenCalled()
   })
 
   it('getState returns the snapshot and report forwards the raw payload for the runtime to validate', () => {
@@ -48,5 +53,11 @@ describe('voice actions IPC', () => {
     expect(call(VOICE_ACTIONS_IPC.getState)).toMatchObject({ revision: 3, state: 'idle' })
     expect(call(VOICE_ACTIONS_IPC.report, { turnId: 't1', phase: 'capturing' })).toEqual({ ok: true })
     expect(runtime.report).toHaveBeenCalledWith({ turnId: 't1', phase: 'capturing' })
+  })
+
+  it('the recorder flag forwards the raw payload for the runtime to validate', () => {
+    const { call, runtime } = setup()
+    expect(call(VOICE_ACTIONS_IPC.recorder, { active: true })).toEqual({ ok: true })
+    expect(runtime.setChordRecorderActive).toHaveBeenCalledWith({ active: true })
   })
 })

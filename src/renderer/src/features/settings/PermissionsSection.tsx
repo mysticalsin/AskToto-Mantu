@@ -43,12 +43,15 @@ export function PermissionRow({
   label,
   status,
   windows,
-  relaunch
+  relaunch,
+  why
 }: {
   kind: PermissionKind
   label: string
   status: string
   windows: boolean
+  /** The one sentence that says why this row asks, when the feature that shows it has its own reason. */
+  why?: string
   /** Set when the grant only applies after a relaunch (macOS Screen Recording without a diagnosis). */
   relaunch?: { busy: boolean; run: () => void } | null
 }): JSX.Element {
@@ -66,7 +69,7 @@ export function PermissionRow({
           </span>
         </div>
         <div className="text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
-          {WHY[kind]}
+          {why ?? WHY[kind]}
           {denied ? ` ${osSettingsWhere(kind, windows)}` : ''}
         </div>
         {relaunch ? (

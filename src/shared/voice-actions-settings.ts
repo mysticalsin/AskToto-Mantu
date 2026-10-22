@@ -20,6 +20,12 @@ import { MODIFIER_BITS } from './voice/modifier-mask'
 export const VOICE_ACTIONS_RELEASE_DEFAULT_ON = false
 
 /**
+ * The "Hey Métis" gate (design section 4). The sub-toggle in Settings stays off, and says why, until V07's
+ * measurement (false accepts, true accepts, CPU, latency, memory on reference hardware) passes and this flips.
+ */
+export const VOICE_WAKE_WORD_GATE_PASSED = false
+
+/**
  * Chord tokens are the hold watcher's own modifier names (`MODIFIER_BITS` in voice/modifier-mask.ts): one
  * vocabulary for the setting, the recognizer and the helpers. Modifier-only: a hold of letter keys would need key
  * identities, which the helper protocol deliberately never carries. `unsided` is a protocol value, never a chord.

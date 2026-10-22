@@ -214,6 +214,40 @@ describe('effective enabled: ON in QA builds, OFF in release builds until the fl
   })
 })
 
+describe('the Settings chord recorder pauses the hold (V06)', () => {
+  it('an open recorder blocks a hold from opening a turn, and closing it lets the next hold through', () => {
+    const h = setup()
+    expect(h.wiring().chordRecorderActive?.()).toBe(false)
+    expect(h.runtime.setChordRecorderActive({ active: true })).toEqual({ ok: true })
+    expect(h.wiring().chordRecorderActive?.()).toBe(true)
+    h.runtime.setChordRecorderActive({ active: false })
+    expect(h.wiring().chordRecorderActive?.()).toBe(false)
+  })
+
+  it('refuses a payload that is not exactly { active: boolean }', () => {
+    const h = setup()
+    expect(h.runtime.setChordRecorderActive({ active: 'yes' })).toEqual({ ok: false })
+    expect(h.runtime.setChordRecorderActive({ active: true, extra: 1 })).toEqual({ ok: false })
+    expect(h.runtime.setChordRecorderActive(undefined)).toEqual({ ok: false })
+    expect(h.wiring().chordRecorderActive?.()).toBe(false)
+  })
+
+  it('a recorder left open by a renderer that went away stops blocking: reset clears it, and so does time', () => {
+    vi.useFakeTimers()
+    try {
+      const h = setup()
+      h.runtime.setChordRecorderActive({ active: true })
+      h.runtime.onRendererReset()
+      expect(h.wiring().chordRecorderActive?.()).toBe(false)
+      h.runtime.setChordRecorderActive({ active: true })
+      vi.advanceTimersByTime(121_000)
+      expect(h.wiring().chordRecorderActive?.()).toBe(false)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+})
+
 describe('hardware activation is minted by main from its own window frame', () => {
   it('a hold mints from main frame and tells the renderer to begin', () => {
     const h = setup()

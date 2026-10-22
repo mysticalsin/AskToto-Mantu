@@ -3,20 +3,30 @@ import { serializeAsrCorrections, parseAsrCorrections, sameAsrCorrections, searc
 
 describe('vocabulary-corrections helpers', () => {
   it('serializes one "heard => correct" line per correction, in order', () => {
-    expect(serializeAsrCorrections([{ from: 'Mantoo', to: 'Mantu' }, { from: 'Bizioux', to: 'Bisiou' }]))
-      .toBe('Mantoo => Mantu\nBizioux => Bisiou')
+    expect(
+      serializeAsrCorrections([
+        { from: 'Mantoo', to: 'Mantu' },
+        { from: 'Bizioux', to: 'Bisiou' }
+      ])
+    ).toBe('Mantoo => Mantu\nBizioux => Bisiou')
     expect(serializeAsrCorrections([])).toBe('')
   })
 
   it('round-trips serialize → parse', () => {
-    const items = [{ from: 'Acme Corp', to: 'Acme' }, { from: 'L Oreal', to: 'L’Oréal' }]
+    const items = [
+      { from: 'Acme Corp', to: 'Acme' },
+      { from: 'L Oreal', to: 'L’Oréal' }
+    ]
     expect(parseAsrCorrections(serializeAsrCorrections(items))).toEqual(items)
   })
 
   it('parse tolerates in-progress edits (blank lines, lines with no "=>" yet, empty "from")', () => {
     // This is the crux of the fix: typing Enter (a trailing blank line) or a half-typed line must not
     // corrupt the committed set — those lines are simply "not a correction yet" and are dropped.
-    expect(parseAsrCorrections('a => b\n\nnotyet\n => c\nx => y')).toEqual([{ from: 'a', to: 'b' }, { from: 'x', to: 'y' }])
+    expect(parseAsrCorrections('a => b\n\nnotyet\n => c\nx => y')).toEqual([
+      { from: 'a', to: 'b' },
+      { from: 'x', to: 'y' }
+    ])
     expect(parseAsrCorrections('a => b\n')).toEqual([{ from: 'a', to: 'b' }]) // trailing newline mid-typing
     expect(parseAsrCorrections('   =>   ')).toEqual([]) // whitespace-only from → not a correction
   })
@@ -31,9 +41,22 @@ describe('vocabulary-corrections helpers', () => {
   })
 
   it('sameAsrCorrections is value-equal and order-sensitive', () => {
-    const a = [{ from: 'a', to: 'b' }, { from: 'c', to: 'd' }]
-    expect(sameAsrCorrections(a, [{ from: 'a', to: 'b' }, { from: 'c', to: 'd' }])).toBe(true)
-    expect(sameAsrCorrections(a, [{ from: 'c', to: 'd' }, { from: 'a', to: 'b' }])).toBe(false) // order matters
+    const a = [
+      { from: 'a', to: 'b' },
+      { from: 'c', to: 'd' }
+    ]
+    expect(
+      sameAsrCorrections(a, [
+        { from: 'a', to: 'b' },
+        { from: 'c', to: 'd' }
+      ])
+    ).toBe(true)
+    expect(
+      sameAsrCorrections(a, [
+        { from: 'c', to: 'd' },
+        { from: 'a', to: 'b' }
+      ])
+    ).toBe(false) // order matters
     expect(sameAsrCorrections(a, [{ from: 'a', to: 'b' }])).toBe(false)
   })
 })
@@ -70,7 +93,10 @@ describe('searchSettingsTabs — settings search must find real section titles, 
   // TABS). Both task-manager connectors and the resilience card shipped that way.
   it('MQA-131: finds every connector section on the Intelligence tab by its exact title', () => {
     for (const title of ['Polo Pre-Sales', 'Plane', 'ClickUp']) {
-      expect(searchSettingsTabs(title).map((m) => m.id), `search "${title}"`).toContain('intelligence')
+      expect(
+        searchSettingsTabs(title).map((m) => m.id),
+        `search "${title}"`
+      ).toContain('intelligence')
     }
   })
 
@@ -80,6 +106,23 @@ describe('searchSettingsTabs — settings search must find real section titles, 
     expect(searchSettingsTabs('routing mode').map((m) => m.id)).toContain('ai')
     expect(searchSettingsTabs('Brain consolidation').map((m) => m.id)).toContain('intelligence')
     expect(searchSettingsTabs('batch index').map((m) => m.id)).toContain('intelligence')
+  })
+
+  it('V06: Voice actions is found on the Speech tab by its title and by the words people use for it', () => {
+    for (const query of [
+      'Voice actions',
+      'hold to talk',
+      'talk shortcut',
+      'Hey Métis',
+      'hey metis',
+      'wake word',
+      'dictation'
+    ]) {
+      expect(
+        searchSettingsTabs(query).map((m) => m.id),
+        `search "${query}"`
+      ).toContain('audio')
+    }
   })
 
   it('MQA-131: finds "Backups & limits" (AI tab) and the hedge toggle that lives inside it', () => {

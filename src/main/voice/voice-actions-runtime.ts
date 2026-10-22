@@ -16,7 +16,12 @@ import {
   voiceChordMask,
   type VoiceActionsSettings
 } from '@shared/voice-actions-settings'
-import { VOICE_ACTIONS_IPC, VoiceReportSchema, type VoiceStateSnapshot } from '@shared/voice/voice-turn'
+import {
+  VOICE_ACTIONS_IPC,
+  VoiceRecorderSchema,
+  VoiceReportSchema,
+  type VoiceStateSnapshot
+} from '@shared/voice/voice-turn'
 import type { CommandMicActivationAuthority, CommandMicActivationFrame } from '../command-mic-activation-authority'
 import type { InputSessionAuthority } from '../input-session-authority'
 import { auditLog } from '../logger'
@@ -89,10 +94,14 @@ export interface VoiceActionsRuntime {
   bindWebContents(contents: RendererContentsLike): void
   /** A renderer report (validated here). Applies only to the current turn and only toward failure. */
   report(raw: unknown): { ok: boolean }
+  /** The Settings chord recorder opened or closed (validated here). While open, a hold opens no turn. */
+  setChordRecorderActive(raw: unknown): { ok: boolean }
   dispose(): void
 }
 
 const PRESENCE_RECHECK_MS = 30_000
+/** A recorder the renderer never closed (a crash) stops pausing the hold after this long. */
+const RECORDER_MAX_MS = 120_000
 
 /** The lease only a voice turn can hold: a hardware-activated push-to-talk command capture. */
 const isVoiceLease = (lease: InputSessionLease | null): lease is InputSessionLease =>
@@ -110,6 +119,8 @@ export function createVoiceActionsRuntime(deps: VoiceActionsRuntimeDeps): VoiceA
   }
   const voice = (): VoiceActionsSettings | undefined => deps.getSettings().voiceActions
   const platform = deps.platform ?? process.platform
+  // The Settings chord recorder is open until this time. A timestamp, not a timer: nothing to leak or clear.
+  let recorderOpenUntil = 0
   const effectiveEnabled = (): boolean => resolveVoiceActionsEnabled(voice(), { qaIdentity: deps.qaIdentity })
   // One effective setting feeds both the session and the watcher: no second default, no second chord vocabulary.
   const chord =
@@ -119,6 +130,7 @@ export function createVoiceActionsRuntime(deps: VoiceActionsRuntimeDeps): VoiceA
       requireAuth: deps.requireAuth,
       meetingReserved: () => deps.authority.hasMeetingReservation,
       onboardingExclusive: deps.onboardingActive,
+      chordRecorderActive: () => Date.now() < recorderOpenUntil,
       platform,
       chordMask: () => voiceChordMask(resolveVoiceActionsChord(voice(), platform)),
       latchEnabled: () => voice()?.doublePressLatch === true,
@@ -163,6 +175,11 @@ export function createVoiceActionsRuntime(deps: VoiceActionsRuntimeDeps): VoiceA
     audit: deps.audit ?? ((phase, detail) => auditLog('voice.turn', { phase, ...detail }))
   })
   let presenceCheckedAt = Number.NEGATIVE_INFINITY
+  // A renderer that went away cannot have its recorder open any more.
+  const onRendererReset = (): void => {
+    recorderOpenUntil = 0
+    session.onRendererReset()
+  }
   return {
     start() {
       chord.start()
@@ -200,9 +217,9 @@ export function createVoiceActionsRuntime(deps: VoiceActionsRuntimeDeps): VoiceA
       }
       return true
     },
-    onRendererReset: () => session.onRendererReset(),
+    onRendererReset,
     bindWebContents(contents) {
-      const reset = (): void => session.onRendererReset()
+      const reset = onRendererReset
       contents.on('render-process-gone', reset)
       contents.on('destroyed', reset)
       contents.on(
@@ -216,6 +233,12 @@ export function createVoiceActionsRuntime(deps: VoiceActionsRuntimeDeps): VoiceA
       const parsed = VoiceReportSchema.safeParse(raw)
       if (!parsed.success) return { ok: false }
       session.report(parsed.data)
+      return { ok: true }
+    },
+    setChordRecorderActive(raw) {
+      const parsed = VoiceRecorderSchema.safeParse(raw)
+      if (!parsed.success) return { ok: false }
+      recorderOpenUntil = parsed.data.active ? Date.now() + RECORDER_MAX_MS : 0
       return { ok: true }
     },
     dispose() {

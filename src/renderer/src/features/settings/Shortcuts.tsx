@@ -20,8 +20,10 @@ import {
 } from 'lucide-react'
 import type { HotkeyAction, PublicSettings, ShortcutFailure } from '@shared/ipc'
 import { DEFAULT_SHORTCUTS, HOTKEY_ACTIONS } from '@shared/ipc'
+import { DEFAULT_VOICE_ACTIONS_SETTINGS } from '@shared/voice-actions-settings'
 import { displayAccelerator, isWindows } from '../../lib/keys'
 import { SHORTCUT_LABELS } from '../../lib/shortcut-labels'
+import { ChordChips } from './HoldChordRecorder'
 
 type ShortcutGroup = 'General' | 'Window'
 
@@ -304,6 +306,7 @@ export function Shortcuts({
   }
 
   const groups: ShortcutGroup[] = ['General', 'Window']
+  const voiceChord = (settings.voiceActions ?? DEFAULT_VOICE_ACTIONS_SETTINGS).holdChord[isWindows ? 'win' : 'mac']
 
   return (
     <div className="flex flex-col gap-4">
@@ -385,6 +388,21 @@ export function Shortcuts({
           </div>
         )
       })}
+      <div className="flex flex-col gap-1" data-voice-shortcut-row>
+        <div className="cl-eyebrow mb-1 px-1 text-[10px] font-semibold uppercase tracking-wider text-[color:var(--cl-muted-foreground)]">
+          Hold
+        </div>
+        <div className="flex items-center justify-between gap-3 px-1 py-1.5 text-[13px]">
+          <span className="flex min-w-[140px] items-center gap-1.5 text-[12px] text-[color:var(--cl-muted-foreground)]">
+            <Mic size={14} className="shrink-0" />
+            Voice actions
+          </span>
+          <div className="flex flex-1 items-center gap-2">
+            <ChordChips tokens={voiceChord} platform={isWindows ? 'win32' : 'darwin'} />
+            <span className="text-[11px] text-[color:var(--cl-muted-foreground)]">Change it in Settings › Speech.</span>
+          </div>
+        </div>
+      </div>
       <div className="text-[11px] leading-relaxed text-[color:var(--cl-muted-foreground)]">
         Click a shortcut field and press your desired key combination. Changes apply immediately.
       </div>

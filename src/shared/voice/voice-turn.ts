@@ -20,7 +20,9 @@ export const VOICE_ACTIONS_IPC = {
   /** renderer -> main: the capture started, or failed to. It can only move the current turn toward failure. */
   report: 'voiceActions:report',
   /** main -> renderer: a recognized question to run through the typed Ask router (wired in V03). */
-  ask: 'voiceActions:ask'
+  ask: 'voiceActions:ask',
+  /** renderer -> main: the Settings chord recorder opened or closed (pauses the hold; opens no microphone). */
+  recorder: 'voiceActions:recorder'
 } as const
 
 export const VOICE_STATES = [
@@ -109,6 +111,10 @@ export type VoiceStateSnapshot = z.infer<typeof VoiceStateSnapshotSchema>
 export const VoiceBeginSchema = z
   .object({ turnId: z.string().min(1).max(64), maxMs: z.number().int().positive().max(60_000) })
   .strict()
+/** The chord recorder flag: one boolean, nothing else. It can only pause a hold, never start a turn. */
+export const VoiceRecorderSchema = z.object({ active: z.boolean() }).strict()
+export type VoiceRecorder = z.infer<typeof VoiceRecorderSchema>
+
 export type VoiceBegin = z.infer<typeof VoiceBeginSchema>
 
 export const VoiceEndSchema = z.object({ turnId: z.string().min(1).max(64), cancelled: z.boolean() }).strict()

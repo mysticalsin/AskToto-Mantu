@@ -84,6 +84,7 @@ import { MeetingsTab } from './MeetingsTab'
 import { LOG_OUT_CONFIRMATION, REPLAY_ONBOARDING_CONFIRMATION } from './settings-confirmations'
 import { PermissionsSection, screenRecordingJustGranted } from './PermissionsSection'
 import { AudioTab } from './AudioTab'
+import { AUDIO_TAB_KEYWORDS } from './audio-tab-keywords'
 import { AiSection } from './AiSection'
 import { PROFILE_CREDENTIAL_STORE, isProfileUnlockError } from './credential-store'
 import { pickReadyProvider } from './provider-readiness'
@@ -228,25 +229,7 @@ const TABS: {
     label: 'Speech',
     icon: Mic,
     desc: 'What Métis listens to, and how it hears you.',
-    keywords: [
-      'audio',
-      'speech',
-      'microphone',
-      'listen to',
-      'in meetings',
-      'vocabulary corrections',
-      'transcription',
-      'asr',
-      'parakeet',
-      'whisper',
-      'apple speech',
-      'speaker identification',
-      'transcript source',
-      'nova',
-      'soniox',
-      'cf ai gateway',
-      'cloudflare account id'
-    ]
+    keywords: AUDIO_TAB_KEYWORDS
   },
   {
     id: 'calendar',

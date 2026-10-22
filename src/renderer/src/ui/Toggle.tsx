@@ -58,7 +58,8 @@ export function ToggleRow({
   children,
   disabled = false,
   icon: Icon,
-  describedBy
+  describedBy,
+  managedChip = disabled
 }: {
   label: string
   desc: string
@@ -68,6 +69,8 @@ export function ToggleRow({
   disabled?: boolean
   icon?: LucideIcon
   describedBy?: string
+  /** Show "Managed by your organization". Defaults to `disabled`; pass false for a row that is dimmed for another reason. */
+  managedChip?: boolean
 }): JSX.Element {
   const id = useId()
   const toggleId = `${id}-toggle`
@@ -91,7 +94,7 @@ export function ToggleRow({
               />
             </FieldHint>
           )}
-          {disabled && <span className={managedChipCls}>Managed by your organization</span>}
+          {managedChip && <span className={managedChipCls}>Managed by your organization</span>}
         </div>
         {children}
       </div>

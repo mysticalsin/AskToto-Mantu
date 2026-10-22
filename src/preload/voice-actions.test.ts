@@ -88,11 +88,28 @@ describe('voice actions preload bridge', () => {
     await expect(api.getState()).resolves.toBeNull()
   })
 
-  it('exposes report as the only renderer-to-main call, and nothing that starts a turn or mints an activation', () => {
+  it('exposes report and the chord recorder flag as the only renderer-to-main calls, and nothing that starts a turn or mints an activation', () => {
     const { ipc } = fakeIpc()
     const api = createVoiceActionsPreloadApi(ipc as never).voiceActions
-    expect(Object.keys(api).sort()).toEqual(['getState', 'onAsk', 'onBegin', 'onEnd', 'onState', 'report'])
+    expect(Object.keys(api).sort()).toEqual([
+      'getState',
+      'onAsk',
+      'onBegin',
+      'onEnd',
+      'onState',
+      'report',
+      'setChordRecorderActive'
+    ])
     void api.report({ turnId: 't1', phase: 'capturing' })
     expect(ipc.invoke).toHaveBeenCalledWith(VOICE_ACTIONS_IPC.report, { turnId: 't1', phase: 'capturing' })
+  })
+
+  it('the chord recorder flag sends exactly { active } and nothing else', () => {
+    const { ipc } = fakeIpc()
+    const api = createVoiceActionsPreloadApi(ipc as never).voiceActions
+    void api.setChordRecorderActive(true)
+    expect(ipc.invoke).toHaveBeenCalledWith(VOICE_ACTIONS_IPC.recorder, { active: true })
+    void api.setChordRecorderActive(false)
+    expect(ipc.invoke).toHaveBeenLastCalledWith(VOICE_ACTIONS_IPC.recorder, { active: false })
   })
 })

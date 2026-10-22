@@ -17,8 +17,9 @@ type Unsub = () => void
 /**
  * Voice actions bridge. Every push from main is validated here and a malformed payload is dropped, so the
  * renderer only ever sees the contract shapes. `report` is the one renderer-to-main call: main validates it again
- * and it can only move the current turn toward failure. There is no call that starts a turn, mints an activation
- * or opens a microphone: those are main's, from the held chord.
+ * and it can only move the current turn toward failure; `setChordRecorderActive` only pauses the hold while the
+ * Settings chord recorder is open. There is no call that starts a turn, mints an activation or opens a microphone:
+ * those are main's, from the held chord.
  */
 export function createVoiceActionsPreloadApi(ipc: Pick<IpcRenderer, 'on' | 'removeListener' | 'invoke'>): {
   voiceActions: {
@@ -29,6 +30,8 @@ export function createVoiceActionsPreloadApi(ipc: Pick<IpcRenderer, 'on' | 'remo
     /** A recognized question for the typed Ask router. Never an action: actions never reach the renderer as text. */
     onAsk(cb: (ask: VoiceAsk) => void): Unsub
     report(report: VoiceReport): Promise<unknown>
+    /** The Settings chord recorder opened or closed: while open, a hold of the chord opens no turn. */
+    setChordRecorderActive(active: boolean): Promise<unknown>
   }
 } {
   const subscribe = <T>(channel: string, parse: (raw: unknown) => T | null, cb: (value: T) => void): Unsub => {
@@ -60,7 +63,8 @@ export function createVoiceActionsPreloadApi(ipc: Pick<IpcRenderer, 'on' | 'remo
       onBegin: (cb) => subscribe(VOICE_ACTIONS_IPC.begin, parser(VoiceBeginSchema), cb),
       onEnd: (cb) => subscribe(VOICE_ACTIONS_IPC.end, parser(VoiceEndSchema), cb),
       onAsk: (cb) => subscribe(VOICE_ACTIONS_IPC.ask, parser(VoiceAskSchema), cb),
-      report: (report) => ipc.invoke(VOICE_ACTIONS_IPC.report, report)
+      report: (report) => ipc.invoke(VOICE_ACTIONS_IPC.report, report),
+      setChordRecorderActive: (active) => ipc.invoke(VOICE_ACTIONS_IPC.recorder, { active })
     }
   }
 }

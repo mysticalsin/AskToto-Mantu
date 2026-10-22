@@ -6,6 +6,7 @@ import {
   DEFAULT_VOICE_ACTIONS_SETTINGS,
   VOICE_ACTIONS_FEATURE,
   VOICE_ACTIONS_RELEASE_DEFAULT_ON,
+  VOICE_WAKE_WORD_GATE_PASSED,
   VoiceActionsSettingsSchema,
   VOICE_CHORD_TOKENS,
   resolveVoiceActionsChord,
@@ -113,5 +114,11 @@ describe('one chord vocabulary shared with the hold watcher', () => {
   it('the double-press latch is off by default and can be turned on', () => {
     expect(DEFAULT_VOICE_ACTIONS_SETTINGS.doublePressLatch).toBe(false)
     expect(VoiceActionsSettingsSchema.parse({ doublePressLatch: true }).doublePressLatch).toBe(true)
+  })
+})
+
+describe('the wake word gate', () => {
+  it('ships closed: Settings shows "Hey Métis" off with a reason until the V07 measurement passes', () => {
+    expect(VOICE_WAKE_WORD_GATE_PASSED).toBe(false)
   })
 })
