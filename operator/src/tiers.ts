@@ -23,7 +23,13 @@ export async function resolveTierAndEntitlements(
   const jti = parseLicenseId(seat.license_jti)
   if (jti) {
     const issued = await store.getIssuedLicense(jti)
-    if (issuedLicenseActive(issued, now)) tier = issued?.tier ?? 'metis'
+    if (issuedLicenseActive(issued, now)) {
+      tier = issued?.tier ?? 'metis'
+      // Zero-config enrolment (O02): an auto-enrolled seat's `reporting` licence is a floor, not a ceiling. An
+      // administrator's explicit Approve on that seat lifts it to a normal seat, so Approve in the console
+      // keeps meaning "this seat may use keys and connectors" for a seat that enrolled itself.
+      if (tier === 'reporting' && issued?.origin && isApprovedSeat(seat)) tier = 'metis'
+    }
   }
   if (!tier && isApprovedSeat(seat)) tier = 'metis'
   if (!tier) return { tier: null, entitlements: [] }

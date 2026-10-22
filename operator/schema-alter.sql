@@ -381,3 +381,53 @@ CREATE TABLE IF NOT EXISTS speech_route_evidence (
   revoked_by TEXT
 );
 CREATE INDEX IF NOT EXISTS speech_evidence_lookup ON speech_route_evidence(tenant_id, audience, deployment_id, route_id, config_version, implementation_revision, expires_at, revoked_at);
+
+-- Zero-config reporting enrolment (Métis 2.12, ticket O02). Additive and idempotent.
+-- `enroll_tokens`: revocable, enrolment-scope-only credentials embedded in release builds. Only the SHA-256
+-- of the secret is stored; the once-shown token string never is. `channel` is release | qa | staging and a
+-- token is honoured only by the Worker of the same channel. `tier` is always `reporting`.
+CREATE TABLE IF NOT EXISTS enroll_tokens (
+  kid TEXT PRIMARY KEY,
+  secret_hash TEXT NOT NULL,
+  label TEXT NOT NULL,
+  channel TEXT NOT NULL,
+  tier TEXT NOT NULL DEFAULT 'reporting',
+  license_days INTEGER NOT NULL DEFAULT 30,
+  max_devices INTEGER NOT NULL DEFAULT 5000,
+  daily_cap INTEGER NOT NULL DEFAULT 500,
+  enrolled_count INTEGER NOT NULL DEFAULT 0,
+  created_at INTEGER NOT NULL,
+  created_by TEXT NOT NULL,
+  expires_at INTEGER NOT NULL,
+  revoked_at INTEGER,
+  revoked_by TEXT,
+  revoke_reason TEXT
+);
+
+-- `enrollments`: one row per minted auto-enrolment licence (sso, token or renew). `sso_oid_hash` is
+-- sha256(oid || OPERATOR_INGEST_SECRET), never the raw directory object id. Never stores an IP.
+CREATE TABLE IF NOT EXISTS enrollments (
+  id TEXT PRIMARY KEY,
+  device_id TEXT NOT NULL,
+  method TEXT NOT NULL,
+  token_kid TEXT,
+  sso_oid_hash TEXT,
+  sso_email TEXT,
+  license_jti TEXT NOT NULL,
+  supersedes TEXT,
+  created_at INTEGER NOT NULL,
+  app_version TEXT,
+  os TEXT
+);
+
+CREATE INDEX IF NOT EXISTS enrollments_device ON enrollments(device_id, created_at);
+CREATE INDEX IF NOT EXISTS enrollments_token ON enrollments(token_kid, created_at);
+CREATE INDEX IF NOT EXISTS enrollments_oid ON enrollments(sso_oid_hash);
+
+-- Zero-config reporting enrolment (Métis 2.12, ticket O02). `origin` NULL = admin-issued (every existing
+-- row), otherwise 'sso-enroll' | 'token-enroll'. `supersedes` is the jti this licence replaces; it is
+-- revoked only after this one binds to the device through a heartbeat.
+ALTER TABLE issued_licenses ADD COLUMN origin TEXT;
+ALTER TABLE issued_licenses ADD COLUMN supersedes TEXT;
+ALTER TABLE seats ADD COLUMN enroll_method TEXT;
+ALTER TABLE seats ADD COLUMN sso_verified_email TEXT;

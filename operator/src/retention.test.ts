@@ -37,8 +37,24 @@ function sqliteD1(db: DatabaseSync): D1DatabaseLike {
 describe('pruneRetention', () => {
   it('deletes events, audit, asks, and crm_sends older than their retention window, capped per call', async () => {
     const store = memoryStore()
-    await store.insertEvent({ id: 'e-old', ts: NOW - RETENTION_MS.events - 1, kind: 'heartbeat', actor: null, device_id: 'd', country: null, detail: null })
-    await store.insertEvent({ id: 'e-new', ts: NOW, kind: 'heartbeat', actor: null, device_id: 'd', country: null, detail: null })
+    await store.insertEvent({
+      id: 'e-old',
+      ts: NOW - RETENTION_MS.events - 1,
+      kind: 'heartbeat',
+      actor: null,
+      device_id: 'd',
+      country: null,
+      detail: null
+    })
+    await store.insertEvent({
+      id: 'e-new',
+      ts: NOW,
+      kind: 'heartbeat',
+      actor: null,
+      device_id: 'd',
+      country: null,
+      detail: null
+    })
     await store.audit('a-old', NOW - RETENTION_MS.audit - 1, 'owner.test', 'reveal', null, 'x')
     await store.audit('a-new', NOW, 'owner.test', 'reveal', null, 'x')
     await store.insertAsk(askRow({ id: 'ask-old', ts: NOW - RETENTION_MS.asks - 1 }))
@@ -60,7 +76,15 @@ describe('pruneRetention', () => {
   it('caps deletions per call so one tick never runs away', async () => {
     const store = memoryStore()
     for (let i = 0; i < 10; i++) {
-      await store.insertEvent({ id: `e-${i}`, ts: 0, kind: 'heartbeat', actor: null, device_id: 'd', country: null, detail: null })
+      await store.insertEvent({
+        id: `e-${i}`,
+        ts: 0,
+        kind: 'heartbeat',
+        actor: null,
+        device_id: 'd',
+        country: null,
+        detail: null
+      })
     }
     const result = await pruneRetention(store, NOW, { events: 3 })
     expect(result.events).toBe(3)
@@ -68,7 +92,13 @@ describe('pruneRetention', () => {
 
   it('closes stale sessions as part of the same pass', async () => {
     const store = memoryStore()
-    await store.touchSession('dev-a', NOW - 10 * 60 * 1000, 'heartbeat', { country: 'CA', city: 'Longueuil' }, { os: 'darwin', app_version: '1.8.5' })
+    await store.touchSession(
+      'dev-a',
+      NOW - 10 * 60 * 1000,
+      'heartbeat',
+      { country: 'CA', city: 'Longueuil' },
+      { os: 'darwin', app_version: '1.8.5' }
+    )
     const result = await pruneRetention(store, NOW)
     expect(result.staleSessionsClosed).toBe(1)
     const sessions = (await store.listSessions({ deviceId: 'dev-a', limit: 10 })).rows
@@ -77,16 +107,64 @@ describe('pruneRetention', () => {
 
   it('does not touch rows inside the retention window', async () => {
     const store = memoryStore()
-    await store.insertEvent({ id: 'e-recent', ts: NOW - 1000, kind: 'heartbeat', actor: null, device_id: 'd', country: null, detail: null })
+    await store.insertEvent({
+      id: 'e-recent',
+      ts: NOW - 1000,
+      kind: 'heartbeat',
+      actor: null,
+      device_id: 'd',
+      country: null,
+      detail: null
+    })
     const result = await pruneRetention(store, NOW)
     expect(result.events).toBe(0)
     expect((await store.listEvents(10)).length).toBe(1)
   })
 
+  it('prunes enrolment history older than 400 d only once its licence has expired, and reports it', async () => {
+    const store = memoryStore()
+    const old = NOW - RETENTION_MS.enrollments - 1
+    const lic = (jti: string, exp: number) =>
+      store.putIssuedLicense({
+        jti,
+        last4: 'abcd',
+        key_hash: jti,
+        days: 30,
+        iat: 1,
+        exp,
+        revoked: 0,
+        created_at: old,
+        created_by: 'x'
+      })
+    await lic('expired-lic', Math.floor(NOW / 1000) - 10)
+    await lic('active-lic', Math.floor(NOW / 1000) + 100_000)
+    const row = (id: string, jti: string, createdAt: number) =>
+      store.putEnrollment({
+        id,
+        device_id: `device-${id}`,
+        method: 'token',
+        token_kid: 'kid',
+        sso_oid_hash: null,
+        sso_email: null,
+        license_jti: jti,
+        supersedes: null,
+        created_at: createdAt,
+        app_version: null,
+        os: null
+      })
+    await row('old-expired', 'expired-lic', old)
+    await row('old-active', 'active-lic', old)
+    await row('recent', 'expired-lic', NOW)
+    const result = await pruneRetention(store, NOW)
+    expect(result.enrollments).toBe(1)
+    expect((await store.listEnrollments({})).map((e) => e.id).sort()).toEqual(['old-active', 'recent'])
+    expect((await store.listAudit(5, { action: 'platform.heartbeat' }))[0].detail).toContain('enrollments 1')
+  })
+
   it('writes one platform.heartbeat audit row per run, with the counts in its detail', async () => {
     const store = memoryStore()
     const result = await pruneRetention(store, NOW)
-    const rows = (await store.listAudit(10, { action: 'platform.heartbeat' }))
+    const rows = await store.listAudit(10, { action: 'platform.heartbeat' })
     expect(rows).toHaveLength(1)
     expect(rows[0].actor).toBe('system')
     expect(rows[0].detail).toContain(`events ${result.events}`)
@@ -103,8 +181,12 @@ describe('pruneRetention', () => {
 
   it('prunes integration_grants older than 365 d directly against D1, capped per call', async () => {
     const db = new DatabaseSync(':memory:')
-    db.exec('CREATE TABLE integration_grants (id TEXT PRIMARY KEY, integration_id TEXT NOT NULL, device_id TEXT NOT NULL, ts INTEGER NOT NULL)')
-    db.exec(`INSERT INTO integration_grants VALUES ('g-old', 'int-1', 'dev-a', ${NOW - RETENTION_MS.integration_grants - 1})`)
+    db.exec(
+      'CREATE TABLE integration_grants (id TEXT PRIMARY KEY, integration_id TEXT NOT NULL, device_id TEXT NOT NULL, ts INTEGER NOT NULL)'
+    )
+    db.exec(
+      `INSERT INTO integration_grants VALUES ('g-old', 'int-1', 'dev-a', ${NOW - RETENTION_MS.integration_grants - 1})`
+    )
     db.exec(`INSERT INTO integration_grants VALUES ('g-new', 'int-1', 'dev-a', ${NOW})`)
     const store = memoryStore()
 

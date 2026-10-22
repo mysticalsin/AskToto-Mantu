@@ -9,6 +9,7 @@ import type { CfGeo } from '../geo'
 import type { AccessCtx } from '../access'
 import type { D1DatabaseLike } from '../d1'
 import type { OperatorStore } from '../store'
+import type { JwksCache, JwksFetch } from '../jwt-rs256'
 import type { SpeechPolicyEvidence } from '../speech/policy'
 import type { SpeechReadinessEnv } from '../speech/readiness'
 import { missingCloudflareOverview, pullCloudflareOverview, type CloudflareOverview } from '../cloudflare'
@@ -37,6 +38,15 @@ export interface Env extends SpeechReadinessEnv {
   CF_OAUTH_AUTHORIZE_URL?: string
   CF_OAUTH_TOKEN_URL?: string
   CF_ACCOUNT_ID?: string
+  /** Zero-config enrolment (O04), set as Worker secrets so no tenant id lives in the public repository.
+   *  `method: 'sso'` answers `enroll-unconfigured` unless all three are present and well-formed. */
+  ENROLL_SSO_TENANT_ID?: string
+  /** Comma-separated Entra application (client) ids accepted as the ID token `aud`. */
+  ENROLL_SSO_CLIENT_IDS?: string
+  /** Comma-separated e-mail domains accepted for a verified sign-in. */
+  ENROLL_SSO_ALLOWED_DOMAINS?: string
+  /** Optional Workers Rate Limiting binding, keyed by client IP (never stored). Absent = per-token caps only. */
+  ENROLL_IP_LIMITER?: { limit(options: { key: string }): Promise<{ success: boolean }> }
   /** Speech broker deployment policy. Missing values fail closed; never set from request fields. */
   SPEECH_TENANT_ID?: string
   SPEECH_AUDIENCE?: string
@@ -73,6 +83,9 @@ export interface HandleOpts {
   providerFetch?: typeof fetch
   /** Internal CI injection only; no Worker production handler supplies synthetic route evidence. */
   speechPolicyEvidence?: SpeechPolicyEvidence
+  /** Tests only: the Entra JWKS transport and cache for `POST /v1/enroll`, so no test touches the network. */
+  entraFetch?: JwksFetch
+  entraJwksCache?: JwksCache
 }
 
 export type AdminCtx = {

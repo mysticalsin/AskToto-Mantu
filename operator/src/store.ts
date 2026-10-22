@@ -20,6 +20,11 @@ export interface IssuedLicenseRow {
   member?: string | null
   activated_device?: string | null
   activated_at?: number | null
+  /** Zero-config enrolment (O02). null/undefined = admin-issued (every row minted before enrolment shipped);
+   *  'sso-enroll' | 'token-enroll' = minted by `POST /v1/enroll`. */
+  origin?: string | null
+  /** jti this licence replaces. Revoked only once this one binds to the device through a heartbeat. */
+  supersedes?: string | null
 }
 
 export interface SeatRow {
@@ -40,6 +45,57 @@ export interface SeatRow {
   license: string | null
   approval?: string | null
   license_jti?: string | null
+  /** 'sso' | 'token' when the seat's active licence came from `POST /v1/enroll`; null for admin seats. */
+  enroll_method?: string | null
+  /** The e-mail the Worker itself verified from an Entra ID token. Never the device-claimed `sso_email`. */
+  sso_verified_email?: string | null
+}
+
+/** Enrolment tokens (O03). Only `secret_hash` is stored. */
+export interface EnrollTokenRow {
+  kid: string
+  secret_hash: string
+  label: string
+  /** 'release' | 'qa' | 'staging' */
+  channel: string
+  tier: string
+  license_days: number
+  max_devices: number
+  daily_cap: number
+  enrolled_count: number
+  created_at: number
+  created_by: string
+  expires_at: number
+  revoked_at: number | null
+  revoked_by: string | null
+  revoke_reason: string | null
+}
+
+export type EnrollMethod = 'sso' | 'token' | 'renew'
+
+export interface EnrollmentRow {
+  id: string
+  device_id: string
+  method: EnrollMethod
+  token_kid: string | null
+  sso_oid_hash: string | null
+  sso_email: string | null
+  license_jti: string
+  supersedes: string | null
+  created_at: number
+  app_version: string | null
+  os: string | null
+}
+
+export type EnrollSlotResult = 'ok' | 'missing' | 'revoked' | 'expired' | 'cap-devices' | 'cap-daily'
+
+export interface EnrollmentQuery {
+  deviceId?: string
+  tokenKid?: string
+  since?: number
+  /** Only rows that replaced an earlier licence (re-enrolments and renewals). */
+  supersedingOnly?: boolean
+  limit?: number
 }
 
 export interface EventRow {
@@ -146,9 +202,12 @@ function isDeliveredAsk(row: AskRow): boolean {
 /** Worker metering and seat metadata can arrive in either order under the same owned Ask id.
  *  Keep complementary fields, but never blend a failed provider attempt into the delivered failover. */
 export function mergeOwnedAsk(previous: AskRow, incoming: AskRow): AskRow {
-  const delivered = isDeliveredAsk(previous) && incoming.outcome === 'error'
-    ? previous
-    : isDeliveredAsk(incoming) && previous.outcome === 'error' ? incoming : null
+  const delivered =
+    isDeliveredAsk(previous) && incoming.outcome === 'error'
+      ? previous
+      : isDeliveredAsk(incoming) && previous.outcome === 'error'
+        ? incoming
+        : null
   if (delivered) {
     const rating = incoming.rating ?? previous.rating
     return {
@@ -166,9 +225,12 @@ export function mergeOwnedAsk(previous: AskRow, incoming: AskRow): AskRow {
     if (key !== 'id' && key !== 'device_id' && value !== null && value !== undefined) merged[key] = value
   }
   merged.ts = Math.min(previous.ts, incoming.ts)
-  merged.mode = incoming.mode && incoming.mode !== 'operator'
-    ? incoming.mode
-    : previous.mode && previous.mode !== 'operator' ? previous.mode : incoming.mode ?? previous.mode
+  merged.mode =
+    incoming.mode && incoming.mode !== 'operator'
+      ? incoming.mode
+      : previous.mode && previous.mode !== 'operator'
+        ? previous.mode
+        : (incoming.mode ?? previous.mode)
   if (incoming.mode === 'operator' && previous.mode && previous.mode !== 'operator') {
     merged.preview = previous.preview ?? incoming.preview
   }
@@ -281,14 +343,20 @@ export interface TierRow {
 /** Métis / Métis Light defaults (section 9c), editable afterward in Settings -> Tiers. */
 export const DEFAULT_TIER_ENTITLEMENTS: Record<string, string[]> = {
   metis: ['ask', 'listen', 'recap', 'crm_push', 'operator_keys', 'intelligence', 'integrations'],
-  'metis-light': ['ask', 'intelligence']
+  'metis-light': ['ask', 'intelligence'],
+  /** Zero-config reporting seats (O02): they report usage and health, and are entitled to nothing else. */
+  reporting: []
 }
 
+/** Tiers an admin can assign and edit. `reporting` is deliberately not seeded: it is the code-defined floor
+ *  of an auto-enrolled seat (no entitlements), resolved from `DEFAULT_TIER_ENTITLEMENTS` when no row exists. */
+export const SEEDED_TIER_IDS = ['metis', 'metis-light'] as const
+
 export function defaultTiers(now: number): TierRow[] {
-  return Object.entries(DEFAULT_TIER_ENTITLEMENTS).map(([id, entitlements]) => ({
+  return SEEDED_TIER_IDS.map((id) => ({
     id,
     label: id === 'metis' ? 'Métis' : 'Métis Light',
-    entitlements_json: JSON.stringify(entitlements),
+    entitlements_json: JSON.stringify(DEFAULT_TIER_ENTITLEMENTS[id]),
     updated_at: now
   }))
 }
@@ -417,8 +485,37 @@ export interface OperatorStore {
   listIntegrationGrants(integrationId: string, limit: number): Promise<IntegrationGrantRow[]>
   bumpIntegrationUse(id: string, now: number): Promise<void>
 
+  // Zero-config reporting enrolment (O02/O03/O04).
+  putEnrollToken(row: EnrollTokenRow): Promise<void>
+  getEnrollToken(kid: string): Promise<EnrollTokenRow | null>
+  listEnrollTokens(): Promise<EnrollTokenRow[]>
+  /** True only when the token existed and was still active; a second revoke changes nothing. */
+  revokeEnrollToken(kid: string, by: string, reason: string, now: number): Promise<boolean>
+  /** Checks the token is usable and, for a device not yet enrolled by it, takes one `max_devices` slot
+   *  atomically (a conditional UPDATE, so two parallel requests cannot both take the last slot). */
+  claimEnrollTokenSlot(kid: string, now: number, dayStart: number, newDevice: boolean): Promise<EnrollSlotResult>
+  putEnrollment(row: EnrollmentRow): Promise<void>
+  /** Newest first. */
+  listEnrollments(opts: EnrollmentQuery): Promise<EnrollmentRow[]>
+  countEnrollments(opts: EnrollmentQuery): Promise<number>
+  /** Distinct devices that hold an active (unrevoked, unexpired) SSO-enrolled licence for this directory object. */
+  listActiveSsoDevices(oidHash: string, nowMs: number): Promise<string[]>
+  /** Cascade for a revoked token: revokes every licence it minted. Returns how many were newly revoked. */
+  revokeLicensesEnrolledByToken(kid: string, now: number): Promise<number>
+  /** Records which enrolment path the seat's active licence came from (null clears it). No-op without a seat row. */
+  setSeatEnrollment(deviceId: string, method: string | null, verifiedEmail: string | null): Promise<void>
+  /** Small admin-editable settings on `operator_settings` (the raw JSON text, or null when unset). */
+  getSetting(key: string): Promise<string | null>
+  putSetting(key: string, valueJson: string, actor: string, now: number): Promise<void>
+  /** Retention: enrolment rows older than `before` whose licence has expired (or no longer exists). */
+  pruneEnrollments(before: number, nowMs: number, cap: number): Promise<number>
+
   // Retention (operator/src/retention.ts calls this per table it prunes).
-  pruneTable(table: 'events' | 'audit' | 'asks' | 'crm_sends' | 'rate_limits', before: number, cap: number): Promise<number>
+  pruneTable(
+    table: 'events' | 'audit' | 'asks' | 'crm_sends' | 'rate_limits',
+    before: number,
+    cap: number
+  ): Promise<number>
 }
 
 const PULSE_TTL_MS = 8 * 24 * 60 * 60 * 1000
@@ -471,7 +568,16 @@ function eventMatchesSeat(
   if (opts.country && (e.country || seat?.country || '').toUpperCase() !== opts.country.toUpperCase()) return false
   if (opts.q) {
     const q = opts.q.toLowerCase()
-    const haystack = [e.kind, e.device_id, e.country, projectEventTelemetry(e).detail, seat?.hostname, seat?.sso_email, seat?.os, seat?.app_version]
+    const haystack = [
+      e.kind,
+      e.device_id,
+      e.country,
+      projectEventTelemetry(e).detail,
+      seat?.hostname,
+      seat?.sso_email,
+      seat?.os,
+      seat?.app_version
+    ]
       .filter(Boolean)
       .join(' ')
       .toLowerCase()
@@ -501,6 +607,16 @@ function filterAndPageEvents(all: EventRow[], seatsById: Map<string, SeatRow>, o
   return { rows: page, nextCursor }
 }
 
+function filterEnrollments(rows: EnrollmentRow[], opts: EnrollmentQuery): EnrollmentRow[] {
+  return rows.filter(
+    (e) =>
+      (opts.deviceId === undefined || e.device_id === opts.deviceId) &&
+      (opts.tokenKid === undefined || e.token_kid === opts.tokenKid) &&
+      (opts.since === undefined || e.created_at >= opts.since) &&
+      (!opts.supersedingOnly || e.supersedes !== null)
+  )
+}
+
 export function memoryStore(): OperatorStore {
   const nonces = new Set<string>()
   const rates = new Map<string, { window_start: number; count: number }>()
@@ -520,6 +636,9 @@ export function memoryStore(): OperatorStore {
   const tiers = new Map<string, TierRow>()
   const integrations = new Map<string, IntegrationRow>()
   const integrationGrants: IntegrationGrantRow[] = []
+  const enrollTokens = new Map<string, EnrollTokenRow>()
+  const enrollments: EnrollmentRow[] = []
+  const settingsKv = new Map<string, string>()
   let idSeq = 0
   const nextId = (): string => `mem-${++idSeq}`
 
@@ -558,7 +677,7 @@ export function memoryStore(): OperatorStore {
       const prev = seats.get(row.device_id)
       seats.set(row.device_id, {
         ...row,
-        os: row.os && row.os !== 'unknown' ? row.os : prev?.os ?? row.os,
+        os: row.os && row.os !== 'unknown' ? row.os : (prev?.os ?? row.os),
         app_version: row.app_version || prev?.app_version || '',
         first_seen: prev?.first_seen ?? row.first_seen,
         country: row.country ?? prev?.country ?? null,
@@ -571,6 +690,8 @@ export function memoryStore(): OperatorStore {
         sso_email: row.sso_email ?? prev?.sso_email ?? null,
         license: mergeSeatLicenseLabel(row.license, prev?.license, row.license_jti ?? prev?.license_jti),
         license_jti: row.license_jti ?? prev?.license_jti ?? null,
+        enroll_method: row.enroll_method ?? prev?.enroll_method ?? null,
+        sso_verified_email: row.sso_verified_email ?? prev?.sso_verified_email ?? null,
         approval:
           prev?.approval ??
           row.approval ??
@@ -620,7 +741,7 @@ export function memoryStore(): OperatorStore {
       return true
     },
     async recordPulseSession(row, seatMeta) {
-      if (!await this.insertPulse(row)) return false
+      if (!(await this.insertPulse(row))) return false
       await this.touchSession(row.device_id, row.ts, row.kind, row, seatMeta)
       return true
     },
@@ -669,7 +790,15 @@ export function memoryStore(): OperatorStore {
       )
     },
     async audit(_id, ts, actor, action, askId, detail, meta) {
-      audits.push({ ts, actor, action, ask_id: askId, detail, request_id: meta?.requestId ?? null, route: meta?.route ?? null })
+      audits.push({
+        ts,
+        actor,
+        action,
+        ask_id: askId,
+        detail,
+        request_id: meta?.requestId ?? null,
+        route: meta?.route ?? null
+      })
     },
     async listAudit(limit, opts) {
       let rows = audits.slice().reverse()
@@ -691,9 +820,7 @@ export function memoryStore(): OperatorStore {
       return out
     },
     async listVaultMeta() {
-      return [...vault.values()]
-        .sort((a, b) => b.created_at - a.created_at)
-        .map(toVaultMeta)
+      return [...vault.values()].sort((a, b) => b.created_at - a.created_at).map(toVaultMeta)
     },
     async listVaultRows() {
       return [...vault.values()].sort((a, b) => b.created_at - a.created_at)
@@ -713,7 +840,15 @@ export function memoryStore(): OperatorStore {
           vault.set(other.id, { ...other, status: 'superseded', cipher: '', iv: '', rotated_at: row.created_at })
         }
       }
-      audits.push({ ts: audit.ts, actor: audit.actor, action: 'vault-write', ask_id: null, detail: audit.detail, request_id: null, route: null })
+      audits.push({
+        ts: audit.ts,
+        actor: audit.actor,
+        action: 'vault-write',
+        ask_id: null,
+        detail: audit.detail,
+        request_id: null,
+        route: null
+      })
       events.set(event.id, event)
     },
     async clearVaultSecret(id) {
@@ -768,7 +903,8 @@ export function memoryStore(): OperatorStore {
       if (opts.deviceId) rows = rows.filter((s) => s.device_id === opts.deviceId)
       rows = rows.sort((a, b) => b.started_at - a.started_at || b.id.localeCompare(a.id))
       const cursor = decodeCursor(opts.cursor)
-      if (cursor) rows = rows.filter((s) => s.started_at < cursor.ts || (s.started_at === cursor.ts && s.id < cursor.id))
+      if (cursor)
+        rows = rows.filter((s) => s.started_at < cursor.ts || (s.started_at === cursor.ts && s.id < cursor.id))
       const limit = opts.limit > 0 ? opts.limit : 50
       const page = rows.slice(0, limit)
       const last = page.at(-1)
@@ -846,6 +982,93 @@ export function memoryStore(): OperatorStore {
     async bumpIntegrationUse(id, now) {
       const row = integrations.get(id)
       if (row) integrations.set(id, { ...row, uses: row.uses + 1, last_used_at: now })
+    },
+    async putEnrollToken(row) {
+      enrollTokens.set(row.kid, { ...row })
+    },
+    async getEnrollToken(kid) {
+      const row = enrollTokens.get(kid)
+      return row ? { ...row } : null
+    },
+    async listEnrollTokens() {
+      return [...enrollTokens.values()].sort((a, b) => b.created_at - a.created_at).map((r) => ({ ...r }))
+    },
+    async revokeEnrollToken(kid, by, reason, now) {
+      const row = enrollTokens.get(kid)
+      if (!row || row.revoked_at !== null) return false
+      enrollTokens.set(kid, { ...row, revoked_at: now, revoked_by: by, revoke_reason: reason })
+      return true
+    },
+    async claimEnrollTokenSlot(kid, now, dayStart, newDevice) {
+      const row = enrollTokens.get(kid)
+      if (!row) return 'missing'
+      if (row.revoked_at !== null) return 'revoked'
+      if (row.expires_at <= now) return 'expired'
+      const today = enrollments.filter((e) => e.token_kid === kid && e.created_at >= dayStart).length
+      if (today >= row.daily_cap) return 'cap-daily'
+      if (newDevice) {
+        if (row.enrolled_count >= row.max_devices) return 'cap-devices'
+        enrollTokens.set(kid, { ...row, enrolled_count: row.enrolled_count + 1 })
+      }
+      return 'ok'
+    },
+    async putEnrollment(row) {
+      enrollments.push({ ...row })
+    },
+    async listEnrollments(opts) {
+      // Newest first; rows written in the same millisecond list the later insert first.
+      return filterEnrollments(enrollments, opts)
+        .reverse()
+        .sort((a, b) => b.created_at - a.created_at)
+        .slice(0, opts.limit ?? Number.MAX_SAFE_INTEGER)
+        .map((r) => ({ ...r }))
+    },
+    async countEnrollments(opts) {
+      return filterEnrollments(enrollments, opts).length
+    },
+    async listActiveSsoDevices(oidHash, nowMs) {
+      const devices = new Set<string>()
+      for (const e of enrollments) {
+        if (e.sso_oid_hash !== oidHash) continue
+        const lic = issued.get(e.license_jti)
+        if (lic && !lic.revoked && lic.exp * 1000 > nowMs) devices.add(e.device_id)
+      }
+      return [...devices]
+    },
+    async revokeLicensesEnrolledByToken(kid, now) {
+      let n = 0
+      for (const e of enrollments) {
+        if (e.token_kid !== kid) continue
+        const lic = issued.get(e.license_jti)
+        if (!lic || lic.revoked) continue
+        issued.set(lic.jti, { ...lic, revoked: 1, activated_at: lic.activated_at ?? now })
+        n++
+      }
+      return n
+    },
+    async setSeatEnrollment(deviceId, method, verifiedEmail) {
+      const prev = seats.get(deviceId)
+      if (prev) seats.set(deviceId, { ...prev, enroll_method: method, sso_verified_email: verifiedEmail })
+    },
+    async getSetting(key) {
+      return settingsKv.get(key) ?? null
+    },
+    async putSetting(key, valueJson) {
+      settingsKv.set(key, valueJson)
+    },
+    async pruneEnrollments(before, nowMs, cap) {
+      let n = 0
+      for (let i = 0; i < enrollments.length && n < cap; ) {
+        const e = enrollments[i]
+        const lic = issued.get(e.license_jti)
+        if (e.created_at < before && (!lic || lic.exp * 1000 < nowMs)) {
+          enrollments.splice(i, 1)
+          n++
+        } else {
+          i++
+        }
+      }
+      return n
     },
     async pruneTable(table, before, cap) {
       let n = 0

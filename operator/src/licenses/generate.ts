@@ -27,6 +27,12 @@ export interface MintLicenseInput {
   actor: string
   /** Audit action name. Defaults to `generate-license` (the plain flow's existing action). */
   action?: string
+  /** Zero-config enrolment (O04): 'sso-enroll' | 'token-enroll'. Omitted (null) for every admin-issued licence. */
+  origin?: string | null
+  /** jti this licence replaces. The old one is revoked only after this one binds through a heartbeat. */
+  supersedes?: string | null
+  /** Replaces the default audit detail text (enrolment writes `method · kid · last4`). */
+  auditDetail?: (minted: { last4: string; jti: string }) => string
 }
 
 export type MintLicenseResult =
@@ -44,7 +50,13 @@ export type MintLicenseResult =
     }
   | { ok: false; error: string; status: number }
 
-function auditDetail(last4: string, days: number, groupId: string | null, tier: string | null, member: string | null): string {
+function auditDetail(
+  last4: string,
+  days: number,
+  groupId: string | null,
+  tier: string | null,
+  member: string | null
+): string {
   const parts = [`${last4} ${days}d`]
   if (groupId) parts.push(`group ${groupId}`)
   if (tier) parts.push(`tier ${tier}`)
@@ -76,7 +88,9 @@ export async function mintOperatorLicense(ctx: AdminCtx, input: MintLicenseInput
     created_by: input.actor,
     group_id: groupId,
     tier,
-    member
+    member,
+    ...(input.origin ? { origin: input.origin } : {}),
+    ...(input.supersedes ? { supersedes: input.supersedes } : {})
   })
   await ctx.store.audit(
     crypto.randomUUID(),
@@ -84,7 +98,8 @@ export async function mintOperatorLicense(ctx: AdminCtx, input: MintLicenseInput
     input.actor,
     input.action ?? 'generate-license',
     null,
-    auditDetail(minted.last4, days, groupId, tier, member),
+    input.auditDetail?.({ last4: minted.last4, jti: minted.claims.jti }) ??
+      auditDetail(minted.last4, days, groupId, tier, member),
     auditMeta(ctx)
   )
   return {

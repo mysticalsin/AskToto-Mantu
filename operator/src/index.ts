@@ -46,6 +46,7 @@ import type { AskRow, OperatorStore, SeatRow } from './store'
 import { resolveTierAndEntitlements } from './tiers'
 import { binaryAssetResponse, isBinaryAssetPath, isPublicAssetPath, publicAssetResponse } from './assets'
 import { handleAsk } from './ask'
+import { handleEnroll } from './enroll/route'
 import { handleMcpGateway, mcpGatewayConnectionId } from './routes/mcp-gateway'
 import { parseAskPathTag } from './ask-meter'
 import { projectAskMode, projectAskModel, projectAskTelemetry } from './privacy'
@@ -357,6 +358,10 @@ async function routeRequest(request: Request, env: Env, ctx: AccessCtx, opts: Ha
     return redirectToAccess(request, env)
   }
 
+  // Zero-config enrolment (O04): its own credential rules (SSO ID token, enrolment token or a current
+  // licence), so it is dispatched before the licence/fleet HMAC block below, never through it.
+  if (url.pathname === '/v1/enroll') return handleEnroll(request, env, store, opts, now)
+
   const mcpConnectionId = mcpGatewayConnectionId(url.pathname)
   if (mcpConnectionId !== null) {
     return handleMcpGateway(request, store, env, mcpConnectionId, now, opts.providerFetch ?? opts.cfFetch ?? fetch)
@@ -606,6 +611,7 @@ async function heartbeat(
       await store.bindIssuedLicense(bindJti, issued.key_hash, deviceId, now)
     }
   }
+  if (license) await settleEnrollmentLicense(store, deviceId, license.jti, stored, now)
   const retries = await store.listCrmRetries(deviceId)
   const { tier, entitlements } = await resolveTierAndEntitlements(store, stored, now)
   const integrationsVersion = await computeIntegrationsVersion(store, stored, tier)
@@ -620,6 +626,48 @@ async function heartbeat(
     ...(typeof body.queued === 'number' ? { queued: body.queued } : {}),
     ...(typeof body.dropped === 'number' ? { dropped: body.dropped } : {})
   })
+}
+
+/**
+ * After a heartbeat proved a licence on this device (O04):
+ *  - a superseding enrolment licence that is now bound revokes the one it replaced, so a lost enrolment
+ *    response never strands a device (the old licence stays valid until the new one is proven);
+ *  - the seat records which enrolment path its active licence came from (`sso` with the Worker-verified
+ *    e-mail, `token`, or none for an admin licence), which the console shows as the seat's Source.
+ * Best-effort: a D1 one migration behind (no `origin` / `enroll_method` column yet) must never fail a heartbeat.
+ */
+async function settleEnrollmentLicense(
+  store: OperatorStore,
+  deviceId: string,
+  jti: string,
+  seat: SeatRow,
+  now: number
+): Promise<void> {
+  try {
+    const issued = await store.getIssuedLicense(jti)
+    if (!issued || !issuedLicenseActive(issued, now) || issued.activated_device !== deviceId) return
+    if (issued.supersedes) {
+      const old = await store.getIssuedLicense(issued.supersedes)
+      if (old && !old.revoked && (!old.activated_device || old.activated_device === deviceId)) {
+        await store.revokeIssuedLicense(old.jti, now)
+        await store.audit(
+          crypto.randomUUID(),
+          now,
+          `device:${deviceId}`,
+          'enroll-supersede',
+          null,
+          `··${old.last4} replaced by ··${issued.last4}`
+        )
+      }
+    }
+    const method = issued.origin === 'sso-enroll' ? 'sso' : issued.origin === 'token-enroll' ? 'token' : null
+    const verifiedEmail = method === 'sso' ? issued.member?.trim().toLowerCase() || null : null
+    if ((seat.enroll_method ?? null) !== method || (seat.sso_verified_email ?? null) !== verifiedEmail) {
+      await store.setSeatEnrollment(deviceId, method, verifiedEmail)
+    }
+  } catch {
+    /* enrolment bookkeeping is never allowed to fail a heartbeat */
+  }
 }
 
 async function ingest(

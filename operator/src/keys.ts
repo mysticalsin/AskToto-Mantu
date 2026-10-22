@@ -7,6 +7,7 @@ import {
 import { decryptVault, encryptVault } from './crypto'
 import { looksLikeSecret } from './redact'
 import { seatAuthorizedForKeys } from './fleet'
+import { seatHasEntitlement } from './tiers'
 import type { OperatorStore, SeatRow, VaultKeyMeta, VaultKeyRow } from './store'
 import {
   CF_ACCOUNT_PROVIDER,
@@ -286,6 +287,9 @@ export async function fundedProviders(
   now = Date.now()
 ): Promise<string[]> {
   if (seat && !(await seatAuthorizedForKeys(store, seat, now))) return []
+  // Authorized is not entitled (O04): an auto-enrolled `reporting` seat counts as approved through its active
+  // licence but its tier carries no `operator_keys`. `/v1/ask` already checks this; the funded list must too.
+  if (seat && !(await seatHasEntitlement(store, seat, now, 'operator_keys'))) return []
   return fundedProvidersFromMeta(await store.listVaultMeta())
 }
 
@@ -305,4 +309,3 @@ export async function activeCloudflareAccount(
     return null
   }
 }
-

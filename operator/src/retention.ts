@@ -25,7 +25,10 @@ export const RETENTION_MS = {
   crm_sends: 90 * DAY_MS,
   rate_limits: 1 * DAY_MS,
   integration_grants: 365 * DAY_MS,
-  mcp_calls: 90 * DAY_MS
+  mcp_calls: 90 * DAY_MS,
+  /** Enrolment history (O02): kept long enough to answer "which token enrolled this seat" for a full
+   *  licence cycle, and only once the licence it minted has itself expired. */
+  enrollments: 400 * DAY_MS
 } as const
 
 export interface RetentionCaps {
@@ -36,6 +39,7 @@ export interface RetentionCaps {
   rate_limits?: number
   integration_grants?: number
   mcp_calls?: number
+  enrollments?: number
 }
 
 export interface RetentionResult {
@@ -46,6 +50,7 @@ export interface RetentionResult {
   rate_limits: number
   integration_grants: number
   mcp_calls: number
+  enrollments: number
   staleSessionsClosed: number
 }
 
@@ -71,7 +76,12 @@ async function tableExists(db: D1DatabaseLike, table: string): Promise<boolean> 
 /** Same delete-by-id-page shape as `OperatorStore#pruneTable` (d1.ts), for a table that interface
  *  does not cover. Guarded so a table that does not exist yet (`mcp_calls` before B3 ships) is a
  *  silent 0, never a thrown error - this runs from a cron with nobody watching it fail. */
-async function pruneRawTable(db: D1DatabaseLike | undefined, table: string, before: number, cap: number): Promise<number> {
+async function pruneRawTable(
+  db: D1DatabaseLike | undefined,
+  table: string,
+  before: number,
+  cap: number
+): Promise<number> {
   if (!db) return 0
   try {
     if (!(await tableExists(db, table))) return 0
@@ -104,16 +114,39 @@ export async function pruneRetention(
   const audit = await store.pruneTable('audit', now - RETENTION_MS.audit, caps.audit ?? DEFAULT_CAP)
   const asks = await store.pruneTable('asks', now - RETENTION_MS.asks, caps.asks ?? DEFAULT_CAP)
   const crm_sends = await store.pruneTable('crm_sends', now - RETENTION_MS.crm_sends, caps.crm_sends ?? DEFAULT_CAP)
-  const rate_limits = await store.pruneTable('rate_limits', now - RETENTION_MS.rate_limits, caps.rate_limits ?? DEFAULT_CAP)
+  const rate_limits = await store.pruneTable(
+    'rate_limits',
+    now - RETENTION_MS.rate_limits,
+    caps.rate_limits ?? DEFAULT_CAP
+  )
   const integration_grants = await pruneRawTable(
     deps.db,
     'integration_grants',
     now - RETENTION_MS.integration_grants,
     caps.integration_grants ?? DEFAULT_CAP
   )
-  const mcp_calls = await pruneRawTable(deps.db, 'mcp_calls', now - RETENTION_MS.mcp_calls, caps.mcp_calls ?? DEFAULT_CAP)
+  const mcp_calls = await pruneRawTable(
+    deps.db,
+    'mcp_calls',
+    now - RETENTION_MS.mcp_calls,
+    caps.mcp_calls ?? DEFAULT_CAP
+  )
+  // A D1 one migration behind has no `enrollments` table yet: that is a quiet 0, never a failed cron.
+  const enrollments = await store
+    .pruneEnrollments(now - RETENTION_MS.enrollments, now, caps.enrollments ?? DEFAULT_CAP)
+    .catch(() => 0)
   const staleSessionsClosed = await store.closeStaleSessions(now)
-  const result: RetentionResult = { events, audit, asks, crm_sends, rate_limits, integration_grants, mcp_calls, staleSessionsClosed }
+  const result: RetentionResult = {
+    events,
+    audit,
+    asks,
+    crm_sends,
+    rate_limits,
+    integration_grants,
+    mcp_calls,
+    enrollments,
+    staleSessionsClosed
+  }
   // One heartbeat per run (task B6): `/health`'s lastCronAt reads the newest of these back.
   await store.audit(crypto.randomUUID(), now, 'system', 'platform.heartbeat', null, summarizeForAudit(result))
   return result

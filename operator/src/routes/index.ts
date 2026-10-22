@@ -17,6 +17,7 @@ import { registerInsightsRoutes } from './insights'
 import { registerMcpGatewayRoutes } from './mcp-gateway'
 import { registerModelPolicyRoutes } from './model-policy'
 import { registerAdminSpeechEvidenceRoutes } from './admin-speech-evidence'
+import { registerEnrollAdminRoutes } from './enroll-admin'
 
 registerAdminCoreRoutes()
 registerLiveRoutes()
@@ -32,3 +33,4 @@ registerInsightsRoutes()
 registerMcpGatewayRoutes()
 registerModelPolicyRoutes()
 registerAdminSpeechEvidenceRoutes()
+registerEnrollAdminRoutes()

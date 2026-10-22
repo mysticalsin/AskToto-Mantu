@@ -28,6 +28,7 @@ import {
 } from './admin-ctx'
 import { readThemeCookie } from '../theme-preference'
 import { readOperatorSettings } from './settings-store'
+import { enrollPanelPayload } from './enroll-admin'
 import { projectAskTelemetry } from '../privacy'
 
 /** The stored hourly rate and currency feed the Value tile; without a stored rate valueMinor stays null. */
@@ -71,7 +72,9 @@ export const EXPECTED_D1_TABLES = [
   'speech_grants',
   'speech_streams',
   'speech_route_evidence',
-  'speech_capture_epochs'
+  'speech_capture_epochs',
+  'enroll_tokens',
+  'enrollments'
 ] as const
 
 const PLACEHOLDER_DIFF_RE = /^#\s*unified diff against .+\n#\s*edit, then approve\. push is a separate click\.$/i
@@ -187,11 +190,13 @@ export const EXPECTED_D1_COLUMNS: Readonly<Record<string, readonly string[]>> = 
     'sso_email',
     'license',
     'approval',
-    'license_jti'
+    'license_jti',
+    'enroll_method',
+    'sso_verified_email'
   ],
   pulses: ['region'],
   crm_sends: ['meeting_hash', 'attempt', 'latency_ms', 'remote_id', 'remote_url', 'action'],
-  issued_licenses: ['group_id', 'tier', 'member', 'activated_device', 'activated_at'],
+  issued_licenses: ['group_id', 'tier', 'member', 'activated_device', 'activated_at', 'origin', 'supersedes'],
   asks: ['question_type', 'path_tag'],
   audit: ['request_id', 'route'],
   integrations: [
@@ -342,7 +347,8 @@ export function registerAdminCoreRoutes(): void {
         keyFlags(ctx.env),
         await cloudflareForDashboard(ctx.store, ctx.env, ctx.opts, ctx.now),
         await valueSettings(ctx),
-        await modelPolicyForDashboard(ctx)
+        await modelPolicyForDashboard(ctx),
+        await enrollPanelPayload(ctx)
       )
       return html(renderConsole(dash, { theme: readThemeCookie(request), nonce }), { nonce })
     }
@@ -361,7 +367,8 @@ export function registerAdminCoreRoutes(): void {
             keyFlags(ctx.env),
             await cloudflareForDashboard(ctx.store, ctx.env, ctx.opts, ctx.now),
             await valueSettings(ctx),
-            await modelPolicyForDashboard(ctx)
+            await modelPolicyForDashboard(ctx),
+            await enrollPanelPayload(ctx)
           )
         )
       )

@@ -559,7 +559,7 @@ describe('workerd fixture initialization', () => {
     'initializes every real schema object in one ordered D1 batch before seeding',
     currentFixture.run(async () => {
       const fixture = currentFixture.get()
-      expect(statements).toHaveLength(55)
+      expect(statements).toHaveLength(60)
       expect(batches).toEqual([statements])
       expect(preparedBeforeBatchSettled).toEqual(statements)
       expect(batchResults).toHaveLength(statements.length)

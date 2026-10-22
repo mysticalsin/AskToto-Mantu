@@ -19,6 +19,11 @@
     "bindings": [{ "name": "SPEECH_SESSION_DO", "class_name": "SpeechSessionDurableObject" }]
   },
   "migrations": [{ "tag": "speech-session-v1", "new_sqlite_classes": ["SpeechSessionDurableObject"] }],
+  // Zero-config enrolment (O04): a per-IP brake on POST /v1/enroll, 20 requests a minute keyed by
+  // cf-connecting-ip. A Workers Rate Limiting binding keeps no state in D1, which keeps the "never store an
+  // IP" rule (schema.sql). The code treats the binding as optional: without it, the per-token caps and the
+  // per-device limits still apply. namespace_id is an account-unique number the owner may change.
+  "ratelimits": [{ "name": "ENROLL_IP_LIMITER", "namespace_id": "1001", "simple": { "limit": 20, "period": 60 } }],
   // Plan D5, B8: fonts, flags and connector logos (operator/public/{fonts,flags,logos}/, built
   // by operator/scripts/build-assets.mjs) served through Workers Static Assets. run_worker_first
   // keeps the Worker in front of every request, including these, so Access and the security
@@ -60,6 +65,7 @@
       "durable_objects": {
         "bindings": [{ "name": "SPEECH_SESSION_DO", "class_name": "SpeechSessionDurableObject" }]
       },
+      "ratelimits": [{ "name": "ENROLL_IP_LIMITER", "namespace_id": "1002", "simple": { "limit": 20, "period": 60 } }],
       "assets": {
         "directory": "./public",
         "binding": "ASSETS",

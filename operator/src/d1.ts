@@ -6,6 +6,10 @@ import type {
   AskRow,
   AuditQueryOpts,
   AuditRow,
+  EnrollSlotResult,
+  EnrollTokenRow,
+  EnrollmentQuery,
+  EnrollmentRow,
   EventRow,
   EventsPage,
   EventsQueryOpts,
@@ -98,10 +102,12 @@ function ownedAskUpsertSql(columns: readonly string[]): string {
       )
     }
     if (column === 'outcome') {
-      return "CASE WHEN COALESCE(excluded.rating, asks.rating) = 'down' THEN 'thumbs-down' " +
+      return (
+        "CASE WHEN COALESCE(excluded.rating, asks.rating) = 'down' THEN 'thumbs-down' " +
         `WHEN ${asksDelivered} AND excluded.outcome = 'error' THEN asks.outcome ` +
         `WHEN ${excludedDelivered} AND asks.outcome = 'error' THEN excluded.outcome ` +
         'ELSE COALESCE(excluded.outcome, asks.outcome) END'
+      )
     }
     return keepDeliveredAttempt(column, `COALESCE(excluded.${column}, asks.${column})`)
   }
@@ -160,6 +166,25 @@ function decodeCursor(cursor: string | undefined): { ts: number; id: string } | 
   } catch {
     return null
   }
+}
+
+function enrollmentWhere(opts: EnrollmentQuery): { where: string; args: unknown[] } {
+  const clauses: string[] = []
+  const args: unknown[] = []
+  if (opts.deviceId !== undefined) {
+    clauses.push('device_id = ?')
+    args.push(opts.deviceId)
+  }
+  if (opts.tokenKid !== undefined) {
+    clauses.push('token_kid = ?')
+    args.push(opts.tokenKid)
+  }
+  if (opts.since !== undefined) {
+    clauses.push('created_at >= ?')
+    args.push(opts.since)
+  }
+  if (opts.supersedingOnly) clauses.push('supersedes IS NOT NULL')
+  return { where: clauses.length ? ` WHERE ${clauses.join(' AND ')}` : '', args }
 }
 
 export function d1Store(db: D1DatabaseLike): OperatorStore {
@@ -224,7 +249,10 @@ export function d1Store(db: D1DatabaseLike): OperatorStore {
                  ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
                  ORDER BY e.ts DESC, e.id DESC LIMIT ?`
     args.push(pageLimit)
-    const r = await db.prepare(sql).bind(...args).all<EventRow>()
+    const r = await db
+      .prepare(sql)
+      .bind(...args)
+      .all<EventRow>()
     const rows = r.results
     const last = rows.at(-1)
     const nextCursor = rows.length === pageLimit && last ? encodeCursor(last.ts, last.id) : null
@@ -280,7 +308,9 @@ export function d1Store(db: D1DatabaseLike): OperatorStore {
     route: string | null
   }): D1Stmt {
     return db
-      .prepare('INSERT INTO audit (id, ts, actor, action, ask_id, detail, request_id, route) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+      .prepare(
+        'INSERT INTO audit (id, ts, actor, action, ask_id, detail, request_id, route) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+      )
       .bind(row.id, row.ts, row.actor, row.action, row.askId, row.detail, row.requestId, row.route)
   }
 
@@ -288,7 +318,9 @@ export function d1Store(db: D1DatabaseLike): OperatorStore {
    *  (`putVaultKeys`) never drift apart. */
   function eventInsertStatement(row: EventRow): D1Stmt {
     return db
-      .prepare('INSERT OR REPLACE INTO events (id, ts, kind, actor, device_id, country, detail) VALUES (?, ?, ?, ?, ?, ?, ?)')
+      .prepare(
+        'INSERT OR REPLACE INTO events (id, ts, kind, actor, device_id, country, detail) VALUES (?, ?, ?, ?, ?, ?, ?)'
+      )
       .bind(row.id, row.ts, row.kind, row.actor, row.device_id, row.country, row.detail)
   }
 
@@ -317,12 +349,15 @@ export function d1Store(db: D1DatabaseLike): OperatorStore {
 
   return {
     async takeNonce(nonce, ts) {
-      const result = await db
+      const result = (await db
         .prepare('INSERT INTO nonces (nonce, ts) VALUES (?, ?) ON CONFLICT(nonce) DO NOTHING')
         .bind(nonce, ts)
-        .run() as { meta?: { changes?: number } }
+        .run()) as { meta?: { changes?: number } }
       if (result?.meta?.changes !== 1) return true
-      await db.prepare('DELETE FROM nonces WHERE ts < ?').bind(ts - NONCE_TTL_MS).run()
+      await db
+        .prepare('DELETE FROM nonces WHERE ts < ?')
+        .bind(ts - NONCE_TTL_MS)
+        .run()
       return false
     },
     async hitRate(deviceId, now, windowMs, max) {
@@ -391,7 +426,10 @@ export function d1Store(db: D1DatabaseLike): OperatorStore {
         .run()
     },
     async updateSeatApproval(deviceId, approval) {
-      const existing = await db.prepare('SELECT device_id FROM seats WHERE device_id = ?').bind(deviceId).first<{ device_id: string }>()
+      const existing = await db
+        .prepare('SELECT device_id FROM seats WHERE device_id = ?')
+        .bind(deviceId)
+        .first<{ device_id: string }>()
       if (!existing) return false
       await db.prepare('UPDATE seats SET approval = ? WHERE device_id = ?').bind(approval, deviceId).run()
       return true
@@ -425,7 +463,10 @@ export function d1Store(db: D1DatabaseLike): OperatorStore {
         row.preview
       ]
       const upsert = async (columns: readonly string[], values: unknown[]): Promise<boolean> => {
-        const result = await db.prepare(ownedAskUpsertSql(columns)).bind(...values).run() as { meta?: { changes?: number } }
+        const result = (await db
+          .prepare(ownedAskUpsertSql(columns))
+          .bind(...values)
+          .run()) as { meta?: { changes?: number } }
         // The SQL WHERE is the ownership decision. A foreign Ask id changes zero rows.
         return result?.meta?.changes === 1
       }
@@ -435,7 +476,10 @@ export function d1Store(db: D1DatabaseLike): OperatorStore {
       // dashboard reports as coverage, never as a silent 100%.
       if (!askInsertLegacy && !askInsertNoPathTag) {
         try {
-          return await upsert([...ASK_BASE_COLUMNS, 'question_type', 'path_tag'], [...base, row.question_type, row.path_tag ?? null])
+          return await upsert(
+            [...ASK_BASE_COLUMNS, 'question_type', 'path_tag'],
+            [...base, row.question_type, row.path_tag ?? null]
+          )
         } catch (e) {
           if (isMissingColumnError(e, 'path_tag')) {
             askInsertNoPathTag = true
@@ -500,11 +544,16 @@ export function d1Store(db: D1DatabaseLike): OperatorStore {
       }))
     },
     async insertPulse(row) {
-      const result = await db
-        .prepare('INSERT INTO pulses (id, device_id, ts, kind, country, city, region) VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO NOTHING')
+      const result = (await db
+        .prepare(
+          'INSERT INTO pulses (id, device_id, ts, kind, country, city, region) VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO NOTHING'
+        )
         .bind(row.id, row.device_id, row.ts, row.kind, row.country, row.city, row.region ?? null)
-        .run() as { meta?: { changes?: number } }
-      await db.prepare('DELETE FROM pulses WHERE ts < ?').bind(row.ts - PULSE_TTL_MS).run()
+        .run()) as { meta?: { changes?: number } }
+      await db
+        .prepare('DELETE FROM pulses WHERE ts < ?')
+        .bind(row.ts - PULSE_TTL_MS)
+        .run()
       // D1 reports meta.changes. Missing metadata cannot prove a new pulse and must not inflate a session.
       return result?.meta?.changes === 1
     },
@@ -517,28 +566,51 @@ export function d1Store(db: D1DatabaseLike): OperatorStore {
       const statements: D1Stmt[] = [
         // Deliberately do not use ON CONFLICT DO NOTHING: a duplicate must abort the whole batch,
         // not run the following session write and count the Ask again.
-        db.prepare('INSERT INTO pulses (id, device_id, ts, kind, country, city, region) VALUES (?, ?, ?, ?, ?, ?, ?)')
+        db
+          .prepare('INSERT INTO pulses (id, device_id, ts, kind, country, city, region) VALUES (?, ?, ?, ?, ?, ?, ?)')
           .bind(row.id, row.device_id, row.ts, row.kind, row.country, row.city, row.region ?? null),
         // Read the latest session inside the transaction. A read before batch would let concurrent
         // pulses each see the same stale row and overwrite its count (or open two first sessions).
-        db.prepare(`UPDATE sessions SET
+        db
+          .prepare(`UPDATE sessions SET
           last_pulse_at = ?, pulses = pulses + 1, asks = asks + ?,
           country = COALESCE(?, country), city = COALESCE(?, city),
           os = COALESCE(?, os), app_version = COALESCE(?, app_version)
           WHERE id = (SELECT id FROM sessions WHERE device_id = ? ORDER BY started_at DESC, id DESC LIMIT 1)
           AND ended_at IS NULL AND ? >= last_pulse_at AND ? - last_pulse_at <= ?`)
-          .bind(row.ts, askIncrement, row.country, row.city, seatMeta.os, seatMeta.app_version,
-            row.device_id, row.ts, row.ts, SESSION_GAP_MS),
+          .bind(
+            row.ts,
+            askIncrement,
+            row.country,
+            row.city,
+            seatMeta.os,
+            seatMeta.app_version,
+            row.device_id,
+            row.ts,
+            row.ts,
+            SESSION_GAP_MS
+          ),
         // changes() refers to the preceding UPDATE in the same D1 batch transaction. Open only
         // if that UPDATE did not continue a session; this also handles the first pulse for a seat.
-        db.prepare(`INSERT INTO sessions (
+        db
+          .prepare(`INSERT INTO sessions (
           id, device_id, started_at, last_pulse_at, ended_at, pulses, asks, recaps, country, city, os, app_version
         ) SELECT ?, ?, ?, ?, NULL, 1, ?, 0, ?, ?, ?, ? WHERE changes() = 0`)
-          .bind(newSessionId, row.device_id, row.ts, row.ts, askIncrement,
-            row.country, row.city, seatMeta.os, seatMeta.app_version),
+          .bind(
+            newSessionId,
+            row.device_id,
+            row.ts,
+            row.ts,
+            askIncrement,
+            row.country,
+            row.city,
+            seatMeta.os,
+            seatMeta.app_version
+          ),
         // The fresh id exists only when the INSERT above opened a session. Close the preceding
         // open session at its own last pulse, preserving the existing two-minute gap semantics.
-        db.prepare(`UPDATE sessions SET ended_at = last_pulse_at
+        db
+          .prepare(`UPDATE sessions SET ended_at = last_pulse_at
           WHERE device_id = ? AND id != ? AND ended_at IS NULL
           AND EXISTS (SELECT 1 FROM sessions WHERE id = ?)`)
           .bind(row.device_id, newSessionId, newSessionId),
@@ -557,15 +629,15 @@ export function d1Store(db: D1DatabaseLike): OperatorStore {
       }
     },
     async listPulses(since) {
-      const r = await db
-        .prepare('SELECT * FROM pulses WHERE ts >= ? ORDER BY ts ASC')
-        .bind(since)
-        .all<PulseRow>()
+      const r = await db.prepare('SELECT * FROM pulses WHERE ts >= ? ORDER BY ts ASC').bind(since).all<PulseRow>()
       return r.results
     },
     async listProposals(limit) {
       if (limit != null) {
-        const r = await db.prepare('SELECT * FROM proposals ORDER BY created_at DESC LIMIT ?').bind(limit).all<ProposalRow>()
+        const r = await db
+          .prepare('SELECT * FROM proposals ORDER BY created_at DESC LIMIT ?')
+          .bind(limit)
+          .all<ProposalRow>()
         return r.results
       }
       const r = await db.prepare('SELECT * FROM proposals ORDER BY created_at DESC').all<ProposalRow>()
@@ -605,7 +677,9 @@ export function d1Store(db: D1DatabaseLike): OperatorStore {
     },
     async latestPacks() {
       const r = await db
-        .prepare('SELECT id, skill_id, version, sha256, signed, pushed_at, pushed_by FROM packs ORDER BY pushed_at DESC')
+        .prepare(
+          'SELECT id, skill_id, version, sha256, signed, pushed_at, pushed_by FROM packs ORDER BY pushed_at DESC'
+        )
         .all<PackMeta>()
       const by = new Map<string, PackMeta>()
       for (const p of r.results) {
@@ -713,7 +787,10 @@ export function d1Store(db: D1DatabaseLike): OperatorStore {
                    ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
                    ORDER BY ts DESC LIMIT ?`
       args.push(limit)
-      const r = await db.prepare(sql).bind(...args).all<AuditRow>()
+      const r = await db
+        .prepare(sql)
+        .bind(...args)
+        .all<AuditRow>()
       return r.results.map((row) => ({ ...row, request_id: row.request_id ?? null, route: row.route ?? null }))
     },
     async insertEvent(row) {
@@ -798,33 +875,55 @@ export function d1Store(db: D1DatabaseLike): OperatorStore {
       await db.prepare(`UPDATE vault_keys SET cipher = '', iv = '' WHERE id = ?`).bind(id).run()
     },
     async putIssuedLicense(row) {
+      // `origin` / `supersedes` exist only once the enrolment migration (O02) has applied. They are written
+      // only when set, so an admin-issued licence (the plain flow) still inserts on a D1 one migration behind.
+      const columns = [
+        'jti',
+        'last4',
+        'key_hash',
+        'days',
+        'iat',
+        'exp',
+        'revoked',
+        'created_at',
+        'created_by',
+        'group_id',
+        'tier',
+        'member',
+        'activated_device',
+        'activated_at'
+      ]
+      const values: unknown[] = [
+        row.jti,
+        row.last4,
+        row.key_hash,
+        row.days,
+        row.iat,
+        row.exp,
+        row.revoked,
+        row.created_at,
+        row.created_by,
+        row.group_id ?? null,
+        row.tier ?? null,
+        row.member ?? null,
+        row.activated_device ?? null,
+        row.activated_at ?? null
+      ]
+      if (row.origin != null || row.supersedes != null) {
+        columns.push('origin', 'supersedes')
+        values.push(row.origin ?? null, row.supersedes ?? null)
+      }
       await db
         .prepare(
-          `INSERT OR REPLACE INTO issued_licenses (
-            jti, last4, key_hash, days, iat, exp, revoked, created_at, created_by,
-            group_id, tier, member, activated_device, activated_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+          `INSERT OR REPLACE INTO issued_licenses (${columns.join(', ')}) VALUES (${columns.map(() => '?').join(', ')})`
         )
-        .bind(
-          row.jti,
-          row.last4,
-          row.key_hash,
-          row.days,
-          row.iat,
-          row.exp,
-          row.revoked,
-          row.created_at,
-          row.created_by,
-          row.group_id ?? null,
-          row.tier ?? null,
-          row.member ?? null,
-          row.activated_device ?? null,
-          row.activated_at ?? null
-        )
+        .bind(...values)
         .run()
     },
     async getIssuedLicense(jti) {
-      return (await db.prepare('SELECT * FROM issued_licenses WHERE jti = ?').bind(jti).first<IssuedLicenseRow>()) ?? null
+      return (
+        (await db.prepare('SELECT * FROM issued_licenses WHERE jti = ?').bind(jti).first<IssuedLicenseRow>()) ?? null
+      )
     },
     async listIssuedLicenses(limit) {
       if (limit != null) {
@@ -838,7 +937,10 @@ export function d1Store(db: D1DatabaseLike): OperatorStore {
       return r.results
     },
     async updateIssuedLicense(jti, patch) {
-      const existing = await db.prepare('SELECT jti FROM issued_licenses WHERE jti = ?').bind(jti).first<{ jti: string }>()
+      const existing = await db
+        .prepare('SELECT jti FROM issued_licenses WHERE jti = ?')
+        .bind(jti)
+        .first<{ jti: string }>()
       if (!existing) return false
       const fields = Object.keys(patch) as (keyof IssuedLicenseRow)[]
       if (!fields.length) return true
@@ -851,7 +953,7 @@ export function d1Store(db: D1DatabaseLike): OperatorStore {
       return true
     },
     async bindIssuedLicense(jti, keyHash, deviceId, now) {
-      const result = await db
+      const result = (await db
         .prepare(
           `UPDATE issued_licenses SET activated_device = ?, activated_at = COALESCE(activated_at, ?)
            WHERE jti = ? AND key_hash = ? AND revoked = 0 AND exp > ?
@@ -861,7 +963,7 @@ export function d1Store(db: D1DatabaseLike): OperatorStore {
              )`
         )
         .bind(deviceId, now, jti, keyHash, now / 1000, deviceId, deviceId)
-        .run() as { meta?: { changes?: number } }
+        .run()) as { meta?: { changes?: number } }
       return result?.meta?.changes === 1
     },
     async revokeIssuedLicense(jti, now) {
@@ -910,7 +1012,10 @@ export function d1Store(db: D1DatabaseLike): OperatorStore {
       const limit = opts.limit > 0 ? opts.limit : 50
       const sql = `SELECT * FROM sessions ${where.length ? `WHERE ${where.join(' AND ')}` : ''} ORDER BY started_at DESC, id DESC LIMIT ?`
       args.push(limit)
-      const r = await db.prepare(sql).bind(...args).all<SessionState>()
+      const r = await db
+        .prepare(sql)
+        .bind(...args)
+        .all<SessionState>()
       const rows = r.results
       const last = rows.at(-1)
       const nextCursor = rows.length === limit && last ? encodeCursor(last.started_at, last.id) : null
@@ -981,9 +1086,7 @@ export function d1Store(db: D1DatabaseLike): OperatorStore {
     },
     async putTier(row) {
       await db
-        .prepare(
-          `INSERT OR REPLACE INTO tiers (id, label, entitlements_json, updated_at) VALUES (?, ?, ?, ?)`
-        )
+        .prepare(`INSERT OR REPLACE INTO tiers (id, label, entitlements_json, updated_at) VALUES (?, ?, ?, ?)`)
         .bind(row.id, row.label, row.entitlements_json, row.updated_at)
         .run()
     },
@@ -1045,6 +1148,170 @@ export function d1Store(db: D1DatabaseLike): OperatorStore {
     },
     async bumpIntegrationUse(id, now) {
       await db.prepare('UPDATE integrations SET uses = uses + 1, last_used_at = ? WHERE id = ?').bind(now, id).run()
+    },
+    async putEnrollToken(row) {
+      await db
+        .prepare(
+          `INSERT INTO enroll_tokens (
+            kid, secret_hash, label, channel, tier, license_days, max_devices, daily_cap, enrolled_count,
+            created_at, created_by, expires_at, revoked_at, revoked_by, revoke_reason
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        )
+        .bind(
+          row.kid,
+          row.secret_hash,
+          row.label,
+          row.channel,
+          row.tier,
+          row.license_days,
+          row.max_devices,
+          row.daily_cap,
+          row.enrolled_count,
+          row.created_at,
+          row.created_by,
+          row.expires_at,
+          row.revoked_at,
+          row.revoked_by,
+          row.revoke_reason
+        )
+        .run()
+    },
+    async getEnrollToken(kid) {
+      return (await db.prepare('SELECT * FROM enroll_tokens WHERE kid = ?').bind(kid).first<EnrollTokenRow>()) ?? null
+    },
+    async listEnrollTokens() {
+      const r = await db.prepare('SELECT * FROM enroll_tokens ORDER BY created_at DESC').all<EnrollTokenRow>()
+      return r.results
+    },
+    async revokeEnrollToken(kid, by, reason, now) {
+      const result = (await db
+        .prepare(
+          'UPDATE enroll_tokens SET revoked_at = ?, revoked_by = ?, revoke_reason = ? WHERE kid = ? AND revoked_at IS NULL'
+        )
+        .bind(now, by, reason, kid)
+        .run()) as { meta?: { changes?: number } }
+      return result?.meta?.changes === 1
+    },
+    async claimEnrollTokenSlot(kid, now, dayStart, newDevice): Promise<EnrollSlotResult> {
+      const row = await db.prepare('SELECT * FROM enroll_tokens WHERE kid = ?').bind(kid).first<EnrollTokenRow>()
+      if (!row) return 'missing'
+      if (row.revoked_at !== null) return 'revoked'
+      if (row.expires_at <= now) return 'expired'
+      const today = await db
+        .prepare('SELECT COUNT(*) AS n FROM enrollments WHERE token_kid = ? AND created_at >= ?')
+        .bind(kid, dayStart)
+        .first<{ n: number }>()
+      if ((today?.n ?? 0) >= row.daily_cap) return 'cap-daily'
+      if (newDevice) {
+        // The WHERE clause is the cap: two parallel requests cannot both take the last slot.
+        const result = (await db
+          .prepare(
+            `UPDATE enroll_tokens SET enrolled_count = enrolled_count + 1
+             WHERE kid = ? AND revoked_at IS NULL AND expires_at > ? AND enrolled_count < max_devices`
+          )
+          .bind(kid, now)
+          .run()) as { meta?: { changes?: number } }
+        if (result?.meta?.changes !== 1) return 'cap-devices'
+      }
+      return 'ok'
+    },
+    async putEnrollment(row) {
+      await db
+        .prepare(
+          `INSERT INTO enrollments (
+            id, device_id, method, token_kid, sso_oid_hash, sso_email, license_jti, supersedes, created_at, app_version, os
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        )
+        .bind(
+          row.id,
+          row.device_id,
+          row.method,
+          row.token_kid,
+          row.sso_oid_hash,
+          row.sso_email,
+          row.license_jti,
+          row.supersedes,
+          row.created_at,
+          row.app_version,
+          row.os
+        )
+        .run()
+    },
+    async listEnrollments(opts) {
+      const { where, args } = enrollmentWhere(opts)
+      const limit = opts.limit && opts.limit > 0 ? ` LIMIT ${Math.floor(opts.limit)}` : ''
+      const r = await db
+        .prepare(`SELECT * FROM enrollments${where} ORDER BY created_at DESC, id DESC${limit}`)
+        .bind(...args)
+        .all<EnrollmentRow>()
+      return r.results
+    },
+    async countEnrollments(opts) {
+      const { where, args } = enrollmentWhere(opts)
+      const r = await db
+        .prepare(`SELECT COUNT(*) AS n FROM enrollments${where}`)
+        .bind(...args)
+        .first<{ n: number }>()
+      return r?.n ?? 0
+    },
+    async listActiveSsoDevices(oidHash, nowMs) {
+      const r = await db
+        .prepare(
+          `SELECT DISTINCT e.device_id AS device_id FROM enrollments e
+           JOIN issued_licenses l ON l.jti = e.license_jti
+           WHERE e.sso_oid_hash = ? AND l.revoked = 0 AND l.exp > ?`
+        )
+        .bind(oidHash, nowMs / 1000)
+        .all<{ device_id: string }>()
+      return r.results.map((x) => x.device_id)
+    },
+    async revokeLicensesEnrolledByToken(kid, now) {
+      const result = (await db
+        .prepare(
+          `UPDATE issued_licenses SET revoked = 1, activated_at = COALESCE(activated_at, ?)
+           WHERE revoked = 0 AND jti IN (SELECT license_jti FROM enrollments WHERE token_kid = ?)`
+        )
+        .bind(now, kid)
+        .run()) as { meta?: { changes?: number } }
+      return Number(result?.meta?.changes ?? 0)
+    },
+    async setSeatEnrollment(deviceId, method, verifiedEmail) {
+      await db
+        .prepare('UPDATE seats SET enroll_method = ?, sso_verified_email = ? WHERE device_id = ?')
+        .bind(method, verifiedEmail, deviceId)
+        .run()
+    },
+    async getSetting(key) {
+      try {
+        const row = await db
+          .prepare('SELECT value_json FROM operator_settings WHERE key = ?')
+          .bind(key)
+          .first<{ value_json: string }>()
+        return row?.value_json ?? null
+      } catch {
+        // operator_settings not migrated on this D1: every setting reads as unset (its default).
+        return null
+      }
+    },
+    async putSetting(key, valueJson, actor, now) {
+      await db
+        .prepare(
+          `INSERT INTO operator_settings (key, value_json, updated_at, updated_by) VALUES (?, ?, ?, ?)
+           ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json, updated_at = excluded.updated_at, updated_by = excluded.updated_by`
+        )
+        .bind(key, valueJson, now, actor)
+        .run()
+    },
+    async pruneEnrollments(before, nowMs, cap) {
+      const r = await db
+        .prepare(
+          `SELECT e.id AS id FROM enrollments e LEFT JOIN issued_licenses l ON l.jti = e.license_jti
+           WHERE e.created_at < ? AND (l.jti IS NULL OR l.exp < ?) LIMIT ?`
+        )
+        .bind(before, nowMs / 1000, cap)
+        .all<{ id: string }>()
+      for (const row of r.results) await db.prepare('DELETE FROM enrollments WHERE id = ?').bind(row.id).run()
+      return r.results.length
     },
     async pruneTable(table, before, cap) {
       const column = table === 'rate_limits' ? 'window_start' : 'ts'
