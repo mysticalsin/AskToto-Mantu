@@ -26,6 +26,7 @@ export type CommandControlReason =
   | 'policy_denied'
   | 'preflight_failed'
   | 'too_soon'
+  | 'interrupted'
   | 'outcome_unverified'
   | 'adapter_failed'
 
@@ -115,8 +116,22 @@ function secureEqual(a: string, b: string): boolean {
   return left.length === right.length && timingSafeEqual(left, right)
 }
 
+/**
+ * Lifecycle events that end a confirmed action still waiting on its confirm-stage check (an Automation prompt can be
+ * on screen for seconds). A blur is not one: the system prompt itself takes focus. A runtime clear is not one either:
+ * it follows the confirmation that consumed the proposal.
+ */
+const INTERRUPTS_CONFIRM: ReadonlySet<string> = new Set([
+  'screen_locked',
+  'system_suspend',
+  'window_closed',
+  'window_replaced'
+])
+
 export class CommandControl {
   private current: CurrentProposal | null = null
+  /** The confirmed action between consuming its proposal and dispatch, if any. */
+  private confirming: { interruptedBy: string | null } | null = null
   private expiryTimer: ReturnType<typeof setTimeout> | null = null
   private readonly now: () => number
 
@@ -253,6 +268,19 @@ export class CommandControl {
     // Consume before yielding to the adapter, so a double click or replay cannot execute twice.
     this.clearCurrent()
     this.emit()
+    const flight: { interruptedBy: string | null } = { interruptedBy: null }
+    this.confirming = flight
+    try {
+      return await this.dispatchConfirmed(proposal, flight)
+    } finally {
+      if (this.confirming === flight) this.confirming = null
+    }
+  }
+
+  private async dispatchConfirmed(
+    proposal: CurrentProposal,
+    flight: { interruptedBy: string | null }
+  ): Promise<{ ok: true; outcome: DesktopActionResult['outcome'] } | { ok: false; reason: CommandControlReason }> {
     let allowed = false
     try {
       allowed = isDesktopAdapterId(proposal.request.id) && this.deps.policyAllows(proposal.request) === true
@@ -276,9 +304,13 @@ export class CommandControl {
         return { ok: false, reason: 'preflight_failed' }
       }
     }
+    // The Mac locked, slept or the window went away while the check ran: the person is no longer behind this
+    // decision, so nothing is dispatched.
+    if (flight.interruptedBy) return this.interrupted(proposal, flight.interruptedBy)
     // Focus goes back to the previous app first: an action that opens an app then takes focus there naturally
     // instead of being pulled back to where the person was.
     if (this.deps.card) await this.release('confirmed')
+    if (flight.interruptedBy) return this.interrupted(proposal, flight.interruptedBy)
     try {
       const envelope = { argsHash: proposal.argsHash, idempotencyKey: proposal.idempotencyKey }
       const result = await this.deps.execute(proposal.request, {
@@ -322,7 +354,14 @@ export class CommandControl {
     return { ok: true }
   }
 
+  private async interrupted(proposal: CurrentProposal, reason: string): Promise<{ ok: false; reason: 'interrupted' }> {
+    this.audit('command.revoked', { actionId: proposal.request.id, reason: `interrupted_${reason}` })
+    await this.release(reason)
+    return { ok: false, reason: 'interrupted' }
+  }
+
   revokeForLifecycleEvent(reason: string): void {
+    if (this.confirming && INTERRUPTS_CONFIRM.has(reason)) this.confirming.interruptedBy ??= reason
     const proposal = this.current
     if (!proposal) return
     this.clearCurrent()

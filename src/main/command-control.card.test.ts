@@ -210,6 +210,48 @@ describe('preflight (runs before the card and again before dispatch, so a card n
     expect(result).toEqual({ ok: false, reason: 'preflight_failed' })
     expect(execute).not.toHaveBeenCalled()
   })
+
+  it.each(['screen_locked', 'system_suspend', 'window_closed', 'window_replaced'])(
+    'dispatches nothing when %s lands while the confirm-stage check is still running (an Automation prompt can take seconds)',
+    async (reason) => {
+      let finishCheck: (result: { ok: true }) => void = () => {}
+      const preflight = vi.fn((_request: DesktopActionRequest, stage: string) =>
+        stage === 'confirm'
+          ? new Promise<{ ok: true }>((resolve) => {
+              finishCheck = resolve
+            })
+          : Promise.resolve({ ok: true as const })
+      )
+      const { control, execute } = make({ preflight })
+      const proposal = control.propose(OWNER, NOTE)
+      const pending = control.confirm({ ...proposal, webContentsId: 11 })
+      await vi.waitFor(() => expect(preflight).toHaveBeenCalledWith(NOTE, 'confirm'))
+      control.revokeForLifecycleEvent(reason)
+      finishCheck({ ok: true })
+      expect(await pending).toEqual({ ok: false, reason: 'interrupted' })
+      expect(execute).not.toHaveBeenCalled()
+    }
+  )
+
+  it('still dispatches when the card window only blurred during the check (the system prompt takes focus)', async () => {
+    let finishCheck: (result: { ok: true }) => void = () => {}
+    const preflight = vi.fn((_request: DesktopActionRequest, stage: string) =>
+      stage === 'confirm'
+        ? new Promise<{ ok: true }>((resolve) => {
+            finishCheck = resolve
+          })
+        : Promise.resolve({ ok: true as const })
+    )
+    const { control, execute } = make({ preflight })
+    const proposal = control.propose(OWNER, NOTE)
+    const pending = control.confirm({ ...proposal, webContentsId: 11 })
+    await vi.waitFor(() => expect(preflight).toHaveBeenCalledWith(NOTE, 'confirm'))
+    control.revokeForLifecycleEvent('window_blurred')
+    control.revokeForLifecycleEvent('runtime_proposal_cleared')
+    finishCheck({ ok: true })
+    await pending
+    expect(execute).toHaveBeenCalledTimes(1)
+  })
 })
 
 describe('card lifecycle hooks (focus exception is for a proposed card only)', () => {
