@@ -57,6 +57,8 @@ regexes = [
   '''^OAUTH_(ZOHO|SHAREPOINT|SALESFORCE|MICROSOFTTEAMS|GOOGLEDRIVE|DYNAMICS365)_CLIENT_SECRET$''',
   # Exact fake credentials of the operator connector probe test and the CLI/MCP tests.
   '''^(close-api-key-abcdef123456|sk-secret-should-not-leak|sk-ant-veryprivate-88123|sk-bidstack-abc|operator-ingest-test-secret|test-operator-secret)$''',
+  # Operator enrolment-token fixtures (O07/O11): synthetic METIS-ENR-1 values the enrolment tests feed to the code.
+  '''^METIS-ENR-1\.(kid0kid0\.secretsecret|0123456789abcdef\.secretsecretsecretsecretsecretsecretsecret1|testkid\.testsecret)$''',
   # The lease-signing fixture: the PEM private half of DEV_LEASE_PUBLIC_KEY, base64-embedded in the two lease
   # tests so they can sign a genuine lease. Gitleaks reports the decoded PEM, so the entry is the whole decoded
   # PEM, exact key body included; any other private key still fails.
