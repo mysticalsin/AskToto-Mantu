@@ -33,6 +33,8 @@ export interface DictationDictionaryDeps {
   keyring: MemoryKeyring
   /** The memory partition in force (G19), on every use; null when none is open: the dictionary is then unavailable. */
   partition(): string | null
+  /** Lifecycle generation supplied by the owner of this dictionary; changes on revoke/disposal. */
+  ownerEpoch?(): number
   now(): number
   newId?(): string
   /** Test seam: may only tighten the policy. */
@@ -95,6 +97,17 @@ export function createDictationDictionary(deps: DictationDictionaryDeps): Dictat
       return null
     }
   }
+  const ownerEpochOf = (): number | null => {
+    if (!deps.ownerEpoch) return 0
+    try {
+      const epoch = deps.ownerEpoch()
+      return Number.isSafeInteger(epoch) && epoch >= 0 ? epoch : null
+    } catch {
+      return null
+    }
+  }
+  const ownerIsCurrent = (partition: string, epoch: number): boolean =>
+    partitionOf() === partition && ownerEpochOf() === epoch
   const pathOf = (partition: string): string => join(deps.rootDir(), `${partition}.dd1`)
   const aadOf = (partition: string): string => `dictation-dictionary:${partition}`
 
@@ -143,9 +156,14 @@ export function createDictationDictionary(deps: DictationDictionaryDeps): Dictat
   return {
     async list() {
       const partition = partitionOf()
-      if (!partition) return { status: 'unavailable', entries: [] }
-      const loaded = await serial(() => load(partition))
-      if (loaded.status !== 'ok') return { status: 'unavailable', entries: [] }
+      const epoch = ownerEpochOf()
+      if (!partition || epoch === null) return { status: 'unavailable', entries: [] }
+      const loaded = await serial(async (): Promise<Load> => {
+        if (!ownerIsCurrent(partition, epoch)) return { status: 'unavailable' }
+        const result = await load(partition)
+        return result.status === 'ok' && ownerIsCurrent(partition, epoch) ? result : { status: 'unavailable' }
+      })
+      if (loaded.status !== 'ok' || !ownerIsCurrent(partition, epoch)) return { status: 'unavailable', entries: [] }
       const entries = [...loaded.stored.entries].sort(
         (a, b) => b.updatedAtMs - a.updatedAtMs || a.heard.localeCompare(b.heard)
       )

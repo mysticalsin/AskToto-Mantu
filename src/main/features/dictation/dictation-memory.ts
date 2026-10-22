@@ -117,10 +117,13 @@ export function createDictationMemory(deps: DictationMemoryDeps): DictationMemor
     enabled: deps.enabled,
     now: deps.now
   })
+  let ownerEpoch = 0
+  let disposed = false
   const dictionary: DictationDictionary = createDictationDictionary({
     rootDir: () => join(deps.rootDir(), 'dictionary'),
     keyring,
     partition: deps.partition,
+    ownerEpoch: () => ownerEpoch,
     now: deps.now,
     newId: deps.newId
   })
@@ -273,12 +276,17 @@ export function createDictationMemory(deps: DictationMemoryDeps): DictationMemor
     },
 
     onOwnerRevoked() {
+      ownerEpoch += 1
       ledger.clear()
     },
 
     flush,
 
     async dispose() {
+      if (!disposed) {
+        disposed = true
+        ownerEpoch += 1
+      }
       ledger.clear()
       await flush()
       keyring.dispose()
