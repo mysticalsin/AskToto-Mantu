@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import { readModuleSource } from '../../../test-helpers/module-source'
 
-const index = readModuleSource(__dirname, '../../index').text
-const reconciler = readModuleSource(__dirname, './overlay-reconciler').text
-const state = readModuleSource(__dirname, './overlay-state').text
+// Source pins compare LF text; a Windows checkout may carry CRLF.
+const lf = (text: string): string => text.replace(/\r\n/g, '\n')
+const index = lf(readModuleSource(__dirname, '../../index').text)
+const reconciler = lf(readModuleSource(__dirname, './overlay-reconciler').text)
+const state = lf(readModuleSource(__dirname, './overlay-state').text)
 
 function body(source: string, start: string): string {
   const at = source.indexOf(start)
