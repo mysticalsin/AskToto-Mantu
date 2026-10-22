@@ -94,7 +94,11 @@ describe('createFrameLoop', () => {
   it('uncapped (null budget) paints on every vsync, as the orb always did', () => {
     const display = fakeDisplay(120)
     const paints: number[] = []
-    const loop = createFrameLoop((t) => paints.push(t), () => null, display.deps)
+    const loop = createFrameLoop(
+      (t) => paints.push(t),
+      () => null,
+      display.deps
+    )
     loop.start()
     display.run(1000)
     expect(paints.length).toBeGreaterThanOrEqual(119)
@@ -104,7 +108,11 @@ describe('createFrameLoop', () => {
   it('a 30 fps budget on a 120 Hz panel paints ~30 times a second and does not wake for skipped vsyncs', () => {
     const display = fakeDisplay(120)
     const paints: number[] = []
-    const loop = createFrameLoop((t) => paints.push(t), () => 30, display.deps)
+    const loop = createFrameLoop(
+      (t) => paints.push(t),
+      () => 30,
+      display.deps
+    )
     loop.start()
     display.run(10_000)
     expect(paints.length).toBeGreaterThanOrEqual(290)
@@ -116,7 +124,11 @@ describe('createFrameLoop', () => {
   it('a 60 fps budget on a 60 Hz display is every vsync, with no timers (identical to uncapped there)', () => {
     const display = fakeDisplay(60)
     const paints: number[] = []
-    const loop = createFrameLoop((t) => paints.push(t), () => 60, display.deps)
+    const loop = createFrameLoop(
+      (t) => paints.push(t),
+      () => 60,
+      display.deps
+    )
     loop.start()
     display.run(1000)
     expect(paints.length).toBeGreaterThanOrEqual(59)
@@ -126,7 +138,11 @@ describe('createFrameLoop', () => {
   it('a 60 fps budget on a 120 Hz panel paints every other vsync', () => {
     const display = fakeDisplay(120)
     const paints: number[] = []
-    const loop = createFrameLoop((t) => paints.push(t), () => 60, display.deps)
+    const loop = createFrameLoop(
+      (t) => paints.push(t),
+      () => 60,
+      display.deps
+    )
     loop.start()
     display.run(1000)
     expect(paints.length).toBeGreaterThanOrEqual(58)
@@ -137,7 +153,11 @@ describe('createFrameLoop', () => {
     const display = fakeDisplay(120)
     let budget: number | null = 30
     const paints: number[] = []
-    const loop = createFrameLoop((t) => paints.push(t), () => budget, display.deps)
+    const loop = createFrameLoop(
+      (t) => paints.push(t),
+      () => budget,
+      display.deps
+    )
     loop.start()
     display.run(1000)
     const ambient = paints.length
