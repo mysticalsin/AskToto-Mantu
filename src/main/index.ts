@@ -653,17 +653,13 @@ import { applyCaveman } from '@shared/caveman-ask'
 import { isBuiltinConversationMode, isModeSkillIntegrityError } from '@shared/mode-skills'
 import {
   isOpenAICloudCacheEligible,
-  operatorUrlConfigured,
   promptCacheKey as makePromptCacheKey,
-  resolveOperatorBaseUrl,
-  resolveOperatorCredential
+  resolveOperatorBaseUrl
 } from '@shared/operator'
 import { cloudflareConnectTarget } from './cloudflare-connect'
 import { loadVerifiedSkill, setModeSkillsOverlayRoot, skillLockHashForMode } from './mode-skills'
 import {
   operatorAskTransport,
-  confirmOperatorLicenseConnection,
-  acceptOperatorHeartbeat,
   operatorFundedProviders,
   recordOperatorAsk,
   pathTagForSeatProvider,
@@ -676,7 +672,11 @@ import { BoundedSet } from './bounded-set'
 import { installEgressGuard } from './net/egress-guard'
 import { buildCrmIngestEvent, meetingFileHash, shouldIngestCrm } from './operator-crm'
 import { startOperatorOverlayPoll } from './operator-overlay'
-import { activateOperatorLicenseToken } from './operator-license-activate'
+import { activateOperatorLicenseFromIpc } from './operator-license-service'
+import { enrollmentAfterHeartbeat, enrollmentTick } from './operator-enrollment'
+import { enrollmentOnSignedIn, operatorReportingSnapshot, startOperatorEnrollment } from './operator-enrollment-runtime'
+import { operatorManaged } from './operator-seat'
+import { OPERATOR_REPORTING_SETTINGS_DEFAULTS } from '@shared/operator-reporting-settings'
 import { operatorGate } from './operator-entitlements-state'
 import { operatorIntegrationsSnapshot, registeredOperatorMcpServers } from './operator-integrations'
 import { initLogging, mainLog, auditLog, auditLogPath } from './logger'
@@ -723,6 +723,7 @@ import { registerRecoveredDraftCountIpc } from './ipc/recovered-draft-count-ipc'
 import { registerDiscardSavedTranscriptIpc } from './ipc/discard-saved-transcript-ipc'
 import { registerMeetingMicIpc } from './ipc/meeting-mic-ipc'
 import { registerBrainIpc } from './ipc/brain-ipc'
+import { registerOperatorReportingIpc } from './ipc/operator-reporting-ipc'
 import { registerRecallIpc } from './ipc/recall-ipc'
 import { registerHistoryIpc } from './ipc/history-ipc'
 import { registerWorkspaceIpc } from './ipc/workspace-ipc'
@@ -2469,7 +2470,8 @@ function publicSettings(): PublicSettings {
     ...s,
     operatorLicenseToken: '',
     operatorIngestSecret: '',
-    operatorConfigured: operatorUrlConfigured(s) && !!resolveOperatorCredential(s),
+    operatorConfigured: operatorManaged(s),
+    operatorReporting: operatorReportingSnapshot().status,
     operatorLegacyCredentialConfigured: !!s.operatorIngestSecret.trim(),
     hasApiKey: hasApiKey(s.provider),
     // Reflect the value actually applied to the window, not the raw stored setting — otherwise a dev
@@ -5638,6 +5640,8 @@ function operatorRuntimeHooks() {
   return {
     onCrmRetry: (ids: string[]) => applyOperatorCrmRetries(ids),
     onReadinessChanged: notifySettingsChanged,
+    beforeHeartbeat: () => enrollmentTick('heartbeat'),
+    afterHeartbeat: enrollmentAfterHeartbeat,
     beforePolicyRefresh: async () => {
       await speechDesktop?.refresh('policy-refresh')
     }
@@ -5897,7 +5901,14 @@ function registerIpc(): void {
       'operatorLicenseToken',
       'operatorLicenseJti',
       'operatorLicenseLast4',
-      'operatorLicenseExpiresAt'
+      'operatorLicenseExpiresAt',
+      'operatorReportingToken',
+      'operatorReportingJti',
+      'operatorReportingLast4',
+      'operatorReportingExpiresAt',
+      'operatorLicenseOrigin',
+      'operatorEnrollState',
+      'operatorEnrollCheckedAt'
     ]) {
       if (k in p) delete (p as Record<string, unknown>)[k]
     }
@@ -5961,7 +5972,8 @@ function registerIpc(): void {
         operatorLicenseJti: '',
         operatorLicenseLast4: '',
         operatorLicenseExpiresAt: null,
-        operatorIngestSecret: ''
+        operatorIngestSecret: '',
+        ...OPERATOR_REPORTING_SETTINGS_DEFAULTS
       })
     }
     if (
@@ -6140,76 +6152,12 @@ function registerIpc(): void {
     const url = resolveOperatorBaseUrl(getSettings())
     if (url) void shell.openExternal(url)
   })
-  // A candidate licence must be verified by the service before replacing a working local credential.
-  let operatorActivationInFlight = false
+  // A candidate licence is verified by the service before it replaces a working credential (operator-license-service.ts).
   ipcMain.handle(IPC.operatorLicenseActivate, async (e, payload: unknown) => {
     assertMainWindow(e)
-    if (!requireAuth()) return { ok: false, error: 'Sign in with your Mantu account first.' }
-    if (operatorActivationInFlight) return { ok: false, error: 'A licence check is already in progress.' }
-    const raw =
-      payload && typeof payload === 'object' && 'licenseKey' in (payload as object)
-        ? (payload as { licenseKey: unknown }).licenseKey
-        : payload
-    const token = typeof raw === 'string' ? raw.trim() : ''
-    operatorActivationInFlight = true
-    try {
-      if (token === '') {
-        setSettings({
-          operatorLicenseToken: '',
-          operatorLicenseJti: '',
-          operatorLicenseLast4: '',
-          operatorLicenseExpiresAt: null,
-          operatorTier: null,
-          operatorEntitlements: null,
-          operatorEntitlementsAt: 0
-        })
-        auditLog('operator.license.cleared', {})
-        startOperatorRuntime(() => getSettings(), operatorRuntimeHooks())
-        startOperatorOverlayPoll(() => getSettings())
-        notifySettingsChanged()
-        return { ok: true }
-      }
-      const result = activateOperatorLicenseToken(token)
-      if (!result.ok) return result
-      const candidate = {
-        ...getSettings(),
-        operatorLicenseToken: token,
-        operatorLicenseJti: result.jti!,
-        operatorLicenseLast4: result.last4!
-      }
-      const connection = await confirmOperatorLicenseConnection(candidate)
-      if (!connection.ok) return { ok: false, error: connection.error }
-      if (resolveOperatorBaseUrl(candidate) !== resolveOperatorBaseUrl(getSettings())) {
-        return {
-          ok: false,
-          error: 'The Operator address changed during verification. Please activate your licence again.'
-        }
-      }
-      setSettings({
-        operatorLicenseToken: token,
-        operatorLicenseJti: result.jti!,
-        operatorLicenseLast4: result.last4!,
-        operatorLicenseExpiresAt: result.expiresAt!,
-        // Clear the previous grant before applying this licence's confirmed response.
-        operatorTier: null,
-        operatorEntitlements: null,
-        operatorEntitlementsAt: 0
-      })
-      startOperatorRuntime(() => getSettings(), operatorRuntimeHooks())
-      acceptOperatorHeartbeat(connection.confirmation)
-      startOperatorOverlayPoll(() => getSettings())
-      notifySettingsChanged()
-      auditLog('operator.license.activated', { jti: result.jti })
-      return result
-    } catch {
-      return {
-        ok: false,
-        error: 'Métis could not save your licence. Check that its data folder is writable and try again.'
-      }
-    } finally {
-      operatorActivationInFlight = false
-    }
+    return activateOperatorLicenseFromIpc(payload)
   })
+  registerOperatorReportingIpc({ ipcMain, assertMainWindow, snapshot: operatorReportingSnapshot })
   // Read-only Operator status snapshot for Settings (local settings + in-memory integrations state
   // only, never touches the network) — mirrors licenseStatus's own "local settings only" contract.
   ipcMain.handle(IPC.operatorStatus, (e) => {
@@ -6227,10 +6175,11 @@ function registerIpc(): void {
     }
     const s = getSettings()
     return {
-      configured: operatorUrlConfigured(s) && !!resolveOperatorCredential(s),
+      configured: operatorManaged(s),
       fundedProviders: operatorFundedProviders(),
-      tier: s.operatorTier,
-      entitlements: s.operatorEntitlements,
+      // An auto reporting seat shows as unlicensed here; O12 surfaces its status through operatorReportingStatus.
+      tier: s.operatorTier === 'reporting' ? null : s.operatorTier,
+      entitlements: s.operatorTier === 'reporting' ? null : s.operatorEntitlements,
       licenseLast4: s.operatorLicenseLast4,
       licenseExpiresAt: s.operatorLicenseExpiresAt,
       // Never the raw credential itself — only whether one exists and its last4, same discipline as
@@ -7150,6 +7099,7 @@ function registerIpc(): void {
   ipcMain.handle(IPC.authSignIn, async (e) => {
     assertMainWindow(e)
     const status = await authSignIn()
+    if (status.ok && status.configured) enrollmentOnSignedIn()
     // MQA-236: no prewarmCapture() here anymore — it takes a REAL frame, and signing in is not screen
     // intent. The warm rides hovering the Capture button (Bar.tsx), the moment intent is signalled.
     prewarmCli() // warm the CLI binary cache so the first CLI ask doesn't stall on a login-shell lookup
@@ -9863,6 +9813,13 @@ if (!app.requestSingleInstanceLock()) {
         runStep('ensureMeetingsFolder', () => ensureMeetingsFolder(getSettings()))
       )
       runStep('initializeImportJobs', initializeImportJobs)
+      startOperatorEnrollment({
+        restartRuntime: () => {
+          startOperatorRuntime(() => getSettings(), operatorRuntimeHooks())
+          startOperatorOverlayPoll(() => getSettings())
+        },
+        notifyChanged: notifySettingsChanged
+      })
       startOperatorRuntime(() => getSettings(), operatorRuntimeHooks())
       startOperatorOverlayPoll(() => getSettings())
       // Import checkpoints are encrypted and main-owned. Resume after IPC registration so the hidden decoder

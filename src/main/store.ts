@@ -103,7 +103,7 @@ const adminCache = new AdminManagedCache({
     return readTrustedAdminManaged()
   }
 })
-const adminManagedContent = (): string | null => {
+export const adminManagedContent = (): string | null => {
   if (freshAdminRead?.status === 'invalid') {
     managedPolicyAuthority.setUnreadable('admin')
     return null

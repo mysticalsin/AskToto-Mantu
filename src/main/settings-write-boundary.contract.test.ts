@@ -1,3 +1,4 @@
+import { OPERATOR_REPORTING_MAIN_KEYS } from '@shared/operator-reporting-settings'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
@@ -80,6 +81,15 @@ describe('settings:set — main-owned keys are not renderer-writable', () => {
       'operatorLicenseLast4',
       'operatorLicenseExpiresAt'
     ]) {
+      expect(keys, `settings:set must strip ${k}`).toContain(k)
+    }
+  })
+
+  // O07/O08: the auto-enrolled licence, its origin and the enrolment state decide which gates apply. A renderer
+  // patch must not be able to mint a reporting licence, claim an admin origin or mark itself enrolled.
+  it('strips zero-config reporting state (auto licence, origin, enrolment state)', () => {
+    const keys = strippedKeys()
+    for (const k of OPERATOR_REPORTING_MAIN_KEYS) {
       expect(keys, `settings:set must strip ${k}`).toContain(k)
     }
   })

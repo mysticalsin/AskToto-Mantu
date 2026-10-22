@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import ts from 'typescript'
+import { readModuleSource } from '../test-helpers/module-source'
 import { describe, expect, it } from 'vitest'
 
 const source = (path: string): string => readFileSync(resolve(__dirname, '..', path), 'utf8').replace(/\r\n/g, '\n')
@@ -235,7 +236,8 @@ function requireAppGateBeforeCapture(appPath: string, appText: string): void {
 describe('MQA-294 licence readiness and credential boundaries', () => {
   it('publishes only credential-presence flags and gates Listen with that flag', () => {
     const main = source('main/index.ts')
-    expect(main).toContain('operatorConfigured: operatorUrlConfigured(s) && !!resolveOperatorCredential(s)')
+    // O08: the flag means a MANAGED seat. An auto-enrolled reporting seat must read as unconfigured.
+    expect(main).toContain('operatorConfigured: operatorManaged(s)')
     expect(main).toContain("operatorLicenseToken: ''")
     expect(main).toContain("operatorIngestSecret: ''")
     const appPath = 'renderer/src/App.tsx'
@@ -259,7 +261,9 @@ describe('MQA-294 licence readiness and credential boundaries', () => {
   })
 
   it('rejects an activation if its verified endpoint changed during the request', () => {
-    expect(source('main/index.ts')).toContain(
+    // The activation handler moved to operator-license-service.ts (O07); index.ts only delegates to it.
+    expect(source('main/index.ts')).toContain('activateOperatorLicenseFromIpc(payload)')
+    expect(readModuleSource(__dirname, './operator-license-service').text).toContain(
       'resolveOperatorBaseUrl(candidate) !== resolveOperatorBaseUrl(getSettings())'
     )
   })

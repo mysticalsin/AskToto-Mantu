@@ -750,6 +750,12 @@ const api = {
     integrations: Array<{ id: string; kind: string; label: string; hasCredential: boolean; last4: string }>
     mcpServers: Array<{ id: string; kind: string; label: string; tools: string[] }>
   }> => ipcRenderer.invoke(IPC.operatorStatus),
+  // Organisation reporting state for Settings: never a credential, only status, origin and persisted state.
+  operatorReportingStatus: (): Promise<{
+    status: 'off-by-policy' | 'pending' | 'enrolled' | 'revoked'
+    origin: 'admin' | 'sso' | 'token' | null
+    state: 'unenrolled' | 'enrolled' | 'revoked'
+  }> => ipcRenderer.invoke(IPC.operatorReportingStatus),
   licenseActivate: (payload: LicenseActivatePayload): Promise<LicenseActivateResult> =>
     ipcRenderer.invoke(IPC.licenseActivate, payload),
   licenseStatus: (): Promise<LicenseStatusResult> => ipcRenderer.invoke(IPC.licenseStatus),

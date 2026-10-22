@@ -73,7 +73,7 @@ function readManagedAzure(): Partial<AzureConfig> {
 }
 
 /** Resolve env, managed policy, Settings, then sticky-only LKG without mutating sticky state. */
-function readConfig(): AzureConfig | null {
+export function readConfig(): AzureConfig | null {
   const env = usableAzureConfig({
     clientId: process.env.AZURE_CLIENT_ID,
     tenantId: process.env.AZURE_TENANT_ID,
@@ -263,7 +263,7 @@ function msal(): typeof import('@azure/msal-node') {
 }
 
 /** Build a PublicClientApplication wired to the encrypted on-disk token cache. */
-async function makePca(cfg: AzureConfig): Promise<PublicClientApplication> {
+export async function makePca(cfg: AzureConfig): Promise<PublicClientApplication> {
   return new (msal().PublicClientApplication)({
     auth: { clientId: cfg.clientId, authority: `https://login.microsoftonline.com/${cfg.tenantId}` },
     cache: { cachePlugin: makeCachePlugin() }

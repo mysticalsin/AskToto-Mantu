@@ -365,6 +365,11 @@ export type AuditEvent =
   // the full token; 'operator.gate.blocked' carries the feature name only, never any request content.
   | 'operator.license.activated'
   | 'operator.license.cleared'
+  // Zero-config reporting (O07/O10): enrolment applied or refused (origin, jti or reason only), the seat removed
+  // by an administrator, and a per-user reporting opt-out ignored because only machine policy is honoured.
+  | 'operator.enroll.applied'
+  | 'operator.enroll.revoked'
+  | 'operator.reporting.policy_ignored_user_scope'
   | 'operator.gate.blocked'
   // M2-0412: a fleet model policy fetched from the Operator failed schema validation or signature
   // verification (tampered in transit, or signed with a secret this device no longer holds) and was
