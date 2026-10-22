@@ -2,6 +2,7 @@ import type { OwnerSessionRef } from '@shared/contracts/owner-session'
 import type { CloudSpeechEvent } from '@shared/cloud-speech'
 import { ContractError, type JsonValue } from '@shared/kernel/contract-data'
 import { SessionContext, type ContextSnapshot, type SessionOutputKind } from '@shared/kernel/session-context'
+import { SessionQueue } from '@shared/kernel/session-queue'
 import { sessionScopeFor, type SessionScope } from '@shared/kernel/session-scope'
 import { TranscriptLedger, TranscriptLedgerError, type TranscriptLedgerEvent } from '@shared/kernel/transcript-ledger'
 import { speechSegmentToLedgerEvent } from '@shared/transcript-line-identity'
@@ -25,6 +26,29 @@ export interface MeetingContextRegistryDeps {
   permissions(): readonly string[]
   /** Metadata-only: a ledger refusal code that left the context degraded. Never receives transcript text. */
   onDegraded?(code: string): void
+  /** Queue health (G12 `queue_wait_ms`, `queue_depth_peak`). Counts and durations only; absent until G12 is plugged in. */
+  queueHealth?: QueueHealthSink
+  /** Monotonic milliseconds, injectable for tests. */
+  now?(): number
+}
+
+/** The two G12 recorder methods this registry feeds. Structurally the responsiveness recorder's subset. */
+export interface QueueHealthSink {
+  recordLatency(id: 'queue_wait_ms', ms: number): void
+  observePeak(id: 'queue_depth_peak', value: number): void
+}
+
+/** One ask's place in a meeting's queue: it stops when the context it was built from goes stale. */
+export interface AskJob {
+  /** Aborted when the job is outdated (stop, permissions, screen, knowledge), times out, or the meeting ends. */
+  readonly signal: AbortSignal
+  /** Whether this job's snapshot may still publish. Same contract as `ContextHandle.check`. */
+  check(): ContextCheck
+}
+
+export interface EnqueueOptions {
+  /** This job's own deadline in milliseconds (a streamed answer outlives the queue default). */
+  readonly timeoutMs?: number
 }
 
 /** Whether work started from a snapshot may still publish. `advanced` means only transcript text moved on. */
@@ -38,6 +62,13 @@ export interface ContextHandle {
   readonly snapshot: ContextSnapshot
   /** Re-reads permissions, then asks the issuing SessionContext whether this snapshot is still the one in force. */
   check(): ContextCheck
+  /**
+   * Runs `work` as a job on this meeting's SessionQueue: one active job, at most `ASK_QUEUE_MAX_PENDING` waiting, a
+   * deadline, and abort on any change that outdates the snapshot (a new transcript line does not). Resolves with the
+   * work's value; rejects with a ContractError (`QUEUE_FULL`, `TASK_INVALIDATED`, `TASK_TIMEOUT`, `QUEUE_CLOSED`, ...).
+   * The queue is disposed when the meeting ends or its owner session is revoked.
+   */
+  enqueue<T>(work: (job: AskJob) => PromiseLike<T> | T, options?: EnqueueOptions): Promise<T>
 }
 
 export interface MeetingContextRegistry {
@@ -70,6 +101,11 @@ export interface MeetingContextRegistry {
 
 /** The context carries the most recent finals only; a request asks for a character tail of at most 20,000. */
 export const CONTEXT_TRANSCRIPT_WINDOW = 512
+/** Pending asks allowed behind the active one. A third is refused; the renderer cancels the one it replaces. */
+export const ASK_QUEUE_MAX_PENDING = 2
+/** Default job deadline. Callers streaming an answer pass their own. */
+export const ASK_QUEUE_TIMEOUT_MS = 60_000
+
 /** A real meeting commits thousands of finals; the ledger's own defaults are the reference kernel's smaller bounds. */
 export const CONTEXT_LEDGER_LIMITS = { maxEvents: 60_000, maxUtterances: 8_000 } as const
 
@@ -82,6 +118,10 @@ interface MeetingContext {
   readonly scope: MeetingScope
   readonly ledger: TranscriptLedger
   readonly session: SessionContext
+  /** One queue per meeting: ask and suggest publish through it. Disposed with the meeting. */
+  readonly queue: SessionQueue
+  /** Jobs accepted and not yet finished (the active one plus the pending ones), for queue health. */
+  inFlight: number
   readonly streamEpochs: Map<string, number>
   readonly localLines: Map<number, { utteranceId: string; speaker: 'you' | 'them' | 'unknown'; text: string }>
   /** Speaker name and language by utterance id, as the renderer reports them (a name can arrive after the line). */
@@ -159,11 +199,62 @@ export function createMeetingContextRegistry(deps: MeetingContextRegistryDeps): 
     return true
   }
 
+  const observeHealth = (record: (health: QueueHealthSink) => void): void => {
+    if (!deps.queueHealth) return
+    try {
+      record(deps.queueHealth)
+    } catch {
+      // health is observation only; it never changes an ask
+    }
+  }
+
+  /** Whether a snapshot may still publish: re-reads permissions, then asks the issuing SessionContext. */
+  const checkFor = (context: MeetingContext, snapshot: ContextSnapshot) => (): ContextCheck => {
+    syncPermissions(context)
+    try {
+      context.session.assertCurrent(snapshot)
+      return { state: 'current' }
+    } catch (error) {
+      const code = error instanceof ContractError ? error.code : 'STALE'
+      // Only transcript, screen or knowledge moved: the snapshot is older, not invalid.
+      return code === 'STALE_CONTEXT' ? { state: 'advanced' } : { state: 'stale', code }
+    }
+  }
+
+  const enqueue = <T>(
+    context: MeetingContext,
+    kind: SessionOutputKind,
+    work: (job: AskJob) => PromiseLike<T> | T,
+    options?: EnqueueOptions
+  ): Promise<T> => {
+    const now = deps.now ?? Date.now
+    const queuedAt = now()
+    context.inFlight += 1
+    // A refused submit never joins the queue, so it is not a depth the queue reached.
+    if (context.inFlight <= ASK_QUEUE_MAX_PENDING + 1)
+      observeHealth((health) => health.observePeak('queue_depth_peak', context.inFlight))
+    return context.queue
+      .submit(
+        kind,
+        (snapshot, signal) => {
+          const waited = Math.max(0, now() - queuedAt)
+          observeHealth((health) => health.recordLatency('queue_wait_ms', waited))
+          return work({ signal, check: checkFor(context, snapshot) })
+        },
+        options
+      )
+      .then((result) => result.value)
+      .finally(() => {
+        context.inFlight -= 1
+      })
+  }
+
   const close = (meetingStartedAt: number): void => {
     const context = contexts.get(meetingStartedAt)
     if (!context) return
     contexts.delete(meetingStartedAt)
     if (byFrame.get(context.frameOwner) === meetingStartedAt) byFrame.delete(context.frameOwner)
+    context.queue.dispose()
     context.session.stop()
   }
 
@@ -183,12 +274,20 @@ export function createMeetingContextRegistry(deps: MeetingContextRegistryDeps): 
     // One live meeting at a time, as the transcript revision store does: a new meeting ends the previous one.
     for (const other of [...contexts.keys()]) close(other)
     try {
+      const session = new SessionContext({ scope: scope.scope, permissions: deps.permissions(), mode: 'meeting' })
       const context: MeetingContext = {
         startedAt: meetingStartedAt,
         frameOwner: frameOwnerOf(frame),
         scope,
         ledger: new TranscriptLedger(scope.scope, CONTEXT_LEDGER_LIMITS),
-        session: new SessionContext({ scope: scope.scope, permissions: deps.permissions(), mode: 'meeting' }),
+        session,
+        // A live conversation keeps talking while an answer streams; that moves the transcript, not the question.
+        queue: new SessionQueue(session, {
+          maxPending: ASK_QUEUE_MAX_PENDING,
+          timeoutMs: ASK_QUEUE_TIMEOUT_MS,
+          tolerate: ['transcript']
+        }),
+        inFlight: 0,
         streamEpochs: new Map(),
         localLines: new Map(),
         labels: new Map(),
@@ -328,17 +427,8 @@ export function createMeetingContextRegistry(deps: MeetingContextRegistryDeps): 
       return {
         meetingStartedAt: context.startedAt,
         snapshot,
-        check(): ContextCheck {
-          syncPermissions(context)
-          try {
-            context.session.assertCurrent(snapshot)
-            return { state: 'current' }
-          } catch (error) {
-            const code = error instanceof ContractError ? error.code : 'STALE'
-            // Only transcript, screen or knowledge moved: the snapshot is older, not invalid.
-            return code === 'STALE_CONTEXT' ? { state: 'advanced' } : { state: 'stale', code }
-          }
-        }
+        check: checkFor(context, snapshot),
+        enqueue: (work, options) => enqueue(context, kind, work, options)
       }
     },
 

@@ -73,9 +73,7 @@ describe('import-memory pressure contract', () => {
     expect(bootWarm).not.toContain('provisionLocalModel')
     expectBefore(backgroundVlm, 'allowSpeculativeLocalWork?.() === false', 'describeOnce(shot.image)')
     expect(flattenSource(rendererPrewarm)).toContain(
-      flattenSource(
-        'prewarmLocal(s.localLlm.modelId, buildPrewarmMessages(text, s), speculativeLocalWorkAllowed)'
-      )
+      flattenSource('prewarmLocal(s.localLlm.modelId, buildPrewarmMessages(text, s), speculativeLocalWorkAllowed)')
     )
     expect(flattenSource(bootWarm)).toContain(
       flattenSource(

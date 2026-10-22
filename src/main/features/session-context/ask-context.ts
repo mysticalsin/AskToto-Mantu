@@ -1,7 +1,7 @@
 import type { AskStart } from '@shared/ipc'
 import { redactSecrets } from '@shared/redact'
 import { SESSION_CONTEXT_DEFAULT_TAIL } from '@shared/session-context-request'
-import type { ContextCheck, FrameKey, MeetingContextRegistry } from './meeting-context-registry'
+import type { ContextHandle, FrameKey, MeetingContextRegistry } from './meeting-context-registry'
 import { fillSlots, lastThemText, transcriptTailText } from './transcript-text'
 
 /** Shown instead of an answer that would have been built from nothing. */
@@ -44,7 +44,7 @@ export function applyAskContext(req: AskStart, deps: AskContextDeps, gate: AskCo
   const lastThem = (handle ? redact(lastThemText(handle.snapshot, request.tailChars)) : '') || transcript
   req.prompt = fillSlots(req.prompt, { transcript, lastThem })
   if (request.field) req.transcript = transcript
-  if (handle) gate.arm(() => handle.check())
+  if (handle) gate.arm(handle)
   return redactCarried(req, deps)
 }
 
@@ -61,24 +61,24 @@ function redactCarried(req: AskStart, deps: AskContextDeps): null {
  * meeting changed, or permissions changed since.
  */
 export interface AskContextGate {
-  arm(check: () => ContextCheck): void
+  arm(handle: ContextHandle): void
   clear(): void
   refusal(): string | null
+  /** The snapshot handle this ask's prompt was built from: its queue turn and its publish checks come from it. */
+  handle(): ContextHandle | null
 }
 
 export function createAskContextGate(): AskContextGate {
-  let check: (() => ContextCheck) | null = null
+  let armed: ContextHandle | null = null
   return {
     arm: (next) => {
-      check = next
+      armed = next
     },
     clear: () => {
-      check = null
+      armed = null
     },
-    refusal: () => {
-      const result = check?.()
-      return result?.state === 'stale' ? STALE_CONVERSATION_MESSAGE : null
-    }
+    refusal: () => (armed?.check().state === 'stale' ? STALE_CONVERSATION_MESSAGE : null),
+    handle: () => armed
   }
 }
 

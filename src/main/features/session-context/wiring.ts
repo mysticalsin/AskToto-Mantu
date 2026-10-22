@@ -7,7 +7,8 @@ import type { AuthorizeSender } from '../../ipc/sender-auth'
 import {
   createMeetingContextRegistry,
   createMeetingScopeResolver,
-  type MeetingContextRegistry
+  type MeetingContextRegistry,
+  type QueueHealthSink
 } from './meeting-context-registry'
 
 /**
@@ -33,6 +34,8 @@ export interface MeetingContextsDeps {
   onMeetingEnd(listener: (startedAt: number) => void): () => void
   /** Metadata-only ledger refusal code. */
   onDegraded(code: string): void
+  /** G12 queue-health recorder (`queue_wait_ms`, `queue_depth_peak`). Typed seam: absent until G12 lands here. */
+  queueHealth?: QueueHealthSink
 }
 
 /** What delivered speech must name: the frame that owns the capture and the meeting it is part of. */
@@ -60,7 +63,8 @@ export function bindMeetingContexts(deps: MeetingContextsDeps): MeetingContexts 
       unsignedAllowed: deps.unsignedAllowed
     }),
     permissions: () => meetingPermissions(deps.privateView()),
-    onDegraded: deps.onDegraded
+    onDegraded: deps.onDegraded,
+    queueHealth: deps.queueHealth
   })
   deps.ownerSession.onRevoked((ref) => registry.closeFrame(ref.frameOwner))
   deps.onMeetingEnd((startedAt) => registry.close(startedAt))

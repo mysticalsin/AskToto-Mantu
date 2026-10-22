@@ -648,7 +648,7 @@ import {
 } from './brain/context-envelope'
 import { buildSystem, buildSystemParts } from './personas'
 import { applyCaveman } from '@shared/caveman-ask'
-import { isBuiltinConversationMode, isModeSkillIntegrityError } from '@shared/mode-skills'
+import { isBuiltinConversationMode } from '@shared/mode-skills'
 import {
   isOpenAICloudCacheEligible,
   promptCacheKey as makePromptCacheKey,
@@ -731,6 +731,7 @@ import { RecoveredDraftCount } from './recovered-draft-count'
 import { registerInputCaptureIpc } from './ipc/input-capture-ipc'
 import { bindRendererResets, createOwnerSessionWiring, ownerSessionLifecycle } from './lifecycle/owner-session-wiring'
 import { applyAskContext, createAskContextGate, prewarmText } from './features/session-context/ask-context'
+import { askStartFailureMessage, createAskTurns } from './features/session-context/ask-turn'
 import { recoverOrphanDrafts } from './features/meetings/draft-recovery'
 import { writeMeetingOnce } from './features/meetings/save-identity'
 import { holdAppSuspensionWhileVisible } from './lifecycle/overlay-suspension-hold'
@@ -7461,6 +7462,7 @@ function registerIpc(): void {
   // Fresh-question boundary state (module scope, shared with IPC.listeningState / IPC.askResetContext). A plain
   // question OUTSIDE a live meeting must not inherit the previous Q&A, which rode in TWO carriers: the renderer's
   // history array and the server-side Dust conversation (reused up to 2h). Enforced at this single ask choke point.
+  const askTurns = createAskTurns({ send: (channel, payload) => win?.webContents.send(channel, payload), streams })
   ipcMain.handle(IPC.askStart, async (e, raw) => {
     assertMainWindow(e)
     const id = raw && typeof raw === 'object' && 'id' in (raw as object) ? String((raw as { id: unknown }).id) : ''
@@ -7471,16 +7473,7 @@ function registerIpc(): void {
       })
       return
     }
-    const failAskStart = (err: unknown): void => {
-      win?.webContents.send(IPC.streamError, {
-        id,
-        message: isModeSkillIntegrityError(err)
-          ? err instanceof Error
-            ? err.message
-            : String(err)
-          : 'Could not start the answer.'
-      })
-    }
+    const failAskStart = (err: unknown): void => askTurns.fail(id, askStartFailureMessage(err))
     try {
       const req = AskStartSchema.parse(raw)
       askTiming.start(req.id, req.mode)
@@ -7495,7 +7488,7 @@ function registerIpc(): void {
         streams,
         onError: failAskStart,
         gate: contextGate,
-        onRefused: (message) => win?.webContents.send(IPC.streamError, { id: req.id, message })
+        onRefused: (message) => askTurns.fail(req.id, message)
       })
       // MQA-182: Private View means Métis does not look at OR SEND your screen, and an already-captured frame is
       // still your screen. Retry / "Go deeper" replay the last vision request (state.ts lastReqRef) and used to
@@ -7564,6 +7557,9 @@ function registerIpc(): void {
         contextGate
       )
       if (contextRefusal) return void win?.webContents.send(IPC.streamError, { id: req.id, message: contextRefusal })
+      // G14: a live-meeting ask takes its turn on the meeting's SessionQueue; `turn.send` drops stale output.
+      const turn = await askTurns.begin({ id: req.id, mode: req.mode, handle: contextGate.handle() })
+      if (!turn) return
       // screenContext is a MAIN-ONLY field (like brainContext): never trust a value the renderer sent. Clear
       // it unconditionally after parse, then set it below strictly from main's own on-device screen cache.
       req.screenContext = undefined
@@ -7879,7 +7875,7 @@ function registerIpc(): void {
             // F3 hedge: this leg is out — only actually surface an error once EVERY leg of the race
             // (including a backup that hasn't started yet) is confirmed dead. See HedgeRace.markDead.
             if (!race || race.gate.markDead(race.leg) === 'surface') {
-              win?.webContents.send(IPC.streamError, {
+              turn.send(IPC.streamError, {
                 id: req.id,
                 message: approvedLabel
                   ? `${def.label} is not on your organization's approved provider list. Switch to ${approvedLabel} in Settings.`
@@ -7888,7 +7884,7 @@ function registerIpc(): void {
             }
           } else if (!failover(attempted.concat(provider), undefined, race)) {
             if (!race || race.gate.markDead(race.leg) === 'surface') {
-              win?.webContents.send(IPC.streamError, { id: req.id, message: 'No approved provider could answer.' })
+              turn.send(IPC.streamError, { id: req.id, message: 'No approved provider could answer.' })
             }
           }
           return
@@ -8024,11 +8020,11 @@ function registerIpc(): void {
               return
             }
             if (!race || race.gate.markDead(race.leg) === 'surface') {
-              win?.webContents.send(IPC.streamError, { id: req.id, message: ineligible })
+              turn.send(IPC.streamError, { id: req.id, message: ineligible })
             }
           } else if (!failover(attempted.concat(provider), undefined, race)) {
             if (!race || race.gate.markDead(race.leg) === 'surface') {
-              win?.webContents.send(IPC.streamError, { id: req.id, message: ineligible })
+              turn.send(IPC.streamError, { id: req.id, message: ineligible })
             }
           }
           return
@@ -8038,7 +8034,7 @@ function registerIpc(): void {
         // the display follows the live attempt. Metadata only (provider id + tier), never the model/agent id.
         // A leg that has already lost the race says nothing: its announcement would overwrite the winner's.
         if (!race || !race.gate.isLoser(race.leg)) {
-          win?.webContents.send(IPC.streamMeta, { id: req.id, provider, tier, usedScreen: screenGrounded })
+          turn.send(IPC.streamMeta, { id: req.id, provider, tier, usedScreen: screenGrounded })
         }
         // Per-tier idle budget: a live suggest gives up fast to stay real-time; recaps + deep answers get the
         // full headroom. Bounds time-to-first-token and triggers failover when a provider stalls before a token.
@@ -8106,11 +8102,11 @@ function registerIpc(): void {
               // Re-assert WHO actually answered. Both legs announce themselves when they start, so if
               // the backup started second and the primary then won, the UI's last streamMeta named the
               // loser — the answer would be attributed to a provider that produced none of it.
-              win?.webContents.send(IPC.streamMeta, { id: req.id, provider, tier, usedScreen: screenGrounded })
+              turn.send(IPC.streamMeta, { id: req.id, provider, tier, usedScreen: screenGrounded })
             }
           }
           gotToken = true
-          win?.webContents.send(IPC.streamDelta, { id: req.id, text })
+          turn.send(IPC.streamDelta, { id: req.id, text })
         }
         // Both transport errors and explicit incomplete terminals share the same retry/hedge policy.
         const failAttempt = (message: string): void => {
@@ -8247,7 +8243,7 @@ function registerIpc(): void {
             if (race) streams.delete(req.id)
             // The renderer retains partial deltas on error. Visible length is not proof of
             // completion: never turn a truncated/error response into a successful result.
-            win?.webContents.send(IPC.streamError, { id: req.id, message: friendly })
+            turn.send(IPC.streamError, { id: req.id, message: friendly })
           }
         }
         const systemParts = buildSystemParts(
@@ -8326,7 +8322,7 @@ function registerIpc(): void {
               if (!gotToken && provider !== 'local') {
                 if (race && race.gate.markDead(race.leg) !== 'surface') return
                 if (race) streams.delete(req.id)
-                win?.webContents.send(IPC.streamError, {
+                turn.send(IPC.streamError, {
                   id: req.id,
                   message:
                     'That provider returned an empty answer, and there was no other provider to try. Check your providers in Settings.'
@@ -8341,7 +8337,7 @@ function registerIpc(): void {
               if (!gotToken && provider === 'local') {
                 if (!race || race.gate.markDead(race.leg) === 'surface') {
                   if (race) streams.delete(req.id) // terminal for the race — same release as the error path
-                  win?.webContents.send(IPC.streamError, {
+                  turn.send(IPC.streamError, {
                     id: req.id,
                     message:
                       'Métis Local produced no answer — try again, or add a cloud provider in Settings for longer questions.'
@@ -8405,7 +8401,7 @@ function registerIpc(): void {
               // The winning leg's success is the whole race's terminal outcome — drop the combined abort
               // registration set up before either leg started (see the hedge dispatch below).
               if (race) streams.delete(req.id)
-              win?.webContents.send(IPC.streamDone, { id: req.id, ...u })
+              turn.send(IPC.streamDone, { id: req.id, ...u })
               // Act 5 trial hook (MQA-281): the ONE seam that fires on a real, successfully-delivered
               // result (gotToken is guaranteed true above) — never on install/launch. Cheap no-op unless
               // this is the very first qualifying (suggest/summary/recap) result this install has ever
@@ -8537,6 +8533,7 @@ function registerIpc(): void {
     assertMainWindow(e)
     if (!requireAuth()) return
     askTiming.cancel(streams, id)
+    askTurns.cancel(id)
   })
 
   // Explicit "New chat" from the renderer (History screen button / Cmd+Shift+R). The renderer clears its

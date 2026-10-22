@@ -189,3 +189,78 @@ describe('SessionQueue', () => {
     queue.dispose()
   })
 })
+
+describe('SessionQueue: tolerated changes and per-job deadlines (G14)', () => {
+  const line = (revision: number) => ({
+    scope: SCOPE,
+    revision,
+    segments: [{ text: `synthetic line ${revision}` }],
+    interim: []
+  })
+
+  it('by default any change, including a transcript line, aborts the active job', async () => {
+    const ctx = context()
+    const queue = new SessionQueue(ctx)
+    const gate = deferred<string>()
+    const task = queue.submit('conversation', () => gate.promise)
+    const rejected = rejectsWith(task, 'TASK_INVALIDATED')
+    await flush()
+    ctx.updateTranscript(line(1))
+    await rejected
+    queue.dispose()
+  })
+
+  it('a tolerated transcript change lets active and pending work finish and publish', async () => {
+    const ctx = context()
+    const queue = new SessionQueue(ctx, { tolerate: ['transcript'] })
+    const gate = deferred<string>()
+    const active = queue.submit('conversation', () => gate.promise)
+    const pending = queue.submit('manual', () => 'pending answer')
+    await flush()
+    ctx.updateTranscript(line(1))
+    ctx.updateTranscript(line(2))
+    gate.resolve('active answer')
+    expect((await active).value).toBe('active answer')
+    expect((await pending).value).toBe('pending answer')
+    queue.dispose()
+  })
+
+  it('tolerating the transcript still invalidates on stop, permissions and screen changes', async () => {
+    for (const change of [
+      (ctx: SessionContext) => ctx.setPermissions(['screen.read']),
+      (ctx: SessionContext) => ctx.setScreen(screen()),
+      (ctx: SessionContext) => ctx.stop()
+    ]) {
+      const ctx = context()
+      const queue = new SessionQueue(ctx, { tolerate: ['transcript'] })
+      const gate = deferred<string>()
+      const active = queue.submit('conversation', () => gate.promise)
+      const pending = queue.submit('manual', () => 'must never publish')
+      const rejectedActive = rejectsWith(active, 'TASK_INVALIDATED')
+      const rejectedPending = rejectsWith(pending, 'TASK_INVALIDATED')
+      await flush()
+      change(ctx)
+      await Promise.all([rejectedActive, rejectedPending])
+      queue.dispose()
+    }
+  })
+
+  it('a job may carry its own deadline, bounded', async () => {
+    const queue = new SessionQueue(context(), { timeoutMs: 60_000 })
+    const never = deferred<string>()
+    await rejectsWith(
+      queue.submit('manual', () => never.promise, { timeoutMs: 15 }),
+      'TASK_TIMEOUT'
+    )
+    await rejectsWith(
+      queue.submit('manual', () => 'x', { timeoutMs: 0 }),
+      'QUEUE_TIMEOUT'
+    )
+    await rejectsWith(
+      queue.submit('manual', () => 'x', { timeoutMs: 300_001 }),
+      'QUEUE_TIMEOUT'
+    )
+    expect((await queue.submit('manual', () => 'ok', { timeoutMs: 300_000 })).value).toBe('ok')
+    queue.dispose()
+  })
+})

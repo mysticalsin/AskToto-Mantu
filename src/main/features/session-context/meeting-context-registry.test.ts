@@ -387,3 +387,185 @@ describe('meetingPermissions', () => {
     expect(meetingPermissions(true)).toEqual(['transcript.read'])
   })
 })
+
+describe('the per-meeting SessionQueue (G14)', () => {
+  const deferred = <T = void>() => {
+    let resolve!: (value: T) => void
+    const promise = new Promise<T>((yes) => {
+      resolve = yes
+    })
+    return { promise, resolve }
+  }
+  const flush = (): Promise<void> => new Promise((resolve) => setImmediate(resolve))
+  const codeOf = async (promise: Promise<unknown>): Promise<string> => {
+    try {
+      await promise
+      return 'resolved'
+    } catch (error) {
+      return (error as { code?: string }).code ?? 'unknown'
+    }
+  }
+  const open = (h: Harness) => {
+    h.registry.ingestDelivered(FRAME, STARTED, segment({ sequence: 1, index: 1, text: 'synthetic first line.' }))
+    const handle = h.registry.acquire(FRAME, 'conversation')
+    if (!handle) throw new Error('no meeting open')
+    return handle
+  }
+
+  it('runs one ask at a time, holds two behind it and refuses a third', async () => {
+    const h = harness()
+    const handle = open(h)
+    const gate = deferred()
+    const order: string[] = []
+    const first = handle.enqueue(async () => {
+      order.push('first')
+      await gate.promise
+    })
+    const second = handle.enqueue(() => void order.push('second'))
+    const third = handle.enqueue(() => void order.push('third'))
+    const refused = codeOf(handle.enqueue(() => void order.push('fourth')))
+    expect(await refused).toBe('QUEUE_FULL')
+    await flush()
+    expect(order).toEqual(['first'])
+    gate.resolve()
+    await Promise.all([first, second, third])
+    expect(order).toEqual(['first', 'second', 'third'])
+  })
+
+  it('a new transcript line moves the ask on but does not abort it; its check reads advanced', async () => {
+    const h = harness()
+    const handle = open(h)
+    const gate = deferred()
+    let seen: { aborted: boolean; state: string } | null = null
+    const job = handle.enqueue(async (active) => {
+      await gate.promise
+      seen = { aborted: active.signal.aborted, state: active.check().state }
+    })
+    await flush()
+    h.registry.ingestDelivered(FRAME, STARTED, segment({ sequence: 2, index: 2, text: 'synthetic second line.' }))
+    gate.resolve()
+    await job
+    expect(seen).toEqual({ aborted: false, state: 'advanced' })
+  })
+
+  it('a permission change (Private View) aborts the active ask and rejects the pending ones', async () => {
+    const h = harness()
+    const handle = open(h)
+    const gate = deferred()
+    let signal: AbortSignal | undefined
+    const active = codeOf(
+      handle.enqueue((job) => {
+        signal = job.signal
+        return gate.promise
+      })
+    )
+    const pending = codeOf(handle.enqueue(() => 'must never run'))
+    await flush()
+    h.permissions.current = meetingPermissions(true)
+    // The change is read at the next snapshot or publish check, as at every freshness check.
+    expect(h.registry.acquire(FRAME, 'conversation')).not.toBeNull()
+    expect(await active).toBe('TASK_INVALIDATED')
+    expect(await pending).toBe('TASK_INVALIDATED')
+    expect(signal?.aborted).toBe(true)
+  })
+
+  it('a job check reports stale once permissions changed, even before anything else read them', async () => {
+    const h = harness()
+    const handle = open(h)
+    const gate = deferred()
+    let state = ''
+    const job = handle.enqueue(async (active) => {
+      await gate.promise
+      h.permissions.current = meetingPermissions(true)
+      state = active.check().state
+    })
+    await flush()
+    gate.resolve()
+    await codeOf(job)
+    expect(state).toBe('stale')
+  })
+
+  it('ending the meeting disposes its queue: active work aborts, pending work and new work are refused', async () => {
+    const h = harness()
+    const handle = open(h)
+    const gate = deferred()
+    let signal: AbortSignal | undefined
+    const active = codeOf(
+      handle.enqueue((job) => {
+        signal = job.signal
+        return gate.promise
+      })
+    )
+    const pending = codeOf(handle.enqueue(() => 'must never run'))
+    await flush()
+    h.registry.close(STARTED)
+    expect(await active).toBe('QUEUE_CLOSED')
+    expect(await pending).toBe('QUEUE_CLOSED')
+    expect(signal?.aborted).toBe(true)
+    expect(await codeOf(handle.enqueue(() => 'late'))).toBe('QUEUE_CLOSED')
+  })
+
+  it('a revoked owner session ends the meeting queue the same way', async () => {
+    const h = harness()
+    const handle = open(h)
+    const gate = deferred()
+    const active = codeOf(handle.enqueue(() => gate.promise))
+    await flush()
+    h.registry.closeFrame(`${FRAME.processId}:${FRAME.routingId}`)
+    expect(await active).toBe('QUEUE_CLOSED')
+  })
+
+  it('honours a job deadline', async () => {
+    const h = harness()
+    const handle = open(h)
+    const never = deferred()
+    expect(await codeOf(handle.enqueue(() => never.promise, { timeoutMs: 10 }))).toBe('TASK_TIMEOUT')
+  })
+
+  it('records queue wait and peak depth through the health seam, and survives a throwing recorder', async () => {
+    const waits: number[] = []
+    const peaks: number[] = []
+    let clock = 1_000
+    const h = harness({
+      queueHealth: {
+        recordLatency: (_id, ms) => void waits.push(ms),
+        observePeak: (_id, value) => void peaks.push(value)
+      },
+      now: () => clock
+    })
+    const handle = open(h)
+    const gate = deferred()
+    const first = handle.enqueue(() => gate.promise)
+    const second = handle.enqueue(() => 'second')
+    await flush()
+    clock += 250
+    gate.resolve()
+    await Promise.all([first, second])
+    expect(peaks).toEqual([1, 2])
+    expect(waits).toEqual([0, 250])
+
+    const broken = harness({
+      queueHealth: {
+        recordLatency: () => {
+          throw new Error('recorder down')
+        },
+        observePeak: () => {
+          throw new Error('recorder down')
+        }
+      }
+    })
+    await expect(open(broken).enqueue(() => 'still runs')).resolves.toBe('still runs')
+  })
+
+  it('does not count a refused submit as a depth the queue reached', async () => {
+    const peaks: number[] = []
+    const h = harness({ queueHealth: { recordLatency: () => undefined, observePeak: (_id, v) => void peaks.push(v) } })
+    const handle = open(h)
+    const gate = deferred()
+    const held = [handle.enqueue(() => gate.promise), handle.enqueue(() => 1), handle.enqueue(() => 2)]
+    await codeOf(handle.enqueue(() => 3))
+    expect(Math.max(...peaks)).toBe(3)
+    gate.resolve()
+    await Promise.all(held)
+  })
+})

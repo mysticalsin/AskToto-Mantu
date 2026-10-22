@@ -116,6 +116,8 @@ function setup(
     MAX_TRANSIENT_RETRIES: 3,
     MAX_ASK_RETRY_WAIT_MS: 12_000,
     win: { webContents: { send } },
+    // G14: the attempt publishes through its queue turn; a live turn forwards to the window unchanged.
+    turn: { send },
     IPC: { streamDelta: 'delta', streamError: 'error', streamDone: 'done', streamMeta: 'meta' },
     // The refresh closure is outside this extracted completion region. Keep its transport boundary explicit.
     createStream,

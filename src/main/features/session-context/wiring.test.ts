@@ -145,4 +145,14 @@ describe('bindMeetingContexts', () => {
     unconfigured.contexts.onSegmentDelivered(owner(), event)
     expect(read(unconfigured)).toBe('THEM: hello from relay')
   })
+
+  it('hands the queue-health seam through to the meeting queue (G12 plugs in here)', async () => {
+    const peaks: number[] = []
+    const w = setup({
+      queueHealth: { recordLatency: () => undefined, observePeak: (_id, value) => void peaks.push(value) }
+    })
+    w.contexts.onSegmentDelivered(owner(), event)
+    await w.contexts.registry.acquire(FRAME, 'conversation')!.enqueue(() => 'ran')
+    expect(peaks).toEqual([1])
+  })
 })

@@ -3,6 +3,7 @@ import { join } from 'node:path'
 import ts from 'typescript'
 import { describe, expect, it, vi } from 'vitest'
 import { sourceIndexOf } from '../../scripts/lib/source-layout'
+import { readModuleSource } from '../test-helpers/module-source'
 import { createListeningStateHandler } from './listening-state-ipc'
 import { calendarToday } from './calendar'
 import { getGraphToken } from './auth'
@@ -264,11 +265,16 @@ describe('AUDIT-10 — askStart never forwards Error.message to the overlay', ()
     // The outer catch and the deferred (async brain-proof) dispatch share one failure sender, so the
     // constant-sentence rule is asserted on that sender and the catch must delegate to it unchanged.
     expect(body.slice(body.lastIndexOf('} catch (err)'))).toMatch(/^\} catch \(err\) \{\s*failAskStart\(err\)\s*\}/)
-    const catchBlock = sliceBetween('const failAskStart = (err: unknown): void => {', '    try {', body)
-    expect(catchBlock).toMatch(/isModeSkillIntegrityError\(err\)/)
-    expect(catchBlock).toMatch(/'Could not start the answer\.'/)
-    expect(catchBlock).not.toMatch(/e\.message/)
-    expect(catchBlock).toMatch(/\? err instanceof Error\s*\? err\.message/)
+    // G14: the sender is the turn registry's `fail`, fed the message `askStartFailureMessage` derives.
+    expect(body).toMatch(
+      /const failAskStart = \(err: unknown\): void => askTurns\.fail\(id, askStartFailureMessage\(err\)\)/
+    )
+    const message = readModuleSource(__dirname, './features/session-context/ask-turn').text
+    const catchBlock = message.slice(message.indexOf('export const askStartFailureMessage'))
+    expect(catchBlock.slice(0, 400)).toMatch(/isModeSkillIntegrityError\(err\)/)
+    expect(catchBlock.slice(0, 400)).toMatch(/'Could not start the answer\.'/)
+    expect(catchBlock.slice(0, 400)).not.toMatch(/e\.message/)
+    expect(catchBlock.slice(0, 400)).toMatch(/\? \(err instanceof Error \? err\.message/)
   })
 })
 

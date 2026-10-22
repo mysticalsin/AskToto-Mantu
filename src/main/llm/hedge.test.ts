@@ -284,7 +284,7 @@ describe('MQA-143/144: the race reports the right provider and releases its hand
   // then won, the UI's last streamMeta named the loser — the answer was attributed to a provider that
   // produced none of it.
   it('MQA-143: a losing leg never announces itself, and the winner re-asserts on its first token', () => {
-    const send = indexSrc.indexOf('win?.webContents.send(IPC.streamMeta')
+    const send = indexSrc.indexOf('turn.send(IPC.streamMeta')
     expect(send).toBeGreaterThan(-1)
     // The start-time announcement is gated on not having already lost.
     expect(indexSrc.slice(send - 220, send)).toMatch(/!race \|\| !race\.gate\.isLoser\(race\.leg\)/)
@@ -299,7 +299,7 @@ describe('MQA-143/144: the race reports the right provider and releases its hand
     // Success, the raced error, and both zero-token dead ends.
     const deletes = [...indexSrc.matchAll(/if \(race\) streams\.delete\(req\.id\)/g)]
     expect(deletes.length).toBeGreaterThanOrEqual(4)
-    const err = indexSrc.indexOf('win?.webContents.send(IPC.streamError, { id: req.id, message: friendly })')
+    const err = indexSrc.indexOf('turn.send(IPC.streamError, { id: req.id, message: friendly })')
     expect(err).toBeGreaterThan(-1)
     // Looking further back: the keep-substantial-answer branch (plus the Act 5 trial hook it also fires,
     // MQA-281) sits between the race delete and streamError — widened from 700 once noteQualifyingUse's

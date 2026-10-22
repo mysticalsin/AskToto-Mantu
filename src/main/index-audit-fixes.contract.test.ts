@@ -150,7 +150,7 @@ describe('MQA-062 — a dead CLI session stops reporting itself as connected', (
   const onError = (): string =>
     sliceBetween(
       'const failAttempt = (message: string): void => {',
-      'win?.webContents.send(IPC.streamError, { id: req.id, message: friendly })'
+      'turn.send(IPC.streamError, { id: req.id, message: friendly })'
     )
 
   it('retires the CLI connection on the SAME pre-token seam that records the auth verdict', () => {
