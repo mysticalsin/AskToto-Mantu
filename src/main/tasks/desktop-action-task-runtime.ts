@@ -52,7 +52,7 @@ export function createDesktopActionTaskBridge(): DesktopActionTaskBridge {
   })
 }
 
-type DesktopActionTaskDeps = Pick<CommandConfirmationDeps, 'execute' | 'recoverTasks'> & {
+type DesktopActionTaskDeps = Pick<CommandConfirmationDeps, 'execute' | 'recoverTasks' | 'stopTasks'> & {
   takeRecoveryNotices: DesktopActionTaskBridge['takeRecoveryNotices']
 }
 let sharedDeps: DesktopActionTaskDeps | null = null
@@ -68,6 +68,7 @@ export function desktopActionTaskDeps(): DesktopActionTaskDeps {
     sharedDeps = {
       execute: bridge.execute,
       recoverTasks: bridge.recover,
+      stopTasks: bridge.stop.bind(bridge),
       takeRecoveryNotices: bridge.takeRecoveryNotices.bind(bridge)
     }
   }

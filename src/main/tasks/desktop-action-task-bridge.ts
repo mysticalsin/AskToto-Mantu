@@ -28,13 +28,17 @@ import {
   type TaskProgressRecord,
   type TaskProgressState
 } from './task-progress'
+import { TaskScheduler, type SchedulerJob, type SchedulerLimits } from './task-scheduler'
+import { TaskSteeringInbox, type PendingSteer } from './task-steering'
+import { TaskStepLeases, type StepLease } from './task-step-lease'
 import {
   authorizeDispatch,
   cancelTask,
   createTask,
   createTaskRuntimeState,
   issueDispatchGrant,
-  recordEffectOutcome
+  recordEffectOutcome,
+  steerTask
 } from './task-state'
 
 /** One confirmed desktop command is one task. The capability is the adapter id, so a grant cannot cross actions. */
@@ -54,6 +58,36 @@ export const DESKTOP_ACTION_TASK_POLICY: TaskPolicy = {
 }
 const GRANT_TTL_MS = 10_000
 
+/**
+ * PROPOSED (ASSUMED until the owner confirms): one desktop-effect task per owner, a small read-only allowance,
+ * and a wait no longer than a confirmation lives, so a confirmed action never fires long after it was approved.
+ */
+export const DESKTOP_ACTION_SCHEDULER_LIMITS: SchedulerLimits = {
+  maxEffectPerOwner: 1,
+  maxReadOnlyPerOwner: 4,
+  maxQueuedPerOwner: 8,
+  maxQueueWaitMs: GRANT_TTL_MS
+}
+
+/**
+ * The named resources an action touches, so two tasks never act on the same app or device at once. Every desktop
+ * adapter launches or drives an app, so each is an effect job; the resource is the app it acts on.
+ */
+export function desktopActionResources(request: DesktopActionRequest): string[] {
+  switch (request.id) {
+    case 'desktop.open_notes':
+    case 'desktop.create_note':
+      return ['app:notes']
+    case 'desktop.open_arc':
+      return ['app:arc']
+    case 'desktop.google_search':
+    case 'desktop.open_x':
+      return [request.args.browser === 'arc' ? 'app:arc' : 'app:default-browser']
+    case 'desktop.photo_booth_capture':
+      return ['app:photo-booth', 'device:camera']
+  }
+}
+
 export const DESKTOP_ACTION_TASK_CODEC_LIMITS: TaskStateCodecLimits = {
   maxBytes: 1_048_576,
   maxTasks: 256,
@@ -71,11 +105,21 @@ const PROGRESS_LIMITS: TaskProgressLimits = {
 }
 
 /** Contains the action id and a denial or recovery reason only. Never request arguments (note titles, queries). */
-export type DesktopActionTaskAuditEvent = 'task.recovered' | 'task.effect_uncertain' | 'task.dispatch_denied'
+export type DesktopActionTaskAuditEvent =
+  | 'task.recovered'
+  | 'task.effect_uncertain'
+  | 'task.dispatch_denied'
+  | 'task.stopped'
 
 export interface DesktopActionTaskBridgeDeps {
   /** The envelope is the args hash and idempotency key main derived. A verified result must echo both in its receipt. */
-  execute: (request: DesktopActionRequest, envelope: ActionEnvelope) => Promise<DesktopActionResult>
+  execute: (
+    request: DesktopActionRequest,
+    envelope: ActionEnvelope,
+    /** Aborts when Stop reaches the step. It cannot take back an effect already underway: classify by receipt. */
+    signal?: AbortSignal
+  ) => Promise<DesktopActionResult>
+  scheduler?: TaskScheduler
   store: TaskStateStore
   authSessionGeneration: () => number
   /**
@@ -108,7 +152,7 @@ export interface DesktopActionTaskSnapshot {
 }
 
 type Begun =
-  | { ok: true; taskId: string; attemptId: string; owner: TaskOwner; envelope: ActionEnvelope }
+  | { ok: true; taskId: string; attemptId: string; owner: TaskOwner; envelope: ActionEnvelope; lease: StepLease }
   | { ok: false; reason: string }
 
 /** The task's arguments digest is the ActionGuard args hash: one identity for approval, task and receipt. */
@@ -186,6 +230,10 @@ export class DesktopActionTaskBridge {
   private loaded = false
   private acknowledged: Set<string> | null = null
   private tail: Promise<unknown> = Promise.resolve()
+  private readonly scheduler: TaskScheduler
+  private readonly leases = new TaskStepLeases()
+  private readonly steering = new TaskSteeringInbox()
+  private stopGeneration = 0
   private readonly now: () => number
   private readonly newId: () => string
 
@@ -195,12 +243,17 @@ export class DesktopActionTaskBridge {
   /** Bound recovery hook handed to the boot sequence. Idempotent. */
   readonly recover: () => Promise<DesktopActionTaskRecovery>
 
+  /** Bound Stop: invalidates queued work, aborts running step leases, drops pending steers. */
+  readonly stop: () => void
+
   constructor(private readonly deps: DesktopActionTaskBridgeDeps) {
     this.now = deps.now ?? Date.now
     this.newId = deps.newId ?? (() => randomBytes(16).toString('hex'))
     // Bound in the constructor, not as arrow class properties: the main bundle's bytecode step cannot
     // compile arrow functions inside class property initializers.
-    this.execute = this.run.bind(this)
+    this.scheduler = deps.scheduler ?? new TaskScheduler(DESKTOP_ACTION_SCHEDULER_LIMITS)
+    this.execute = this.schedule.bind(this)
+    this.stop = this.stopAll.bind(this)
     this.recover = this.recoverState.bind(this)
   }
 
@@ -260,7 +313,74 @@ export class DesktopActionTaskBridge {
     }))
   }
 
-  private async run(request: DesktopActionRequest, context: CommandExecutionContext): Promise<DesktopActionResult> {
+  /** Queues the confirmed command behind its owner's active task and the resources it names. */
+  private async schedule(
+    request: DesktopActionRequest,
+    context: CommandExecutionContext
+  ): Promise<DesktopActionResult> {
+    const job: SchedulerJob<DesktopActionResult> = {
+      key: context.proposalId,
+      owner: `webContents:${context.owner.webContentsId}`,
+      effect: 'effect',
+      resources: desktopActionResources(request),
+      run: (signal) => this.run(request, context, signal)
+    }
+    const queued = await this.scheduler.submit(job)
+    if (queued.status === 'ran') return queued.value
+    // Never dispatched: a clean refusal, not an unknown effect.
+    this.deps.audit?.('task.dispatch_denied', { actionId: request.id, reason: `queue_${queued.reason}` })
+    return queued.reason === 'stopped'
+      ? { id: request.id, ok: false, outcome: 'cancelled', detail: 'stopped' }
+      : failedResult(request.id, `task_denied:queue_${queued.reason}`)
+  }
+
+  /** Stop. Running steps finish settling on their own: an abort cannot prove the effect did not happen. */
+  private stopAll(): void {
+    this.stopGeneration += 1
+    const summary = this.scheduler.stop()
+    this.leases.abortAll('revoked')
+    const droppedSteers = this.steering.dropAll()
+    if (summary.queued + summary.running + droppedSteers.length > 0) {
+      this.deps.audit?.('task.stopped', {
+        queued: String(summary.queued),
+        running: String(summary.running),
+        steers: String(droppedSteers.length)
+      })
+    }
+  }
+
+  /**
+   * Steering changes a task only at a safe boundary. A task in a step is not at one, so the steer waits and is
+   * applied (G06 steerTask) the moment that step settles.
+   */
+  steer(steer: PendingSteer): Promise<{ ok: boolean; reason?: string }> {
+    return this.locked(async () => {
+      const task = this.state.tasks.get(steer.taskId)
+      if (!task) return { ok: false, reason: 'unknown_task' }
+      if (task.status === 'dispatching') return this.steering.defer(steer)
+      return this.applySteer(steer)
+    })
+  }
+
+  private async applySteer(steer: PendingSteer): Promise<{ ok: boolean; reason?: string }> {
+    const steered = steerTask(this.state, {
+      taskId: steer.taskId,
+      revision: steer.revision,
+      argumentsDigest: steer.argumentsDigest
+    })
+    if (!steered.ok) return { ok: false, reason: steered.reason }
+    this.state = steered.state
+    this.leases.sync(this.state, this.now())
+    await this.persistQuietly()
+    return { ok: true }
+  }
+
+  private async run(
+    request: DesktopActionRequest,
+    context: CommandExecutionContext,
+    signal: AbortSignal
+  ): Promise<DesktopActionResult> {
+    const generation = this.stopGeneration
     let begun: Begun
     try {
       begun = await this.begin(request, context)
@@ -274,10 +394,21 @@ export class DesktopActionTaskBridge {
       return failedResult(request.id, `task_denied:${begun.reason}`)
     }
 
+    // Stop reached the job between authorization and dispatch: nothing ran, so close the task cleanly.
+    if (signal.aborted || begun.lease.signal.aborted || generation !== this.stopGeneration) {
+      await this.locked(async () => {
+        this.recordNotApplied(begun.taskId, begun.attemptId)
+        this.leases.sync(this.state, this.now())
+        this.progress = forgetTaskProgress(this.progress, begun.taskId)
+        await this.persistQuietly()
+      })
+      return { id: request.id, ok: false, outcome: 'cancelled', detail: 'stopped' }
+    }
+
     let result: DesktopActionResult | undefined
     let outcome: EffectOutcome
     try {
-      result = await this.deps.execute(request, begun.envelope)
+      result = await this.deps.execute(request, begun.envelope, begun.lease.signal)
       outcome = classifyEffect(request, result, begun.envelope)
     } catch {
       // Thrown after dispatch began: the effect may have happened. Observe it, never retry it.
@@ -343,9 +474,14 @@ export class DesktopActionTaskBridge {
         this.state = createTaskRuntimeState()
       } else if (result.kind === 'loaded') {
         let next = result.state
-        // Nothing but an uncertain or finished record may survive a restart. A stray ready task is cancelled.
+        // Nothing but an uncertain or finished record may survive a restart. A stray ready, paused, planning or quota-paused task is cancelled.
         for (const task of next.tasks.values()) {
-          if (task.status === 'ready' || task.status === 'paused') {
+          if (
+            task.status === 'ready' ||
+            task.status === 'paused' ||
+            task.status === 'planning' ||
+            task.status === 'quota_paused'
+          ) {
             const cancelled = cancelTask(next, task.taskId)
             if (cancelled.ok) next = cancelled.state
           }
@@ -425,6 +561,10 @@ export class DesktopActionTaskBridge {
 
       this.state = pruneState(this.state, issuedAt, DESKTOP_ACTION_TASK_CODEC_LIMITS)
       if (!archiveHasRoom(this.state, DESKTOP_ACTION_TASK_CODEC_LIMITS)) return { ok: false, reason: 'task_state_full' }
+      // Check before retry: a proposal that already has an observed outcome is never dispatched a second time.
+      const prior = this.state.tasks.get(taskId)
+      if (prior?.effectOutcome === 'applied') return { ok: false, reason: 'duplicate_task' }
+      if (prior?.effectOutcome === 'uncertain') return { ok: false, reason: 'duplicate_task' }
       if (!this.dependenciesVerified(context)) return { ok: false, reason: 'dependency_not_verified' }
       // The recovered owners belong to a previous process. Only a confirmation that already passed the main-process
       // policy gate (authenticated, entitled, focused top-frame owner) can re-establish ownership; recovered
@@ -496,7 +636,10 @@ export class DesktopActionTaskBridge {
       }
 
       this.recordProgress(taskId, owner, 1, 0, 'dispatching')
-      return { ok: true, taskId, attemptId, owner, envelope }
+      const dispatching = this.state.tasks.get(taskId)
+      if (!dispatching) return { ok: false, reason: 'unknown_task' }
+      const lease = this.leases.open(dispatching, dispatching.expiresAt)
+      return { ok: true, taskId, attemptId, owner, envelope, lease }
     })
   }
 
@@ -551,12 +694,20 @@ export class DesktopActionTaskBridge {
           if (cancelled.ok) this.state = cancelled.state
         }
         this.progress = forgetTaskProgress(this.progress, begun.taskId)
+        this.leases.sync(this.state, this.now())
         if (outcome === 'uncertain') {
           this.deps.audit?.('task.effect_uncertain', { taskId: begun.taskId, actionId: request.id })
           // The person sees this result now, so a later boot does not announce it a second time.
           const acknowledged = await this.loadAcknowledgements()
           acknowledged.add(begun.taskId)
           await this.persistAcknowledgements()
+        }
+        // The step has settled: a steer that waited for this boundary is handed over now, exactly once.
+        const waiting = this.steering.take(begun.taskId)
+        if (waiting) {
+          const applied = await this.applySteer(waiting)
+          if (!applied.ok) this.deps.log?.warn(`[desktop-action-task] steer not applied (${applied.reason})`)
+          return
         }
         await this.persistQuietly()
       } catch (error) {

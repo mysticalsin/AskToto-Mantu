@@ -7,6 +7,13 @@ import {
   desktopActionArgumentsDigest,
   type DesktopActionTaskBridgeDeps
 } from './desktop-action-task-bridge'
+import {
+  DESKTOP_ACTION_TASK_CODEC_LIMITS,
+  DESKTOP_ACTION_TASK_POLICY,
+  desktopActionResources
+} from './desktop-action-task-bridge'
+import { createTask, createTaskRuntimeState, pauseTaskForQuota } from './task-state'
+import { encodeTaskRuntimeState } from './task-persistence'
 import { TASK_STORE_DECRYPT_FAILED, type TaskStateStore } from './encrypted-task-file-store'
 import type { TaskStateReadResult } from './task-persistence'
 
@@ -223,7 +230,7 @@ describe('DesktopActionTaskBridge ActionGuard (G04)', () => {
   it('hands the adapter the same args hash and idempotency key the confirmation carried', async () => {
     const { bridge, execute } = make()
     await bridge.execute(NOTES, context('p1'))
-    expect(execute).toHaveBeenCalledWith(NOTES, envelopeFor('p1'))
+    expect(execute).toHaveBeenCalledWith(NOTES, envelopeFor('p1'), expect.any(AbortSignal))
     expect(envelopeFor('p1').idempotencyKey).not.toBe(envelopeFor('p2').idempotencyKey)
   })
 
@@ -447,5 +454,184 @@ describe('DesktopActionTaskBridge restart recovery', () => {
     const { bridge, execute } = make({ log: { warn: vi.fn(), error: vi.fn() } }, store)
     expect(await bridge.execute(NOTES, context('p1'))).toMatchObject({ ok: false, outcome: 'failed' })
     expect(execute).not.toHaveBeenCalled()
+  })
+})
+
+function deferred() {
+  let release!: (value: DesktopActionResult) => void
+  const promise = new Promise<DesktopActionResult>((resolve) => {
+    release = resolve
+  })
+  return { promise, release }
+}
+const flush = async (): Promise<void> => {
+  for (let i = 0; i < 20; i += 1) await Promise.resolve()
+}
+const OPEN_ARC: DesktopActionRequest = { id: 'desktop.open_arc', args: {} }
+const CREATE_NOTE: DesktopActionRequest = { id: 'desktop.create_note', args: { title: 'a' } }
+
+describe('DesktopActionTaskBridge scheduling (G32)', () => {
+  it('names the app each action acts on', () => {
+    expect(desktopActionResources(NOTES)).toEqual(['app:notes'])
+    expect(desktopActionResources(CREATE_NOTE)).toEqual(['app:notes'])
+    expect(desktopActionResources({ id: 'desktop.google_search', args: { q: 'x', browser: 'arc' } })).toEqual([
+      'app:arc'
+    ])
+  })
+
+  it('runs one desktop effect per owner at a time, in arrival order', async () => {
+    const gates = [deferred(), deferred()]
+    const started: string[] = []
+    const { bridge } = make({
+      execute: async (request, envelope) => {
+        started.push(request.id)
+        const gate = gates[started.length - 1]!
+        await gate.promise
+        return verified(request.id, envelope)
+      }
+    })
+    const first = bridge.execute(NOTES, context('p1'))
+    const second = bridge.execute(OPEN_ARC, context('p2', 7, OPEN_ARC))
+    await flush()
+    expect(started).toEqual(['desktop.open_notes'])
+    gates[0]!.release(verifiedFor('p1'))
+    await flush()
+    expect(started).toEqual(['desktop.open_notes', 'desktop.open_arc'])
+    gates[1]!.release(verifiedFor('p2', OPEN_ARC))
+    expect((await first).outcome).toBe('verified')
+    expect((await second).outcome).toBe('verified')
+  })
+
+  it('never lets two owners act on the same app at once, but lets different apps overlap', async () => {
+    const gate = deferred()
+    const started: string[] = []
+    const { bridge } = make({
+      execute: async (request, envelope) => {
+        started.push(`${request.id}`)
+        await gate.promise
+        return verified(request.id, envelope)
+      }
+    })
+    void bridge.execute(NOTES, context('p1', 7))
+    void bridge.execute(CREATE_NOTE, context('p2', 8, CREATE_NOTE))
+    void bridge.execute(OPEN_ARC, context('p3', 9, OPEN_ARC))
+    await flush()
+    expect(started).toEqual(['desktop.open_notes', 'desktop.open_arc'])
+    gate.release(verified())
+    await flush()
+    expect(started).toContain('desktop.create_note')
+  })
+
+  it('Stop cancels queued work unrun, aborts the running lease, and still classifies the running effect by receipt', async () => {
+    const gate = deferred()
+    const signals: AbortSignal[] = []
+    const { bridge, execute } = make({
+      execute: async (request, envelope, signal) => {
+        if (signal) signals.push(signal)
+        await gate.promise
+        return verified(request.id, envelope)
+      }
+    })
+    const running = bridge.execute(NOTES, context('p1'))
+    const queued = bridge.execute(OPEN_ARC, context('p2', 7, OPEN_ARC))
+    await flush()
+    bridge.stop()
+    expect(signals[0]?.aborted).toBe(true)
+    expect(await queued).toMatchObject({ ok: false, outcome: 'cancelled', detail: 'stopped' })
+    gate.release(verifiedFor('p1'))
+    expect(await running).toEqual(verifiedFor('p1'))
+    expect(execute).not.toHaveBeenCalledWith(OPEN_ARC, expect.anything(), expect.anything())
+    expect(bridge.snapshot().find((task) => task.taskId === 'desktop-action:p1')).toMatchObject({
+      effectOutcome: 'applied'
+    })
+  })
+
+  it('refuses to retry a proposal whose effect was applied or may have happened', async () => {
+    const execute = vi.fn(async (request: DesktopActionRequest, envelope: ActionEnvelope) => {
+      if (request.id === 'desktop.open_arc') throw new Error('lost')
+      return verified(request.id, envelope)
+    })
+    const { bridge } = make({ execute })
+    expect((await bridge.execute(NOTES, context('p1'))).outcome).toBe('verified')
+    expect(await bridge.execute(NOTES, context('p1'))).toMatchObject({ detail: 'task_denied:duplicate_task' })
+    expect((await bridge.execute(OPEN_ARC, context('p2', 7, OPEN_ARC))).outcome).toBe('unknown')
+    expect(await bridge.execute(OPEN_ARC, context('p2', 7, OPEN_ARC))).toMatchObject({
+      ok: false,
+      outcome: 'failed',
+      detail: 'task_denied:duplicate_task'
+    })
+    // Nothing was dispatched by the retry; the first dispatch stays recorded as uncertain.
+    expect(bridge.snapshot().find((task) => task.taskId === 'desktop-action:p2')).toMatchObject({
+      effectOutcome: 'uncertain'
+    })
+    expect(execute).toHaveBeenCalledTimes(2)
+  })
+
+  it('holds a steer until the step settles, then hands it to G06 steerTask exactly once and never revives a finished task', async () => {
+    const gate = deferred()
+    const log = { warn: vi.fn(), error: vi.fn() }
+    const { bridge } = make({
+      log,
+      execute: async (request, envelope) => {
+        await gate.promise
+        return verified(request.id, envelope)
+      }
+    })
+    const running = bridge.execute(NOTES, context('p1'))
+    await flush()
+    const steer = { steerId: 's1', taskId: 'desktop-action:p1', revision: 2, argumentsDigest: 'd2' }
+    expect(await bridge.steer(steer)).toEqual({ ok: true })
+    expect(bridge.snapshot()[0]?.status).toBe('dispatching')
+    gate.release(verifiedFor('p1'))
+    await running
+    // A one-shot desktop task is finished once its step settles, so G06 refuses the steer: nothing is revived.
+    expect(log.warn).toHaveBeenCalledWith(expect.stringContaining('invalid_transition'))
+    expect(bridge.snapshot()[0]?.status).toBe('completed')
+    expect(await bridge.steer({ ...steer, revision: 3 })).toEqual({ ok: false, reason: 'invalid_transition' })
+  })
+
+  it('Stop drops a steer that was waiting for the boundary', async () => {
+    const gate = deferred()
+    const { bridge } = make({
+      execute: async (request, envelope) => {
+        await gate.promise
+        return verified(request.id, envelope)
+      }
+    })
+    const running = bridge.execute(NOTES, context('p1'))
+    await flush()
+    await bridge.steer({ steerId: 's1', taskId: 'desktop-action:p1', revision: 2, argumentsDigest: 'd2' })
+    bridge.stop()
+    gate.release(verifiedFor('p1'))
+    await running
+    expect(bridge.snapshot()[0]?.status).not.toBe('planning')
+  })
+
+  it('cancels planning and quota-paused tasks on restart', async () => {
+    const owner = { webContentsId: 7, frameId: 'main', isTopFrame: true, authSessionGeneration: 1, contextRevision: 3 }
+    const base = {
+      revision: 1,
+      taskType: 'desktop-action',
+      owner,
+      argumentsDigest: 'd',
+      scope: { capabilities: ['desktop.open_notes'], resources: { actions: 1 } },
+      createdAt: 1_000_000,
+      retentionMs: 60_000
+    }
+    let state = createTaskRuntimeState()
+    const a = createTask(state, { ...base, taskId: 'desktop-action:plan' }, DESKTOP_ACTION_TASK_POLICY, {
+      initialStatus: 'planning'
+    })
+    if (!a.ok) throw new Error(a.reason)
+    const b = createTask(a.state, { ...base, taskId: 'desktop-action:quota' }, DESKTOP_ACTION_TASK_POLICY)
+    if (!b.ok) throw new Error(b.reason)
+    const c = pauseTaskForQuota(b.state, 'desktop-action:quota')
+    if (!c.ok) throw new Error(c.reason)
+    state = c.state
+    const store = new MemoryStore()
+    store.serialized = encodeTaskRuntimeState(state, DESKTOP_ACTION_TASK_CODEC_LIMITS)
+    const { bridge } = make({}, store)
+    await bridge.recover()
+    expect(bridge.snapshot().map((task) => task.status)).toEqual(['cancelled', 'cancelled'])
   })
 })

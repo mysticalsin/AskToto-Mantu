@@ -23,10 +23,21 @@ export type CommandImmediateRunGate = Omit<VoiceImmediateRunInput, 'turnCurrent'
   ownerWebContentsId: number | null
 }
 
+const STOP_TASK_REASONS: ReadonlySet<string> = new Set([
+  'window_closed',
+  'window_replaced',
+  'renderer_replaced',
+  'auth_session_cleared',
+  'system_suspend',
+  'screen_locked'
+])
+
 export type CommandConfirmationDeps = {
   execute: CommandExecutor
   /** Optional boot hook: restore durable task state so interrupted dispatches surface as uncertain. */
   recoverTasks?: () => Promise<unknown>
+  /** Stop: invalidates queued tasks and aborts running step leases. Called when the owner or session goes away. */
+  stopTasks?: () => void
   isAuthenticated: () => boolean
   hasListenEntitlement: () => boolean
   getOwner: () => CommandOwner | null
@@ -55,6 +66,7 @@ type CommandConfirmationLogger = Pick<typeof import('./logger').mainLog, 'warn' 
 export class CommandConfirmation extends CommandControl {
   private readonly lifecycleState: { hooksReady: boolean }
   private readonly recoverTasks: (() => Promise<unknown>) | undefined
+  private readonly stopTasks: (() => void) | undefined
   private readonly readImmediateRunGate: () => CommandImmediateRunGate
 
   constructor(deps: CommandConfirmationDeps) {
@@ -93,6 +105,7 @@ export class CommandConfirmation extends CommandControl {
     })
     this.lifecycleState = lifecycleState
     this.recoverTasks = deps.recoverTasks
+    this.stopTasks = deps.stopTasks
     this.readImmediateRunGate = () => {
       const owner = deps.getOwner()
       const live = owner !== null && !owner.isDestroyed()
@@ -106,6 +119,18 @@ export class CommandConfirmation extends CommandControl {
         lifecycleHooksReady: lifecycleState.hooksReady,
         ownerWebContentsId: typeof id === 'number' ? id : null
       }
+    }
+  }
+
+  /**
+   * Revocation of the pending proposal also stops queued and running tasks when the owner or the session goes
+   * away. A blur or a hide does not: launching an app moves focus, and that must not cancel the work that did it.
+   */
+  override revokeForLifecycleEvent(reason: string): void {
+    try {
+      super.revokeForLifecycleEvent(reason)
+    } finally {
+      if (STOP_TASK_REASONS.has(reason)) this.stopTasks?.()
     }
   }
 
