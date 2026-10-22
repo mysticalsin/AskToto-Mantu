@@ -8,8 +8,11 @@ import {
   formatUsdEstimate,
   mapAnthropicUsage,
   mapOpenAIUsage,
+  operatorManagedSeat,
   operatorUrlConfigured,
   projectOperatorIngestMetadata,
+  resolveOperatorCredential,
+  resolveOperatorTelemetryCredential,
   shouldSendAskText,
   unsupportedCacheUsage
 } from './operator'
@@ -267,7 +270,13 @@ describe('projectOperatorIngestMetadata', () => {
   })
 
   it('drops developer-efficiency metrics from every event payload', () => {
-    const devMetrics = { graphTokens: 1200, compactionTokens: 800, indexCommit: 'abc1234', searchCount: 9, devTokens: 5000 }
+    const devMetrics = {
+      graphTokens: 1200,
+      compactionTokens: 800,
+      indexCommit: 'abc1234',
+      searchCount: 9,
+      devTokens: 5000
+    }
     const sources = [
       { id: 'ask-1', ts: 1, outcome: 'ok', inputTokens: 3, ...devMetrics },
       { event: 'rating', id: 'rate-1', rating: 'up', ...devMetrics },
@@ -327,10 +336,34 @@ describe('projectOperatorIngestMetadata', () => {
     })
     expect(Object.keys(projected ?? {}).sort()).toEqual(
       [
-        'id', 'ts', 'mode', 'skillId', 'skillVersion', 'provider', 'model', 'ttftMs', 'totalMs',
-        'inputTokens', 'outputTokens', 'cacheRead', 'cacheWrite', 'cacheUncached', 'cacheStatus',
-        'cacheTtl', 'outcome', 'questionType', 'error', 'seatHash', 'os', 'appVersion', 'hostname',
-        'ssoEmail', 'license', 'licenseId', 'licenseLast4', 'lastIndexAt'
+        'id',
+        'ts',
+        'mode',
+        'skillId',
+        'skillVersion',
+        'provider',
+        'model',
+        'ttftMs',
+        'totalMs',
+        'inputTokens',
+        'outputTokens',
+        'cacheRead',
+        'cacheWrite',
+        'cacheUncached',
+        'cacheStatus',
+        'cacheTtl',
+        'outcome',
+        'questionType',
+        'error',
+        'seatHash',
+        'os',
+        'appVersion',
+        'hostname',
+        'ssoEmail',
+        'license',
+        'licenseId',
+        'licenseLast4',
+        'lastIndexAt'
       ].sort()
     )
   })
@@ -348,13 +381,40 @@ describe('projectOperatorIngestMetadata', () => {
     return [...read].sort()
   }
 
-  const SEAT_READ_KEYS = ['seatHash', 'os', 'appVersion', 'hostname', 'ssoEmail', 'license', 'licenseId', 'licenseLast4', 'lastIndexAt']
+  const SEAT_READ_KEYS = [
+    'seatHash',
+    'os',
+    'appVersion',
+    'hostname',
+    'ssoEmail',
+    'license',
+    'licenseId',
+    'licenseLast4',
+    'lastIndexAt'
+  ]
 
   it('freezes the input keys the ask path reads: a new projected field needs an explicit change here', () => {
     const frozen = [
-      'id', 'ts', 'mode', 'skillId', 'skillVersion', 'provider', 'model', 'ttftMs', 'totalMs',
-      'inputTokens', 'outputTokens', 'cacheRead', 'cacheWrite', 'cacheUncached', 'cacheStatus',
-      'cacheTtl', 'outcome', 'questionType', 'error', ...SEAT_READ_KEYS
+      'id',
+      'ts',
+      'mode',
+      'skillId',
+      'skillVersion',
+      'provider',
+      'model',
+      'ttftMs',
+      'totalMs',
+      'inputTokens',
+      'outputTokens',
+      'cacheRead',
+      'cacheWrite',
+      'cacheUncached',
+      'cacheStatus',
+      'cacheTtl',
+      'outcome',
+      'questionType',
+      'error',
+      ...SEAT_READ_KEYS
     ]
     expect(readKeys({ id: 'ask-reads', ts: 1, graphTokens: 1, devTokens: 1 })).toEqual([...frozen, 'event'].sort())
   })
@@ -367,7 +427,18 @@ describe('projectOperatorIngestMetadata', () => {
       expect(readKeys({ event, id: `${event}-1` })).toEqual(['event', 'id', 'ts', 'minutes', ...SEAT_READ_KEYS].sort())
     }
     expect(readKeys({ event: 'crm', id: 'c-1', status: 'failed' })).toEqual(
-      ['event', 'id', 'ts', 'status', 'connector', 'attempt', 'latencyMs', 'credentialSource', 'error', ...SEAT_READ_KEYS].sort()
+      [
+        'event',
+        'id',
+        'ts',
+        'status',
+        'connector',
+        'attempt',
+        'latencyMs',
+        'credentialSource',
+        'error',
+        ...SEAT_READ_KEYS
+      ].sort()
     )
   })
 
@@ -375,7 +446,9 @@ describe('projectOperatorIngestMetadata', () => {
     expect(projectOperatorIngestMetadata({ event: 'future-event', id: 'future-1', body: 'private' })).toBeNull()
     expect(projectOperatorIngestMetadata({ event: 'rating', id: 'contains private words', rating: 'up' })).toBeNull()
     expect(projectOperatorIngestMetadata({ event: 'crm', id: 'crm-1', status: 'made-up' })).toBeNull()
-    expect(projectOperatorIngestMetadata({ id: 'ask-unknown-error', outcome: 'error', error: 'Example Customer failed' })).toMatchObject({
+    expect(
+      projectOperatorIngestMetadata({ id: 'ask-unknown-error', outcome: 'error', error: 'Example Customer failed' })
+    ).toMatchObject({
       id: 'ask-unknown-error',
       error: 'unknown'
     })
@@ -386,5 +459,43 @@ describe('cacheBadge', () => {
   it('does not treat missing as a hit', () => {
     expect(cacheBadge({ cacheStatus: 'not-reported' })).toBe('not-reported')
     expect(cacheBadge({ cacheRead: 10 })).toBe('hit')
+  })
+})
+
+describe('transport split (O08)', () => {
+  const URL_OK = 'https://operator.test'
+  const LICENCE = 'METIS-OP-1.0123456789abcdef.1.2.AAAAAAAAAAAAAAAAAAAA'
+  const none = {}
+
+  it('telemetry accepts the reporting-only licence; the managed resolver never sees it', () => {
+    const auto = { operatorUrl: URL_OK, operatorReportingToken: LICENCE }
+    expect(resolveOperatorTelemetryCredential(auto, none)).toBe(LICENCE)
+    expect(resolveOperatorCredential(auto, none)).toBe('')
+    expect(operatorManagedSeat(auto, 'reporting', none)).toBe(false)
+  })
+
+  it('an admin licence or legacy secret is managed whatever the tier', () => {
+    expect(operatorManagedSeat({ operatorUrl: URL_OK, operatorLicenseToken: LICENCE }, null, none)).toBe(true)
+    expect(
+      operatorManagedSeat(
+        { operatorUrl: URL_OK, operatorLicenseToken: LICENCE, operatorLicenseOrigin: 'admin' },
+        'reporting',
+        none
+      )
+    ).toBe(true)
+    expect(operatorManagedSeat({ operatorUrl: URL_OK, operatorIngestSecret: 'legacy' }, 'reporting', none)).toBe(true)
+  })
+
+  it('an auto licence in the managed slot is managed only while the confirmed tier is a real tier', () => {
+    const promoted = { operatorUrl: URL_OK, operatorLicenseToken: LICENCE, operatorLicenseOrigin: 'sso' as const }
+    expect(operatorManagedSeat(promoted, 'metis', none)).toBe(true)
+    expect(operatorManagedSeat(promoted, 'metis-light', none)).toBe(true)
+    expect(operatorManagedSeat(promoted, 'reporting', none)).toBe(false)
+    expect(operatorManagedSeat(promoted, null, none)).toBe(false)
+  })
+
+  it('an unconfigured install is not managed', () => {
+    expect(operatorManagedSeat({ operatorUrl: URL_OK }, null, none)).toBe(false)
+    expect(operatorManagedSeat({}, null, none)).toBe(false)
   })
 })

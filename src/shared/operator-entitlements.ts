@@ -10,11 +10,11 @@ import { isConnectorKind, type ConnectorKind } from './operator-connectors'
 
 // ── Heartbeat response additions ──────────────────────────────────────────────────────────────────
 
-export const OPERATOR_TIERS = ['metis', 'metis-light'] as const
+export const OPERATOR_TIERS = ['metis', 'metis-light', 'reporting'] as const
 export type OperatorTier = (typeof OPERATOR_TIERS)[number]
 
 export function parseOperatorTier(raw: unknown): OperatorTier | null {
-  return raw === 'metis' || raw === 'metis-light' ? raw : null
+  return raw === 'metis' || raw === 'metis-light' || raw === 'reporting' ? raw : null
 }
 
 export const OPERATOR_ENTITLEMENT_KEYS = [
@@ -193,7 +193,15 @@ function parseOperatorIntegration(raw: unknown): OperatorIntegration | null {
   const baseUrl = typeof rawBase === 'string' && rawBase.trim() ? rawBase.trim() : null
   const credential = typeof rawCredential === 'string' && rawCredential ? rawCredential : null
   const scopes = Array.isArray(o.scopes) ? o.scopes.filter((s): s is string => typeof s === 'string') : []
-  return { id: o.id, kind: o.kind, label: o.label, baseUrl, credential, scopes, ...(brokered ? { brokered: true as const } : {}) }
+  return {
+    id: o.id,
+    kind: o.kind,
+    label: o.label,
+    baseUrl,
+    credential,
+    scopes,
+    ...(brokered ? { brokered: true as const } : {})
+  }
 }
 
 export interface OperatorIntegrationsResponse {

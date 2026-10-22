@@ -10,7 +10,7 @@
  * just the impure glue: read/write settings, expose the in-memory snapshot, and offer one `operatorGate`
  * call that every gated action in main uses.
  */
-import { operatorUrlConfigured, resolveOperatorBaseUrl, resolveOperatorCredential } from '@shared/operator'
+import { resolveOperatorBaseUrl, resolveOperatorCredential } from '@shared/operator'
 import {
   emptyOperatorEntitlements,
   operatorGate as pureOperatorGate,
@@ -20,6 +20,7 @@ import {
   type OperatorEntitlements,
   type OperatorGateResult
 } from '@shared/operator-entitlements'
+import { operatorManaged } from './operator-seat'
 import { getSettings, setSettings } from './store'
 
 let memorySnapshot: OperatorEntitlementSnapshot | null = null
@@ -48,7 +49,11 @@ function settingsToSnapshot(s: {
   operatorEntitlementsAt: number
 }): OperatorEntitlementSnapshot | null {
   if (!s.operatorEntitlementsAt) return null
-  return { tier: s.operatorTier, entitlements: s.operatorEntitlements ?? emptyOperatorEntitlements(), at: s.operatorEntitlementsAt }
+  return {
+    tier: s.operatorTier,
+    entitlements: s.operatorEntitlements ?? emptyOperatorEntitlements(),
+    at: s.operatorEntitlementsAt
+  }
 }
 
 /** In-memory first (this session's own heartbeats), falling back to the persisted copy for the window
@@ -81,15 +86,11 @@ export function recordOperatorHeartbeatResult(ok: boolean, json: unknown, now: n
   }
 }
 
-function isOperatorConfigured(s: { operatorUrl?: string; operatorIngestSecret?: string; operatorLicenseToken?: string }): boolean {
-  return operatorUrlConfigured(s) && !!resolveOperatorCredential(s)
-}
-
 /** The one gate every gated action in main consults. Reads live settings each call (cheap, in-memory
  *  store) so a mid-session Operator URL/secret change or license activation takes effect immediately. */
 export function operatorGate(feature: OperatorEntitlementKey, now: number = Date.now()): OperatorGateResult {
   const s = getSettings()
-  return pureOperatorGate(feature, isOperatorConfigured(s), currentSnapshot(), now)
+  return pureOperatorGate(feature, operatorManaged(s), currentSnapshot(), now)
 }
 
 /** Convenience boolean form for call sites that don't need the refusal reason (e.g. filtering a list). */

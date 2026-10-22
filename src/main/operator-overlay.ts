@@ -1,6 +1,7 @@
 import { inspectBundleResponse } from '@shared/bundle-response'
 import { HUMANIZER_SKILL_ID, isBuiltinConversationMode, type ModeSkillId } from '@shared/mode-skills'
-import { operatorUrlConfigured, resolveOperatorBaseUrl, resolveOperatorCredential } from '@shared/operator'
+import { resolveOperatorBaseUrl } from '@shared/operator'
+import { operatorManagedCredential } from './operator-seat'
 import { applyOverlaySkillFile } from './mode-skills'
 import { hashOperatorId, operatorHmacHeaders } from './operator-hmac-sign'
 import { getDurableMachineId } from './license'
@@ -45,7 +46,7 @@ function resolveUrl(settings: OverlayRuntimeSettings, env = process.env): string
 }
 
 function resolveSecret(settings: OverlayRuntimeSettings, env = process.env): string {
-  return resolveOperatorCredential(settings, env)
+  return operatorManagedCredential(settings, env)
 }
 
 function isOverlaySkillId(id: string): id is ModeSkillId {
@@ -55,7 +56,7 @@ function isOverlaySkillId(id: string): id is ModeSkillId {
 export async function pullOperatorSkillManifest(settings: OverlayRuntimeSettings): Promise<number> {
   const url = resolveUrl(settings)
   const secret = resolveSecret(settings)
-  if (!operatorUrlConfigured(settings) || !secret) {
+  if (!url || !secret) {
     invalidateManifests()
     return 0
   }
@@ -76,7 +77,9 @@ export async function pullOperatorSkillManifest(settings: OverlayRuntimeSettings
   const headers = operatorHmacHeaders(secret, hashOperatorId(machineId), '')
   try {
     const res = await fetchImpl(`${url}/v1/skills/manifest`, {
-      method: 'GET', headers, redirect: 'manual',
+      method: 'GET',
+      headers,
+      redirect: 'manual',
       signal: AbortSignal.any([abort.signal, AbortSignal.timeout(15_000)])
     })
     const text = await res.text()
@@ -135,7 +138,7 @@ export function applySignedSkillPack(token: string, publicKeyRaw?: string): bool
 export function startOperatorOverlayPoll(getSettings: () => OverlayRuntimeSettings): void {
   stopOperatorOverlayPoll()
   const settings = getSettings()
-  if (!operatorUrlConfigured(settings) || !resolveSecret(settings)) return
+  if (!resolveUrl(settings) || !resolveSecret(settings)) return
   void pullOperatorSkillManifest(settings).catch((e) => mainLog.warn('[operator] manifest poll failed:', e))
   pollTimer = setInterval(() => {
     void pullOperatorSkillManifest(getSettings()).catch((e) => mainLog.warn('[operator] manifest poll failed:', e))

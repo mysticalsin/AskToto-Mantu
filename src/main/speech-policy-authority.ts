@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto'
 import { performance } from 'node:perf_hooks'
 import { OPERATOR_LICENSE_MAX, OPERATOR_LICENSE_MAX_DAYS, parseOperatorLicense } from '@shared/operator-license'
+import { operatorReportingAllowed } from './operator-reporting-policy'
 import { resolveOperatorBaseUrl } from '@shared/operator'
 import type { ModelPolicyDocument } from '@shared/model-policy'
 import { hashOperatorId } from './operator-hmac-sign'
@@ -127,7 +128,10 @@ export function resolveSpeechPolicyIdentity(
   return { origin, credentialDigest, deviceIdHash, scopeKey, licenseToken }
 }
 
+/** Speech authority applies only to a managed seat. An auto reporting seat holds no licence in these settings
+ *  and the admin kill switch turns the whole Operator off, so both read as unconfigured, as they do today. */
 export function speechPolicyIsConfigured(settings: SpeechPolicyIdentitySettings): boolean {
+  if (!operatorReportingAllowed()) return false
   return Boolean(
     settings.operatorUrl?.trim() || settings.operatorIngestSecret?.trim() || settings.operatorLicenseToken?.trim()
   )

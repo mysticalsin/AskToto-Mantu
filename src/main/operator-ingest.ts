@@ -3,10 +3,8 @@ import { hostname as osHostname } from 'node:os'
 import { filterFundedProviders } from '@shared/ask-routing'
 import { inspectBundleResponse } from '@shared/bundle-response'
 import {
-  operatorUrlConfigured,
   projectOperatorIngestMetadata,
   resolveOperatorBaseUrl,
-  resolveOperatorCredential,
   type AskLogLine,
   type StreamCacheUsage
 } from '@shared/operator'
@@ -20,7 +18,15 @@ import { lastIndexedAt } from './brain/intelligence-index'
 import { hashOperatorId, operatorHmacHeaders } from './operator-hmac-sign'
 import { mainLog } from './logger'
 import type { OperatorCrmEvent } from './operator-crm'
-import { drainOperatorQueue, enqueueOperatorItem, type QueueSendResult } from './operator-queue'
+import { drainOperatorQueue, enqueueOperatorItem, enqueuePreEnrolItem, type QueueSendResult } from './operator-queue'
+import {
+  operatorManaged,
+  operatorManagedTransport,
+  operatorReportingOnlySeat,
+  operatorTelemetryCredential,
+  operatorTelemetryTransport
+} from './operator-seat'
+import { operatorReportingAllowed } from './operator-reporting-policy'
 import {
   operatorEntitled,
   recordOperatorHeartbeatResult,
@@ -57,6 +63,14 @@ export interface OperatorRuntimeSettings {
   /** Operator seat license (METIS-OP-1) jti/last4, once activated (operator-license-activate.ts). */
   operatorLicenseJti?: string
   operatorLicenseLast4?: string
+  /** Zero-config enrolment (O07/O08): the reporting-only licence, its origin, the persisted state and the
+   *  last confirmed tier. Absent on settings objects built before enrolment existed. */
+  operatorReportingToken?: string
+  operatorReportingJti?: string
+  operatorReportingLast4?: string
+  operatorLicenseOrigin?: 'admin' | 'sso' | 'token' | null
+  operatorEnrollState?: 'unenrolled' | 'enrolled' | 'revoked'
+  operatorTier?: string | null
 }
 
 let heartbeatTimer: ReturnType<typeof setInterval> | null = null
@@ -96,8 +110,9 @@ function resolveUrl(settings: OperatorRuntimeSettings, env = process.env): strin
   return resolveOperatorBaseUrl(settings, env)
 }
 
+/** Telemetry credential: any licence or secret, including the reporting-only auto-enrolled one. */
 function resolveSecret(settings: OperatorRuntimeSettings, env = process.env): string {
-  return resolveOperatorCredential(settings, env)
+  return operatorTelemetryCredential(settings, env)
 }
 
 function osLabel(): 'darwin' | 'win' | string {
@@ -173,8 +188,8 @@ function seatMeta(settings: OperatorRuntimeSettings): Partial<SeatMeta> {
     // PLAN.md P2.2b #1: only present once this seat activated an Operator license — buildSeatMeta
     // already sanitizes/validates both (16-hex jti, >=4-char last4), so an unactivated seat (both
     // fields '') simply omits them, exactly like every other optional field here.
-    licenseId: settings.operatorLicenseJti,
-    licenseLast4: settings.operatorLicenseLast4
+    licenseId: settings.operatorLicenseJti || settings.operatorReportingJti,
+    licenseLast4: settings.operatorLicenseLast4 || settings.operatorReportingLast4
   })
   // A keyless seat is identified by the signed durable device ID. Let the Worker derive its hash from
   // that same header; a second read of a changing local ID could put a different seat hash in the body.
@@ -189,6 +204,10 @@ export interface OperatorRuntimeHooks {
   onReadinessChanged?: () => void
   /** Refresh main-owned authority metadata before every policy fetch, even an unchanged response. */
   beforePolicyRefresh?: () => Promise<void>
+  /** Runs before every heartbeat tick, including on an install with no credential yet (zero-config enrolment). */
+  beforeHeartbeat?: () => Promise<void>
+  /** Runs after every heartbeat with what the Worker confirmed or refused (enrolment promotion and revoke). */
+  afterHeartbeat?: (beat: OperatorHeartbeatOutcome) => Promise<void>
 }
 
 async function signedPost(
@@ -279,6 +298,27 @@ async function postIngestWithQueue(url: string, secret: string, bodyObj: Record<
   }
 }
 
+/** Where one ingest event goes right now. `direct` = send with the credential, `queue` = the device is not
+ *  enrolled yet so the already-projected event waits on disk, `drop` = reporting is off (kill switch), the seat
+ *  was removed by an administrator, or there is no usable address. */
+type IngestRoute = { kind: 'direct'; url: string; secret: string } | { kind: 'queue' } | { kind: 'drop' }
+
+function ingestRoute(settings: OperatorRuntimeSettings): IngestRoute {
+  const url = resolveUrl(settings)
+  if (!url || !operatorReportingAllowed()) return { kind: 'drop' }
+  const secret = resolveSecret(settings)
+  if (secret) return { kind: 'direct', url, secret }
+  return settings.operatorEnrollState === 'revoked' ? { kind: 'drop' } : { kind: 'queue' }
+}
+
+/** Send one projected `/v1/ingest` event, or hold it for enrolment. Never throws. */
+async function dispatchIngest(route: IngestRoute, bodyObj: Record<string, unknown>): Promise<void> {
+  if (route.kind === 'drop') return
+  if (route.kind === 'direct') return postIngestWithQueue(route.url, route.secret, bodyObj)
+  const projected = projectOperatorIngestMetadata(bodyObj)
+  if (projected) enqueuePreEnrolItem(queueDir(), { path: '/v1/ingest', body: projected })
+}
+
 function retryIdsFromHeartbeat(json: unknown): string[] {
   if (!json || typeof json !== 'object') return []
   const retry = (json as { retry?: unknown }).retry
@@ -306,6 +346,8 @@ export function fundedProvidersFromHeartbeat(json: unknown): string[] {
  *  (operatorEntitled('operator_keys') itself returns true in that case) — this only ever empties the
  *  list once a real Operator is configured and its license doesn't include operator_keys. */
 export function operatorFundedProviders(): string[] {
+  // An auto reporting seat, or any seat under the admin kill switch, never holds funded providers.
+  if (!operatorReportingAllowed() || operatorReportingOnlySeat(getStoreSettings())) return []
   if (!operatorEntitled('operator_keys')) return []
   return lastFundedProviders
 }
@@ -314,18 +356,17 @@ export function setOperatorFundedProvidersForTests(ids: string[]): void {
   lastFundedProviders = filterFundedProviders(ids)
 }
 
+/** Managed transport for Operator-funded asks. Null for an unconfigured or auto reporting seat. */
 export function operatorAskTransport(settings: OperatorRuntimeSettings): { url: string; secret: string } | null {
-  const url = resolveUrl(settings)
-  const secret = resolveSecret(settings)
-  if (!url || !secret) return null
-  return { url, secret }
+  return operatorManagedTransport(settings)
 }
 
 /** Confirm a candidate licence before replacing the saved credential. No outbox or local writes. */
 export async function confirmOperatorLicenseConnection(
   settings: OperatorRuntimeSettings
 ): Promise<{ ok: boolean; error?: string; confirmation?: unknown }> {
-  const transport = operatorAskTransport(settings)
+  if (!operatorReportingAllowed()) return { ok: false, error: 'Reporting is turned off by your IT administrator.' }
+  const transport = operatorTelemetryTransport(settings)
   if (!transport) return { ok: false, error: 'Set a valid Métis service address before activating.' }
   if (!getDurableMachineId()) {
     return {
@@ -366,12 +407,22 @@ export function acceptOperatorHeartbeat(json: unknown): void {
   recordOperatorHeartbeatResult(true, json)
 }
 
-export async function operatorHeartbeat(settings: OperatorRuntimeSettings): Promise<{ ok: boolean; retry: string[] }> {
+export interface OperatorHeartbeatOutcome {
+  ok: boolean
+  retry: string[]
+  /** Tier the Worker confirmed on a successful heartbeat. Lets enrolment promote or demote an auto seat. */
+  tier?: string | null
+  /** An authoritative refusal (401/403 or an explicit denial), with the Worker's error code when it sent one. */
+  denied?: { status: number; code?: string }
+}
+
+export async function operatorHeartbeat(settings: OperatorRuntimeSettings): Promise<OperatorHeartbeatOutcome> {
   const url = resolveUrl(settings)
   const secret = resolveSecret(settings)
   const generation = runtimeGeneration
-  if (!operatorUrlConfigured(settings) || !secret) return { ok: false, retry: [] }
+  if (!url || !secret) return { ok: false, retry: [] }
   if (!getDurableMachineId()) return { ok: false, retry: [] }
+  const managed = operatorManaged(settings)
   // Drain the durable outbox on every tick, BEFORE the heartbeat itself, so a just-flushed queue is
   // reflected in the {queued, dropped} counts this same heartbeat reports. Heartbeats are never queued.
   const queueReport = await drainOperatorQueue(queueDir(), Date.now(), async (path, body) => {
@@ -392,20 +443,34 @@ export async function operatorHeartbeat(settings: OperatorRuntimeSettings): Prom
       dropped: queueReport.dropped
     })
     if (generation !== runtimeGeneration) return { ok: false, retry: [] }
-    const body = res.json && typeof res.json === 'object' ? (res.json as { ok?: unknown; approved?: unknown }) : null
+    const body =
+      res.json && typeof res.json === 'object'
+        ? (res.json as { ok?: unknown; approved?: unknown; code?: unknown })
+        : null
     if (res.status === 401 || res.status === 403 || body?.ok === false || body?.approved === false) {
       // An explicit rejection is not a network outage: revoke cached grants immediately.
       lastFundedProviders = []
       resetOperatorIntegrationsState()
       recordOperatorHeartbeatResult(true, null)
-      return { ok: false, retry: [] }
+      return {
+        ok: false,
+        retry: [],
+        denied: { status: res.status, ...(typeof body?.code === 'string' ? { code: body.code } : {}) }
+      }
     }
-    if (res.ok) lastFundedProviders = fundedProvidersFromHeartbeat(res.json)
+    // Funded providers belong to a managed seat only: an auto reporting seat never holds any.
+    if (res.ok) lastFundedProviders = managed ? fundedProvidersFromHeartbeat(res.json) : []
     // PLAN.md P2.2b #2/#3: a failed heartbeat leaves the entitlements snapshot and integrations cache
     // untouched (recordOperatorHeartbeatResult no-ops on ok:false; the version refresh below is only
     // ever consulted with a real reported version, never called with a guess).
-    recordOperatorHeartbeatResult(res.ok, res.json)
-    if (res.ok) {
+    // A steady reporting seat has nothing new to persist: skip the encrypted settings write every minute.
+    const steadyReporting =
+      res.ok &&
+      !managed &&
+      settings.operatorTier === 'reporting' &&
+      parseOperatorHeartbeatEntitlements(res.json).tier === 'reporting'
+    if (!steadyReporting) recordOperatorHeartbeatResult(res.ok, res.json)
+    if (res.ok && managed) {
       maybeRefreshOperatorIntegrations(settings, parseOperatorHeartbeatEntitlements(res.json).integrationsVersion)
       const policyVersion = modelPolicyVersionFromHeartbeat(res.json)
       const currentPolicyVersion = getActiveModelPolicy(settings)?.version ?? -1
@@ -413,7 +478,11 @@ export async function operatorHeartbeat(settings: OperatorRuntimeSettings): Prom
         policyRefreshNow?.('operator-response')
       }
     }
-    return { ok: res.ok, retry: retryIdsFromHeartbeat(res.json) }
+    return {
+      ok: res.ok,
+      retry: retryIdsFromHeartbeat(res.json),
+      ...(res.ok ? { tier: parseOperatorHeartbeatEntitlements(res.json).tier } : {})
+    }
   } catch (e) {
     mainLog.warn('[operator] heartbeat failed:', e)
     return { ok: false, retry: [] }
@@ -423,12 +492,20 @@ export async function operatorHeartbeat(settings: OperatorRuntimeSettings): Prom
 export function startOperatorRuntime(getSettings: () => OperatorRuntimeSettings, hooks?: OperatorRuntimeHooks): void {
   stopOperatorRuntime()
   const settings = getSettings()
-  if (!operatorUrlConfigured(settings) || !resolveSecret(settings)) return
+  // Telemetry runs for any install with a usable address, even before it holds a credential, unless the
+  // admin kill switch is on. Everything policy-shaped below runs only for a managed seat, so an install
+  // without one behaves exactly as it did before zero-config reporting existed.
+  if (!resolveUrl(settings) || !operatorReportingAllowed()) return
+  const managedRuntime = operatorManaged(settings)
   const tick = async (): Promise<void> => {
     const generation = runtimeGeneration
+    await hooks?.beforeHeartbeat?.().catch((e) => mainLog.warn('[operator] enrolment step failed:', e))
+    if (generation !== runtimeGeneration) return
     const beat = await operatorHeartbeat(getSettings())
     if (generation !== runtimeGeneration) return
-    hooks?.onReadinessChanged?.()
+    await hooks?.afterHeartbeat?.(beat).catch((e) => mainLog.warn('[operator] post-heartbeat step failed:', e))
+    if (generation !== runtimeGeneration) return
+    if (managedRuntime) hooks?.onReadinessChanged?.()
     if (beat.retry.length && hooks?.onCrmRetry) {
       await hooks.onCrmRetry(beat.retry)
     }
@@ -489,34 +566,44 @@ export function startOperatorRuntime(getSettings: () => OperatorRuntimeSettings,
       }
     })
   }
-  policyRefreshNow = pollPolicy
-  const onFocus = (): void => pollPolicy('focus')
-  const onActivate = (): void => pollPolicy('activate')
-  const onResume = (): void => pollPolicy('resume')
-  app.on('browser-window-focus', onFocus)
-  app.on('activate', onActivate)
-  powerMonitor.on('resume', onResume)
-  policySignalUnsubscribers = [
-    () => app.removeListener('browser-window-focus', onFocus),
-    () => app.removeListener('activate', onActivate),
-    () => powerMonitor.removeListener('resume', onResume)
-  ]
-  pollPolicy('startup')
+  if (managedRuntime) {
+    policyRefreshNow = pollPolicy
+    const onFocus = (): void => pollPolicy('focus')
+    const onActivate = (): void => pollPolicy('activate')
+    const onResume = (): void => pollPolicy('resume')
+    app.on('browser-window-focus', onFocus)
+    app.on('activate', onActivate)
+    powerMonitor.on('resume', onResume)
+    policySignalUnsubscribers = [
+      () => app.removeListener('browser-window-focus', onFocus),
+      () => app.removeListener('activate', onActivate),
+      () => powerMonitor.removeListener('resume', onResume)
+    ]
+    pollPolicy('startup')
+  }
   void tick()
   // One timer at the network-watch cadence: every firing checks the OS connectivity flag (Electron has no
   // network-online event) for an offline→online edge, every POLICY_POLL_MS polls the policy, and every
   // HEARTBEAT_MS runs the heartbeat.
+  // A seat without managed standing has no policy to poll, so it ticks at the heartbeat cadence only.
   let wasOnline = net.isOnline()
   let firings = 0
-  heartbeatTimer = setInterval(() => {
-    const online = net.isOnline()
-    if (online && !wasOnline) pollPolicy('network-online')
-    wasOnline = online
-    firings += 1
-    if (firings % POLICY_POLL_TICKS !== 0) return
-    pollPolicy('interval')
-    if (firings % HEARTBEAT_TICKS === 0) void tick()
-  }, NETWORK_WATCH_MS)
+  heartbeatTimer = setInterval(
+    () => {
+      firings += 1
+      if (!managedRuntime) {
+        void tick()
+        return
+      }
+      const online = net.isOnline()
+      if (online && !wasOnline) pollPolicy('network-online')
+      wasOnline = online
+      if (firings % POLICY_POLL_TICKS !== 0) return
+      pollPolicy('interval')
+      if (firings % HEARTBEAT_TICKS === 0) void tick()
+    },
+    managedRuntime ? NETWORK_WATCH_MS : HEARTBEAT_MS
+  )
   if (typeof heartbeatTimer === 'object' && heartbeatTimer && 'unref' in heartbeatTimer) {
     heartbeatTimer.unref()
   }
@@ -580,9 +667,8 @@ export async function recordOperatorAsk(
   settings: Settings | OperatorRuntimeSettings,
   event: OperatorAskEvent
 ): Promise<void> {
-  const url = resolveUrl(settings)
-  const secret = resolveSecret(settings)
-  if (!operatorUrlConfigured(settings) || !secret) return
+  const route = ingestRoute(settings)
+  if (route.kind === 'drop') return
   // Background outputs must not steal the fallback target of a legacy answer-rating IPC.
   if (event.mode !== 'suggest' && event.mode !== 'summary' && event.mode !== 'recap') lastAskId = event.id
   const payload: Record<string, unknown> = {
@@ -612,14 +698,12 @@ export async function recordOperatorAsk(
   if (event.pathTag) {
     payload.pathTag = event.pathTag
   }
-  await postIngestWithQueue(url, secret, payload)
+  await dispatchIngest(route, payload)
 }
 
 export async function recordOperatorCrmSend(settings: OperatorRuntimeSettings, event: OperatorCrmEvent): Promise<void> {
-  const url = resolveUrl(settings)
-  const secret = resolveSecret(settings)
-  if (!operatorUrlConfigured(settings) || !secret) return
-  await postIngestWithQueue(url, secret, {
+  const route = ingestRoute(settings)
+  await dispatchIngest(route, {
     event: 'crm',
     id: event.id,
     ts: event.ts ?? Date.now(),
@@ -642,8 +726,7 @@ export async function recordOperatorRating(
   rating: 'up' | 'down',
   askId = lastAskId
 ): Promise<void> {
-  const url = resolveUrl(settings)
-  const secret = resolveSecret(settings)
-  if (!operatorUrlConfigured(settings) || !secret || !askId) return
-  await postIngestWithQueue(url, secret, { event: 'rating', id: askId, rating, ...seatMeta(settings) })
+  const route = ingestRoute(settings)
+  if (!askId) return
+  await dispatchIngest(route, { event: 'rating', id: askId, rating, ...seatMeta(settings) })
 }

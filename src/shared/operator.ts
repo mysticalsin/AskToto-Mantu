@@ -44,6 +44,62 @@ export function resolveOperatorCredential(
     : ''
 }
 
+/** Tier a zero-config auto-enrolled seat receives from the Worker: usage and health reporting only. It carries
+ *  no entitlement, so it must never turn on entitlement enforcement, model policy, funded asks or speech authority. */
+export const OPERATOR_REPORTING_TIER = 'reporting'
+
+/** Where the active Operator credential came from. `admin` = a manual or MDM licence or the legacy secret. */
+export type OperatorLicenseOrigin = 'admin' | 'sso' | 'token'
+
+/** Persisted enrolment state. `enrolling` and `disabled` are transient or policy-derived and are never stored. */
+export type OperatorEnrollState = 'unenrolled' | 'enrolled' | 'revoked'
+
+/** What the UI shows about organisation reporting. */
+export type OperatorReportingStatus = 'off-by-policy' | 'pending' | 'enrolled' | 'revoked'
+
+export interface OperatorTransportSettings {
+  operatorUrl?: string
+  operatorLicenseToken?: string
+  operatorIngestSecret?: string
+  /** Licence minted by zero-config enrolment. Kept apart from `operatorLicenseToken` so every consumer of
+   *  `resolveOperatorCredential` (entitlements, model policy, skills, speech, funded asks) sees an auto seat
+   *  exactly as it sees an unconfigured install. */
+  operatorReportingToken?: string
+  operatorLicenseOrigin?: OperatorLicenseOrigin | null
+  operatorTier?: string | null
+}
+
+/**
+ * Telemetry transport credential: heartbeat, ingest and queue drain accept ANY credential, including the
+ * reporting-only licence from zero-config enrolment. Never use this for a gate or a managed feature.
+ */
+export function resolveOperatorTelemetryCredential(
+  settings: OperatorTransportSettings,
+  env: Record<string, string | undefined> = nodeEnv()
+): string {
+  return resolveOperatorCredential(settings, env) || settings.operatorReportingToken?.trim() || ''
+}
+
+/**
+ * Managed check: true only when the seat holds a credential an organisation administrator chose (admin or MDM
+ * licence, legacy secret, env secret), or an auto-minted licence that an administrator has since upgraded to a
+ * real tier. Entitlement gates, model policy, skills, integrations, speech authority, funded asks and the
+ * Settings Operator card all ask this, never the telemetry resolver. A `reporting`-tier seat is not managed and
+ * behaves exactly like an unconfigured install.
+ */
+export function operatorManagedSeat(
+  settings: OperatorTransportSettings,
+  snapshotTier: string | null | undefined = settings.operatorTier,
+  env: Record<string, string | undefined> = nodeEnv()
+): boolean {
+  if (!operatorUrlConfigured(settings, env) || !resolveOperatorCredential(settings, env)) return false
+  const autoMinted = settings.operatorLicenseOrigin === 'sso' || settings.operatorLicenseOrigin === 'token'
+  if (autoMinted && settings.operatorLicenseToken?.trim() && !settings.operatorIngestSecret?.trim()) {
+    return !!snapshotTier && snapshotTier !== OPERATOR_REPORTING_TIER
+  }
+  return true
+}
+
 /** HTTPS Operator `/cloudflare/connect`. Null if the base is not https. */
 export function cloudflareConnectHref(
   settings: { operatorUrl?: string } | null | undefined = {},
@@ -136,7 +192,9 @@ function putDefined(target: Record<string, unknown>, key: string, value: unknown
   if (value !== undefined) target[key] = value
 }
 
-function operatorErrorClass(raw: unknown): 'transient' | 'auth' | 'rate-limit' | 'usage-cap' | 'empty-response' | 'unknown' {
+function operatorErrorClass(
+  raw: unknown
+): 'transient' | 'auth' | 'rate-limit' | 'usage-cap' | 'empty-response' | 'unknown' {
   if (typeof raw !== 'string') return 'unknown'
   const value = raw.trim().toLowerCase()
   if (/rate.?limit|\b429\b|too many requests/.test(value)) return 'rate-limit'
@@ -153,7 +211,11 @@ function projectSeatMetadata(source: Record<string, unknown>, target: Record<str
   putDefined(target, 'appVersion', metadataIdentifier(source.appVersion, 64))
   putDefined(target, 'hostname', sanitizeOperatorHostname(source.hostname) ?? undefined)
   putDefined(target, 'ssoEmail', sanitizeOperatorSsoEmail(source.ssoEmail) ?? undefined)
-  putDefined(target, 'license', typeof source.license === 'string' && LICENSE_STATES.has(source.license) ? source.license : undefined)
+  putDefined(
+    target,
+    'license',
+    typeof source.license === 'string' && LICENSE_STATES.has(source.license) ? source.license : undefined
+  )
   putDefined(
     target,
     'licenseLast4',
@@ -202,12 +264,24 @@ export function projectOperatorIngestMetadata(raw: unknown): Record<string, unkn
     }
     if (source.error !== undefined) projected.error = operatorErrorClass(source.error)
   } else {
-    putDefined(projected, 'mode', typeof source.mode === 'string' && ASK_MODES.has(source.mode) ? source.mode : undefined)
+    putDefined(
+      projected,
+      'mode',
+      typeof source.mode === 'string' && ASK_MODES.has(source.mode) ? source.mode : undefined
+    )
     putDefined(projected, 'skillId', metadataIdentifier(source.skillId, 80))
     putDefined(projected, 'skillVersion', metadataIdentifier(source.skillVersion, 40))
     putDefined(projected, 'provider', metadataIdentifier(source.provider, 48))
     putDefined(projected, 'model', metadataIdentifier(source.model, 120))
-    for (const key of ['ttftMs', 'totalMs', 'inputTokens', 'outputTokens', 'cacheRead', 'cacheWrite', 'cacheUncached']) {
+    for (const key of [
+      'ttftMs',
+      'totalMs',
+      'inputTokens',
+      'outputTokens',
+      'cacheRead',
+      'cacheWrite',
+      'cacheUncached'
+    ]) {
       putDefined(projected, key, finiteNonNegative(source[key]))
     }
     putDefined(
@@ -228,7 +302,9 @@ export function projectOperatorIngestMetadata(raw: unknown): Record<string, unkn
       typeof source.outcome === 'string' && ASK_OUTCOMES.has(source.outcome) ? source.outcome : undefined
     )
     projected.questionType =
-      typeof source.questionType === 'string' && QUESTION_TYPES.has(source.questionType) ? source.questionType : 'unknown'
+      typeof source.questionType === 'string' && QUESTION_TYPES.has(source.questionType)
+        ? source.questionType
+        : 'unknown'
     if (source.error !== undefined) projected.error = operatorErrorClass(source.error)
   }
 
@@ -241,11 +317,7 @@ export function promptCacheKey(mode: string, skillLockHash: string): string {
 }
 
 /** Cloud OpenAI only. llama-server and random OpenAI-compatible hosts are not this path. */
-export function isOpenAICloudCacheEligible(
-  providerId: string,
-  kind: string,
-  hasLlamaSlots: boolean
-): boolean {
+export function isOpenAICloudCacheEligible(providerId: string, kind: string, hasLlamaSlots: boolean): boolean {
   return providerId === 'openai' && kind === 'openai' && !hasLlamaSlots
 }
 
@@ -279,9 +351,9 @@ export function mapAnthropicUsage(usage: unknown, ttl: CacheTtl = '1h'): StreamC
     return { cacheStatus: 'not-reported', cacheTtl: ttl }
   }
   const u = usage as Record<string, unknown>
-  const creation = u.cache_creation && typeof u.cache_creation === 'object' ? (u.cache_creation as Record<string, unknown>) : null
-  const ttlWrite =
-    asInt(creation?.ephemeral_1h_input_tokens) ?? asInt(creation?.ephemeral_5m_input_tokens)
+  const creation =
+    u.cache_creation && typeof u.cache_creation === 'object' ? (u.cache_creation as Record<string, unknown>) : null
+  const ttlWrite = asInt(creation?.ephemeral_1h_input_tokens) ?? asInt(creation?.ephemeral_5m_input_tokens)
   const cacheWrite = asInt(u.cache_creation_input_tokens) ?? ttlWrite
   const cacheRead = asInt(u.cache_read_input_tokens)
   const cacheUncached = asInt(u.input_tokens)
@@ -356,8 +428,20 @@ export const LIST_PRICE_TABLE: {
   cachedInPerMTok?: number
   family: string
 }[] = [
-  { test: (m) => /@cf\/deepseek-ai\/deepseek-v4-flash/i.test(m), inputPerMTok: 0.44, outputPerMTok: 1.32, cachedInPerMTok: 0.014, family: 'Workers AI DeepSeek V4 Flash' },
-  { test: (m) => /@cf\/deepseek-ai\/deepseek-v4-pro/i.test(m), inputPerMTok: 1.32, outputPerMTok: 3.96, cachedInPerMTok: 0.044, family: 'Workers AI DeepSeek V4 Pro' },
+  {
+    test: (m) => /@cf\/deepseek-ai\/deepseek-v4-flash/i.test(m),
+    inputPerMTok: 0.44,
+    outputPerMTok: 1.32,
+    cachedInPerMTok: 0.014,
+    family: 'Workers AI DeepSeek V4 Flash'
+  },
+  {
+    test: (m) => /@cf\/deepseek-ai\/deepseek-v4-pro/i.test(m),
+    inputPerMTok: 1.32,
+    outputPerMTok: 3.96,
+    cachedInPerMTok: 0.044,
+    family: 'Workers AI DeepSeek V4 Pro'
+  },
   { test: (m) => /deepseek-v4-flash/i.test(m), inputPerMTok: 0.14, outputPerMTok: 0.28, family: 'DeepSeek V4 Flash' },
   { test: (m) => /deepseek-v4-pro/i.test(m), inputPerMTok: 0.55, outputPerMTok: 2.19, family: 'DeepSeek V4 Pro' },
   { test: (m) => /claude-opus/i.test(m), inputPerMTok: 15, outputPerMTok: 75, family: 'Claude Opus' },
@@ -414,11 +498,7 @@ export interface CostEstimate {
  * Estimate spend and cache savings from REAL fields. Returns null when cache fields were not reported
  * so the UI can hide rather than show $0.00.
  */
-export function estimateCacheCost(
-  u: StreamCacheUsage,
-  model: string,
-  provider?: string
-): CostEstimate | null {
+export function estimateCacheCost(u: StreamCacheUsage, model: string, provider?: string): CostEstimate | null {
   if (u.cacheStatus === 'n/a' || u.cacheStatus === 'not-reported') return null
   if (u.cacheRead === undefined && u.cacheWrite === undefined && u.cacheUncached === undefined) return null
   const price = listPriceFor(model)
@@ -436,7 +516,10 @@ export function estimateCacheCost(
   const readMult = isAnthropic ? CACHE_PRICE_MULT.anthropicRead : CACHE_PRICE_MULT.openaiRead
   const inputUsd = (tok: number, mult: number): number => (tok / 1_000_000) * price.inputPerMTok * mult
   const spend =
-    inputUsd(uncached, 1) + inputUsd(write, writeMult) + inputUsd(read, readMult) + (out / 1_000_000) * price.outputPerMTok
+    inputUsd(uncached, 1) +
+    inputUsd(write, writeMult) +
+    inputUsd(read, readMult) +
+    (out / 1_000_000) * price.outputPerMTok
   const fullInput = inputUsd(uncached + write + read, 1)
   const cachedInput = inputUsd(uncached, 1) + inputUsd(write, writeMult) + inputUsd(read, readMult)
   return {

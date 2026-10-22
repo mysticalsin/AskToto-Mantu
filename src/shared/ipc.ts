@@ -8,6 +8,8 @@ import type { ProviderId } from './providers'
 import { LocalVisionEvidenceSchema } from './local-ai'
 import { EntityKindSchema } from './brain'
 import { OPERATOR_LICENSE_MAX } from './operator-license'
+import { OPERATOR_TIERS } from './operator-entitlements'
+import { OPERATOR_REPORTING_SETTINGS_DEFAULTS, OperatorReportingSettingsShape } from './operator-reporting-settings'
 import { RECAP_STATUSES, recapStatusValidationError, type RecapStatus } from './recap-status'
 import { RENDERER_VIEWS } from './renderer-view'
 import { DEFAULT_PERMISSION_STATE, PermissionStateSchema } from './screen-permission'
@@ -365,6 +367,7 @@ export const IPC = {
   // Read-only snapshot of Operator entitlement/integration state for Settings — mirrors licenseStatus's
   // "local settings only, never touches the network" contract.
   operatorStatus: 'operator:status',
+  operatorReportingStatus: 'operator:reportingStatus',
   licenseActivate: 'license:activate',
   licenseStatus: 'license:status',
   licenseGate: 'license:gate',
@@ -1411,21 +1414,15 @@ export const BaseSettingsSchema = z.object({
    *  from renderer patches for the same reason as licenseLease — a plain settings patch must not be
    *  able to grant a fresh 14-day trial. */
   trialStartedAt: z.number().nullable().default(null),
-  // Operator control plane (Cloudflare Worker `metis-operator`). Empty URL = off. Not the Fly
-  // license-server and not cloudflare-proxy. Ingest secret is the HMAC shared with the Worker;
-  // it is a Wrangler secret on the server and a Settings power field here. Never commit it.
+  // Operator control plane (Cloudflare Worker `metis-operator`). Empty URL = the shipped default.
   operatorUrl: z
     .string()
     .refine((v) => v === '' || /^https:\/\//i.test(v), 'Operator URL must be an https:// URL')
     .default(''),
   operatorIngestSecret: z.string().default(''),
   sendAskText: z.boolean().default(false),
-  // Operator-issued seat license (METIS-OP-1, PLAN.md P2.2b). The pasted token is stored verbatim — it
-  // rides in the same settings.json blob as operatorIngestSecret above, so it gets the same at-rest
-  // encryption (store.ts's ATKENC2/safeStorage backend) without a bespoke secret store. Only the jti
-  // (licenseId) and last4 are telemetry. The token authenticates HTTPS requests to the Operator in a
-  // dedicated credential header; it must never appear in telemetry, renderer settings, or logs.
-  // Empty token = no license activated.
+  // Operator-issued seat license (METIS-OP-1): stored verbatim, encrypted at rest with the settings file,
+  // never in telemetry, renderer settings or logs. Empty = none activated.
   operatorLicenseToken: z.string().max(OPERATOR_LICENSE_MAX).default(''),
   /** Parsed from operatorLicenseToken at activation time (format-only; the Worker verifies the
    *  signature). 16 lowercase hex chars, or '' when no license is activated. */
@@ -1439,7 +1436,7 @@ export const BaseSettingsSchema = z.object({
   // class as licenseValid/licenseLease above) — a compromised renderer must not be able to self-grant
   // Operator entitlements. Persisted (not just in-memory) so a cold start before the first heartbeat can
   // still honour the last known grant for the grace window (operator-entitlements.ts).
-  operatorTier: z.enum(['metis', 'metis-light']).nullable().default(null),
+  operatorTier: z.enum(OPERATOR_TIERS).nullable().default(null),
   operatorEntitlements: z
     .object({
       ask: z.boolean(),
@@ -1457,6 +1454,7 @@ export const BaseSettingsSchema = z.object({
   /** Epoch ms of the last successful heartbeat that carried entitlements. 0 = never — grace window
    *  (operator-entitlements.ts) treats this the same as "no snapshot at all". */
   operatorEntitlementsAt: z.number().default(0),
+  ...OperatorReportingSettingsShape,
   /** Main-owned Screen Recording history (M2-0429); see shared/screen-permission.ts. */
   permissionState: PermissionStateSchema.default(DEFAULT_PERMISSION_STATE)
 })
@@ -1476,6 +1474,7 @@ export const PublicSettingsSchema = BaseSettingsSchema.extend({
   /** Non-secret transport readiness. Raw Operator credentials never reach the renderer. */
   operatorConfigured: z.boolean().optional(),
   operatorLegacyCredentialConfigured: z.boolean().optional(),
+  operatorReporting: z.enum(['off-by-policy', 'pending', 'enrolled', 'revoked']).optional(),
   /** Active provider is actually usable (key present AND any provider-specific setup done) — drives the
    *  "add your key" CTA so it only shows when the app genuinely can't answer yet. */
   /** MQA-261: this build shipped a Cloudflare key, so a user who removed theirs can get it back.
@@ -1733,6 +1732,7 @@ export const DEFAULT_SETTINGS: Settings = {
   operatorEntitlements: null,
   operatorIntegrationsVersion: 0,
   operatorEntitlementsAt: 0,
+  ...OPERATOR_REPORTING_SETTINGS_DEFAULTS,
   permissionState: DEFAULT_PERMISSION_STATE
 }
 

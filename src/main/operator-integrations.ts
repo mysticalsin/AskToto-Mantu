@@ -15,7 +15,8 @@
 import { hashOperatorId, operatorHmacHeaders } from './operator-hmac-sign'
 import { getDurableMachineId } from './license'
 import { inspectBundleResponse } from '@shared/bundle-response'
-import { resolveOperatorBaseUrl, resolveOperatorCredential } from '@shared/operator'
+import { resolveOperatorBaseUrl } from '@shared/operator'
+import { operatorManagedCredential } from './operator-seat'
 import {
   parseOperatorIntegrationsResponse,
   type OperatorIntegration,
@@ -138,7 +139,7 @@ async function refreshOperatorMcpTools(): Promise<void> {
         if (generation !== connectionGeneration) return
         const stillCurrent = mcpRegistry.get(id)
         if (!stillCurrent || stillCurrent.baseUrl !== reg.baseUrl || stillCurrent.credential !== reg.credential) return
-        mcpRegistry.set(id, { ...stillCurrent, tools: result.ok ? result.tools ?? [] : [] })
+        mcpRegistry.set(id, { ...stillCurrent, tools: result.ok ? (result.tools ?? []) : [] })
       } catch (e) {
         mainLog.warn(`[operator-integrations] tool discovery failed for ${reg.label}:`, e)
       }
@@ -160,7 +161,7 @@ export interface OperatorIntegrationsSettings {
 
 function useConnection(settings: OperatorIntegrationsSettings): { url: string; secret: string } | null {
   const url = resolveOperatorBaseUrl(settings)
-  const secret = resolveOperatorCredential(settings)
+  const secret = operatorManagedCredential(settings)
   const identity = url && secret ? `${url}\n${secret}` : ''
   if (identity !== connectionIdentity) {
     resetOperatorIntegrationsState()
@@ -196,7 +197,9 @@ export async function fetchOperatorIntegrations(
       const deviceId = hashOperatorId(machineId)
       const headers = operatorHmacHeaders(secret, deviceId, '')
       const res = await fetchImpl(`${url}/v1/integrations`, {
-        method: 'GET', headers, redirect: 'manual',
+        method: 'GET',
+        headers,
+        redirect: 'manual',
         signal: AbortSignal.any([abort.signal, AbortSignal.timeout(15_000)])
       })
       if (generation !== connectionGeneration) return null
@@ -323,7 +326,12 @@ export function operatorCrmCredentialFor(connectionKind: string): OperatorCrmCre
   const integration = operatorIntegrationFor(connectionKind as OperatorIntegrationKind)
   if (!integration || !integration.baseUrl || !integration.credential) return null
   const reg = mcpRegistry.get(integration.id)
-  return { endpointUrl: integration.baseUrl, apiKey: integration.credential, label: integration.label, tools: reg?.tools ?? [] }
+  return {
+    endpointUrl: integration.baseUrl,
+    apiKey: integration.credential,
+    label: integration.label,
+    tools: reg?.tools ?? []
+  }
 }
 
 /** Pure decision: which credential actually got used for a CRM push, for the ingest event's

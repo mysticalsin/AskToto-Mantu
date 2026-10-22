@@ -14,7 +14,8 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { app } from 'electron'
 import { inspectBundleResponse } from '@shared/bundle-response'
-import { resolveOperatorBaseUrl, resolveOperatorCredential } from '@shared/operator'
+import { resolveOperatorBaseUrl } from '@shared/operator'
+import { operatorManagedCredential } from './operator-seat'
 import {
   canonicalModelPolicyPayload,
   canonicalUnmanagedModelPolicyPayload,
@@ -188,7 +189,7 @@ function ensureLoadedFromDisk(secret: string, settings: ModelPolicyClientSetting
 /** The last verified policy — from this session's fetches, or from disk if nothing has been fetched
  *  yet this run. `null` means "not managed": every call site must fall back to today's defaults. */
 export function getActiveModelPolicy(settings: ModelPolicyClientSettings): ModelPolicyDocument | null {
-  const secret = resolveOperatorCredential(settings)
+  const secret = operatorManagedCredential(settings)
   if (secret) ensureLoadedFromDisk(secret, settings)
   return currentPolicy
 }
@@ -219,7 +220,7 @@ export function getVerifiedSpeechPolicySnapshot(): VerifiedSpeechPolicy | null {
 export function getSpeechPolicyAuthorityStatus(
   settings: ModelPolicyClientSettings
 ): { status: 'unconfigured'; identity: string } | SpeechPolicyAuthorityStatus {
-  if (!resolveOperatorCredential(settings)) {
+  if (!operatorManagedCredential(settings)) {
     const epoch = speechPolicyAuthority.observeIdentity(null)
     if (speechPolicyIsConfigured(settings))
       return { status: 'unverified', identity: `speech-proof:${epoch}:configured-without-credential` }
@@ -301,7 +302,7 @@ function invalidateSpeechCapture(
 
 function currentLegacyPolicyScope(fallback: ModelPolicyClientSettings): string | null {
   const settings = readSpeechPolicyIdentitySource()?.settings ?? fallback
-  const secret = resolveOperatorCredential(settings)
+  const secret = operatorManagedCredential(settings)
   return secret ? legacyPolicyScopeKey(settings, secret) : null
 }
 
@@ -350,7 +351,7 @@ async function readPolicyResponseBody(res: Response): Promise<PolicyBodyRead> {
 
 async function fetchAndApplyModelPolicy(settings: ModelPolicyClientSettings, source?: string): Promise<boolean> {
   const url = resolveOperatorBaseUrl(settings)
-  const secret = resolveOperatorCredential(settings)
+  const secret = operatorManagedCredential(settings)
   if (!url || !secret) return true
   ensureLoadedFromDisk(secret, settings)
   const requestPolicyScope = legacyPolicyScopeKey(settings, secret)

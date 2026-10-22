@@ -3,7 +3,15 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { DEFAULT_OPERATOR_URL } from '@shared/operator'
-import { operatorHeartbeat, setOperatorFetchForTests, setOperatorQueueDirForTests, stopOperatorRuntime } from './operator-ingest'
+import {
+  operatorHeartbeat,
+  recordOperatorAsk,
+  setOperatorFetchForTests,
+  setOperatorQueueDirForTests,
+  stopOperatorRuntime
+} from './operator-ingest'
+import { configureOperatorEnrollment, enrollmentTick } from './operator-enrollment'
+import { loadQueueState } from './operator-queue'
 
 vi.mock('electron', () => ({
   app: { getPath: () => '/tmp', getVersion: () => '1.8.0-test' }
@@ -20,8 +28,12 @@ vi.mock('./logger', () => ({
 
 const metadata = vi.hoisted(() => {
   const settings = {
-    operatorUrl: '', operatorIngestSecret: '', operatorTier: 'none', operatorEntitlements: null,
-    operatorEntitlementsAt: 0, operatorIntegrationsVersion: 0,
+    operatorUrl: '',
+    operatorIngestSecret: '',
+    operatorTier: 'none',
+    operatorEntitlements: null,
+    operatorEntitlementsAt: 0,
+    operatorIntegrationsVersion: 0,
     meetingsFolder: '/private/tmp/metis-operator-default-url-metadata-never-read'
   }
   return {
@@ -92,7 +104,7 @@ describe('operatorHeartbeat DEFAULT_OPERATOR_URL fallback', () => {
     expect(calls[0].url).toBe(`${DEFAULT_OPERATOR_URL}/v1/heartbeat`)
   })
 
-  it('does not POST without ingest secret even when DEFAULT resolves', async () => {
+  it('sends no heartbeat without a credential, even when DEFAULT resolves', async () => {
     const calls: string[] = []
     setOperatorFetchForTests((async (input: string | URL | Request) => {
       calls.push(String(input))
@@ -102,6 +114,52 @@ describe('operatorHeartbeat DEFAULT_OPERATOR_URL fallback', () => {
     const r = await operatorHeartbeat({ operatorUrl: '', operatorIngestSecret: '' })
     expect(r.ok).toBe(false)
     expect(calls).toHaveLength(0)
+  })
+
+  it('queues ingest before enrolment and never POSTs it (zero-config reporting, O08/O09)', async () => {
+    const calls: string[] = []
+    setOperatorFetchForTests((async (input: string | URL | Request) => {
+      calls.push(String(input))
+      return new Response('{"ok":true}', { status: 200, headers: { 'content-type': 'application/json' } })
+    }) as typeof fetch)
+
+    await recordOperatorAsk({ operatorUrl: '', operatorIngestSecret: '' }, { id: 'ask-pre-enrol', mode: 'answer' })
+    expect(calls).toHaveLength(0)
+    const queued = loadQueueState(queueDir).items
+    expect(queued).toHaveLength(1)
+    expect(queued[0]).toMatchObject({ path: '/v1/ingest', preEnrol: true })
+    expect(queued[0].body).toMatchObject({ id: 'ask-pre-enrol' })
+  })
+
+  it('enrolment POSTs only to /v1/enroll on the resolved base', async () => {
+    const calls: { url: string; method?: string }[] = []
+    configureOperatorEnrollment({
+      getSettings: () => ({ operatorUrl: '', operatorEnrollState: 'unenrolled' }),
+      now: () => 1_800_000_000_000,
+      fetch: (async (input: string | URL | Request, init?: RequestInit) => {
+        calls.push({ url: String(input), method: init?.method })
+        return new Response('{"ok":false,"code":"enroll-paused"}', {
+          status: 503,
+          headers: { 'content-type': 'application/json' }
+        })
+      }) as typeof fetch,
+      deviceId: () => 'device-hash',
+      idToken: async () => null,
+      signedIn: () => false,
+      embeddedToken: () => ({ token: 'METIS-ENR-1.kid0kid0.secretsecret', operatorUrl: DEFAULT_OPERATOR_URL }),
+      currentLicense: () => null,
+      applyAutoLicense: async () => ({ ok: false }),
+      promote: () => {},
+      demote: () => {},
+      drop: () => {},
+      revoke: () => {},
+      noteRevokedChecked: () => {},
+      appVersion: () => '2.12.0-test',
+      os: () => 'test'
+    })
+    await enrollmentTick('contract')
+    expect(calls).toEqual([{ url: `${DEFAULT_OPERATOR_URL}/v1/enroll`, method: 'POST' }])
+    configureOperatorEnrollment(null)
   })
 })
 

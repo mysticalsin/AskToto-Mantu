@@ -3,7 +3,8 @@
  * Keeps index.ts thin. Pack HOLD. OAuth LAST.
  */
 
-import { resolveOperatorBaseUrl, resolveOperatorCredential } from '@shared/operator'
+import { resolveOperatorBaseUrl } from '@shared/operator'
+import { operatorManagedCredential } from './operator-seat'
 import { createMetisCommandRuntime, type MetisCommandRuntime } from './metis-command-runtime'
 import type { PublicSettings } from '@shared/ipc'
 import type { CommandControl } from './command-control'
@@ -15,7 +16,9 @@ export function getMetisCommandRuntime(): MetisCommandRuntime | null {
 }
 
 export function ensureMetisCommandRuntime(opts: {
-  getSettings: () => PublicSettings | { operatorUrl?: string; operatorLicenseToken?: string; operatorIngestSecret?: string }
+  getSettings: () =>
+    | PublicSettings
+    | { operatorUrl?: string; operatorLicenseToken?: string; operatorIngestSecret?: string }
   commandControl?: CommandControl
   getCommandOwner?: () => { webContentsId: number } | null
   /** Optional: decisionProviders.jev from last heartbeat (Cap1). Default false = deterministic only. */
@@ -50,7 +53,7 @@ export function ensureMetisCommandRuntime(opts: {
     operatorDecideAuth: () => {
       const s = opts.getSettings()
       const base = resolveOperatorBaseUrl(s)
-      const secret = resolveOperatorCredential(s)
+      const secret = operatorManagedCredential(s)
       if (!base || !secret) return null
       // Seat uses same license/HMAC material as ask/heartbeat — never a TypeSafe key.
       return { baseUrl: base, authorizationHeader: `Bearer ${secret}` }
