@@ -113,6 +113,11 @@ describe('G16 — revocation drops pending capture work', () => {
     expect(indexSrc).toMatch(/installScreenObservationLifecycle\(powerMonitor,\s*screenObservation,\s*mainLog\)/)
   })
 
+  it('a removed display revokes, and the hover pre-capture is gated by the explicit opt-in setting', () => {
+    expect(indexSrc).toMatch(/installDisplayRemovalRevocation\(screen,\s*screenObservation,\s*mainLog\)/)
+    expect(indexSrc).toMatch(/prewarmAllowed:\s*\(\)\s*=>\s*getSettings\(\)\.screenHoverPrewarm === true/)
+  })
+
   it('the background engine reads the generation from the same observation, after reconciling', () => {
     const engine = indexSrc.slice(
       indexSrc.indexOf('const screenPreprocess: ScreenPreprocess = createScreenPreprocess({')

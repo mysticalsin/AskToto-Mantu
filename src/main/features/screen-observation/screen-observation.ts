@@ -33,12 +33,14 @@ export type ScreenRevocationReason =
   | 'screen-locked'
   | 'suspended'
   | 'session-ended'
+  | 'display-removed'
 
-export type ScreenRefusalCode = 'idle' | 'background-off' | 'locked' | 'scope-unsupported' | 'stale'
+export type ScreenRefusalCode = 'idle' | 'background-off' | 'prewarm-off' | 'locked' | 'scope-unsupported' | 'stale'
 
 const REFUSAL_MESSAGES: Record<ScreenRefusalCode, string> = {
   idle: 'Métis only looks at the screen when you ask it to.',
   'background-off': 'Background screen context is off.',
+  'prewarm-off': 'Métis does not capture the screen on hover.',
   locked: 'Métis does not look at the screen while it is locked or the computer is asleep.',
   'scope-unsupported': 'Capturing a single window is not available yet. Capture the display or a region.',
   stale: 'The screen capture was cancelled because access to the screen changed. Capture the screen again.'
@@ -87,6 +89,8 @@ export interface ScreenObservationDeps {
   screenAccess: () => string
   /** The opt-in `backgroundScreenContext` setting, read at the moment a background capture is requested. */
   backgroundAllowed: () => boolean
+  /** The opt-in `screenHoverPrewarm` setting (R-11: a hover does not capture unless the user allowed it). */
+  prewarmAllowed: () => boolean
   now?: () => number
   /** How long a whole-display frame is reused for the next ask. */
   reuseMs?: number
@@ -179,6 +183,7 @@ export function createScreenObservation(deps: ScreenObservationDeps): ScreenObse
     const tag = phase ? { phase } : {}
     reconcile()
     if (reason === 'background' && !deps.backgroundAllowed()) throw new ScreenObservationRefusedError('background-off')
+    if (reason === 'prewarm' && !deps.prewarmAllowed()) throw new ScreenObservationRefusedError('prewarm-off')
     if (locked || suspended) throw new ScreenObservationRefusedError('locked')
     if (scope.kind === 'window') throw new ScreenObservationRefusedError('scope-unsupported')
     // Private View promises Métis neither looks at nor sends the screen. A prewarm is an opportunistic

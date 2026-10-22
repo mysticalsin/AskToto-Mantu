@@ -611,7 +611,10 @@ import { installQaCaptureSource } from './qa-capture-source'
 import { resetDustConversation, prewarmDustConversation, isDustAuthError } from './llm/dust'
 import { getScreenSourcesWithRetry, isUsableScreenSource, screenCaptureUnavailableMessage } from './screen-capture'
 import { cropNormalizedRegion } from './features/screen-observation/crop'
-import { installScreenObservationLifecycle } from './features/screen-observation/lifecycle'
+import {
+  installDisplayRemovalRevocation,
+  installScreenObservationLifecycle
+} from './features/screen-observation/lifecycle'
 import { captureReasonForPhase, createScreenObservation } from './features/screen-observation/screen-observation'
 import { ScreenScopeSchema, type ScreenRegion, type ScreenScope } from '@shared/screen-observation'
 import {
@@ -4695,6 +4698,7 @@ const screenObservation = createScreenObservation({
   screenAccess: () =>
     process.platform === 'darwin' ? systemPreferences.getMediaAccessStatus('screen') : windowsScreenStatus(),
   backgroundAllowed: () => getSettings().backgroundScreenContext === true,
+  prewarmAllowed: () => getSettings().screenHoverPrewarm === true,
   audit: (event, data) => auditLog(event, data)
 })
 
@@ -9234,6 +9238,7 @@ if (!app.requestSingleInstanceLock()) {
       // Capture admission remains closed unless both suspend and lock-screen invalidation are observed.
       installInputPowerLifecycleHooks()
       installScreenObservationLifecycle(powerMonitor, screenObservation, mainLog) // lock and sleep drop pending captures
+      installDisplayRemovalRevocation(screen, screenObservation, mainLog) // a removed display drops its captures
       const bootWork = createBootWork() // M2-0031: non-first-paint fs work starts after the first show, under the pool cap
       bootWorkGate = bootWork
       configureSidecarRegistry(createSidecarRegistry(app.getPath('userData')))

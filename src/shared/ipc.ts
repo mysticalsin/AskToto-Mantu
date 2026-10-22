@@ -10,6 +10,7 @@ import { EntityKindSchema } from './brain'
 import { OPERATOR_LICENSE_MAX } from './operator-license'
 import { OPERATOR_TIERS } from './operator-entitlements'
 import { OPERATOR_REPORTING_SETTINGS_DEFAULTS, OperatorReportingSettingsShape } from './operator-reporting-settings'
+import { SCREEN_OBSERVATION_SETTINGS_DEFAULTS, ScreenObservationSettingsShape } from './screen-observation-settings'
 import { RECAP_STATUSES, recapStatusValidationError, type RecapStatus } from './recap-status'
 import { RENDERER_VIEWS } from './renderer-view'
 import { DEFAULT_PERMISSION_STATE, PermissionStateSchema } from './screen-permission'
@@ -1458,6 +1459,7 @@ export const BaseSettingsSchema = z.object({
    *  (operator-entitlements.ts) treats this the same as "no snapshot at all". */
   operatorEntitlementsAt: z.number().default(0),
   ...OperatorReportingSettingsShape,
+  ...ScreenObservationSettingsShape,
   /** Main-owned Screen Recording history (M2-0429); see shared/screen-permission.ts. */
   permissionState: PermissionStateSchema.default(DEFAULT_PERMISSION_STATE)
 })
@@ -1736,6 +1738,7 @@ export const DEFAULT_SETTINGS: Settings = {
   operatorIntegrationsVersion: 0,
   operatorEntitlementsAt: 0,
   ...OPERATOR_REPORTING_SETTINGS_DEFAULTS,
+  ...SCREEN_OBSERVATION_SETTINGS_DEFAULTS,
   permissionState: DEFAULT_PERMISSION_STATE
 }
 

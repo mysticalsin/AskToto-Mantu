@@ -33,3 +33,20 @@ export function installScreenObservationLifecycle(
     return false
   }
 }
+
+/** Subscribe to display removal: a frame or pending capture of a display that is gone cannot be trusted. */
+export function installDisplayRemovalRevocation(
+  source: { on(event: 'display-removed', listener: () => void): unknown },
+  observation: { revoke(reason: 'display-removed'): unknown },
+  log: { warn(message: string): void }
+): boolean {
+  try {
+    source.on('display-removed', () => observation.revoke('display-removed'))
+    return true
+  } catch (error) {
+    log.warn(
+      `[screen-observation] display removal signal unavailable: ${error instanceof Error ? error.message : String(error)}`
+    )
+    return false
+  }
+}

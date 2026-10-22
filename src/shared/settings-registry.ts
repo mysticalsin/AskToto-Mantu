@@ -10,6 +10,7 @@ import { z } from 'zod'
 import { BaseSettingsSchema, DEFAULT_SETTINGS } from './ipc'
 import { CLOUD_SPEECH_FEATURE } from './broker-speech-settings'
 import { OPERATOR_REPORTING_FEATURE } from './operator-reporting-settings'
+import { SCREEN_OBSERVATION_FEATURE } from './screen-observation-settings'
 import type { SettingsFeatureModule } from './settings-feature-module'
 
 export type SettingKind = 'boolean' | 'number' | 'string' | 'enum' | 'array' | 'record' | 'object' | 'union' | 'unknown'
@@ -34,7 +35,8 @@ export interface SettingEntry {
 /** Every feature module spread into BaseSettingsSchema. A new `*-settings.ts` module is added here. */
 export const SETTINGS_FEATURE_MODULES: readonly SettingsFeatureModule[] = [
   CLOUD_SPEECH_FEATURE,
-  OPERATOR_REPORTING_FEATURE
+  OPERATOR_REPORTING_FEATURE,
+  SCREEN_OBSERVATION_FEATURE
 ]
 
 const KIND = z.ZodFirstPartyTypeKind

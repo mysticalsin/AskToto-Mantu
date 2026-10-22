@@ -17,12 +17,13 @@ class PrivateViewError extends Error {
 
 type CaptureRequest = { displayId: number; region?: { x: number; y: number; width: number; height: number } }
 
-function makeHarness(init: { background?: boolean; access?: string } = {}) {
+function makeHarness(init: { background?: boolean; access?: string; prewarm?: boolean } = {}) {
   let clock = 1_000_000
   const state = {
     privateView: false,
     access: init.access ?? 'granted',
     background: init.background ?? true,
+    prewarm: init.prewarm ?? true,
     cursorDisplay: 7,
     capturedDisplay: null as number | null,
     mismatch: false,
@@ -50,6 +51,7 @@ function makeHarness(init: { background?: boolean; access?: string } = {}) {
     privateViewBlockedError: () => new PrivateViewError(),
     screenAccess: () => state.access,
     backgroundAllowed: () => state.background,
+    prewarmAllowed: () => state.prewarm,
     now: () => clock,
     audit: (event, data) => {
       audits.push({ event, data })
@@ -184,15 +186,16 @@ describe('generation is monotonic and every revocation moves it (G16)', () => {
     'signed-out',
     'screen-locked',
     'suspended',
-    'session-ended'
+    'session-ended',
+    'display-removed'
   ]
 
   it('never decreases and returns the new value from revoke()', () => {
     const h = makeHarness()
     const seen: number[] = [h.observation.generation()]
     for (const reason of reasons) seen.push(h.observation.revoke(reason))
-    expect(seen).toEqual([0, 1, 2, 3, 4, 5, 6])
-    expect(h.observation.generation()).toBe(6)
+    expect(seen).toEqual([0, 1, 2, 3, 4, 5, 6, 7])
+    expect(h.observation.generation()).toBe(7)
   })
 
   it('audits each revocation with its reason and the new generation, and nothing else', () => {
@@ -218,6 +221,7 @@ describe('a capture that was pending when access was revoked is dropped, never r
   const triggers: Array<[string, Trigger]> = [
     ['sign-out', (h) => void h.observation.revoke('signed-out')],
     ['the session ending', (h) => void h.observation.revoke('session-ended')],
+    ['a display being removed', (h) => void h.observation.revoke('display-removed')],
     ['the screen locking', (h) => h.observation.noteScreenLocked(true)],
     ['the machine suspending', (h) => h.observation.noteSuspended(true)],
     [
@@ -397,6 +401,21 @@ describe('Métis never captures while idle (G16)', () => {
       await h.observation.capture({ reason })
     }
     expect(h.captureOnce).toHaveBeenCalledTimes(4)
+  })
+
+  it('a hover pre-capture is refused unless the explicit opt-in is on; an Ask still captures (R-11)', async () => {
+    const h = makeHarness({ prewarm: false })
+    const error = await h.observation.capture({ reason: 'prewarm', phase: 'prewarm' }).catch((e) => e)
+    expect(error).toBeInstanceOf(ScreenObservationRefusedError)
+    expect(error.code).toBe('prewarm-off')
+    expect(h.captureOnce).not.toHaveBeenCalled()
+    expect(h.audits).toEqual([])
+    await h.observation.capture({ reason: 'ask' })
+    expect(h.captureOnce).toHaveBeenCalledTimes(1)
+    h.state.prewarm = true
+    h.advance(10_000)
+    await h.observation.capture({ reason: 'prewarm', phase: 'prewarm' })
+    expect(h.captureOnce).toHaveBeenCalledTimes(2)
   })
 
   it('a background capture needs the opt-in setting at the moment it is requested', async () => {
