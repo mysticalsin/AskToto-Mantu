@@ -83,6 +83,11 @@ export interface ContextHandle {
    */
   recordOutput(outputId: string): void
   /**
+   * Forgets an output recorded with `recordOutput`: a fast answer a deep stage superseded (G29). A later correction then
+   * names the deep output only, never both stages of one turn.
+   */
+  retireOutput(outputId: string): void
+  /**
    * Runs `work` as a job on this meeting's SessionQueue: one active job, at most `ASK_QUEUE_MAX_PENDING` waiting, a
    * deadline, and abort on any change that outdates the snapshot (a new transcript line does not). Resolves with the
    * work's value; rejects with a ContractError (`QUEUE_FULL`, `TASK_INVALIDATED`, `TASK_TIMEOUT`, `QUEUE_CLOSED`, ...).
@@ -560,7 +565,8 @@ export function createMeetingContextRegistry(deps: MeetingContextRegistryDeps): 
         snapshot,
         check: checkWith(context, snapshot, lines),
         enqueue: (work, options) => enqueue(context, kind, work, lines, options),
-        recordOutput: (outputId) => recordOutput(context, outputId, lines)
+        recordOutput: (outputId) => recordOutput(context, outputId, lines),
+        retireOutput: (outputId) => void context.outputs.delete(outputId)
       }
     },
 

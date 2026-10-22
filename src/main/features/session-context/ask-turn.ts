@@ -1,6 +1,8 @@
 import { ContractError } from '@shared/kernel/contract-data'
 import { IPC } from '@shared/ipc'
 import { isModeSkillIntegrityError } from '@shared/mode-skills'
+import type { CounterMetricId } from '@shared/responsiveness-metrics'
+import { anchorOf, createTurnLedger, type AskGoal, type HandoffPlan, type TurnLedger } from './ask-handoff'
 import type { AskJob, ContextHandle } from './meeting-context-registry'
 
 /** Shown when the context an answer was built from went stale while it was running (stop, permissions, meeting end). */
@@ -18,10 +20,13 @@ export const SUGGEST_JOB_TIMEOUT_MS = 30_000
 /** Answers outlive the queue default: deep reasoning and recaps legitimately stream for minutes. */
 export const ANSWER_JOB_TIMEOUT_MS = 240_000
 
-/** Why a turn ended without a terminal event of its own. Only `cancelled` is silent: the renderer already let go. */
-export type TurnStopReason = 'cancelled' | 'stale' | 'timeout' | 'closed' | 'full'
+/**
+ * Why a turn ended without a terminal event of its own. `cancelled` (the renderer already let go) and `superseded`
+ * (a deep stage took over the turn, G29) are silent.
+ */
+export type TurnStopReason = 'cancelled' | 'superseded' | 'stale' | 'timeout' | 'closed' | 'full'
 
-const MESSAGES: Record<Exclude<TurnStopReason, 'cancelled'>, string> = {
+const MESSAGES: Record<Exclude<TurnStopReason, 'cancelled' | 'superseded'>, string> = {
   stale: STALE_ANSWER_MESSAGE,
   closed: STALE_ANSWER_MESSAGE,
   timeout: ANSWER_TIMEOUT_MESSAGE,
@@ -59,6 +64,10 @@ export interface AskTurnsDeps {
     get(id: string): { abort(): void } | undefined
     delete(id: string): unknown
   }
+  /** The fast-to-deep turn ledger (G29). One is created when none is given. */
+  ledger?: TurnLedger
+  /** Counts only (G12). A sink that throws never affects an ask. */
+  metrics?: { increment(id: CounterMetricId): void }
 }
 
 export interface AskTurnRequest {
@@ -66,6 +75,11 @@ export interface AskTurnRequest {
   readonly mode: string
   /** The meeting snapshot the prompt was built from, or null when the ask has no live meeting behind it. */
   readonly handle: ContextHandle | null
+  /**
+   * The ask's goal (G29). Given, the ask joins the turn ledger: a deeper ask of a live fast stage becomes the second
+   * stage of that turn and supersedes the first. Absent, the ask is queued exactly as before.
+   */
+  readonly ask?: AskGoal
 }
 
 export interface AskTurns {
@@ -84,16 +98,27 @@ export interface AskTurns {
 interface Entry {
   readonly id: string
   state: 'queued' | 'running' | 'ended'
+  /** The terminal answer went out (G29: a delivered stage may be handed off). */
+  delivered: boolean
   release: (() => void) | null
   settleBegin: (turn: AskTurn | null) => void
 }
 
 export function createAskTurns(deps: AskTurnsDeps): AskTurns {
   const entries = new Map<string, Entry>()
+  const ledger = deps.ledger ?? createTurnLedger()
+  const count = (id: CounterMetricId): void => {
+    try {
+      deps.metrics?.increment(id)
+    } catch {
+      // a metric must never affect an ask
+    }
+  }
 
   const finish = (entry: Entry): void => {
     if (entry.state === 'ended') return
     entry.state = 'ended'
+    ledger.settle(entry.id, entry.delivered ? 'delivered' : 'ended')
     if (entries.get(entry.id) === entry) entries.delete(entry.id)
     entry.settleBegin(null)
     entry.release?.()
@@ -108,7 +133,35 @@ export function createAskTurns(deps: AskTurnsDeps): AskTurns {
     } catch {
       // a stream that cannot be stopped must not keep the slot
     }
-    if (reason !== 'cancelled') deps.send(IPC.streamError, { id: entry.id, message: MESSAGES[reason] })
+    if (reason !== 'cancelled' && reason !== 'superseded') {
+      deps.send(IPC.streamError, { id: entry.id, message: MESSAGES[reason] })
+    }
+  }
+
+  /**
+   * Joins the ask to the turn ledger. A deeper ask that keeps a live fast stage's identity takes over that turn: the
+   * fast stage is stopped silently (its slot freed before the deep stage queues) or, if it already delivered, its
+   * output is retired so a later correction names the deep output only (G29).
+   */
+  const joinTurn = (request: AskTurnRequest, ask: AskGoal): void => {
+    const plan: HandoffPlan = ledger.open({ id: request.id, ...ask }, anchorOf(request.handle))
+    if (plan.kind === 'fresh') {
+      if (plan.refused) count('handoff_refused')
+      return
+    }
+    count('handoff_started')
+    count('handoff_superseded')
+    const previous = entries.get(plan.supersedes)
+    if (previous) stop(previous, 'superseded')
+    else if (plan.supersededOutcome === 'running') {
+      try {
+        deps.streams.get(plan.supersedes)?.abort()
+        deps.streams.delete(plan.supersedes)
+      } catch {
+        // a stream that cannot be stopped must not keep the new stage from starting
+      }
+    }
+    request.handle?.retireOutput(plan.supersedes)
   }
 
   const turnFor = (entry: Entry, job: AskJob, handle: ContextHandle): AskTurn => ({
@@ -120,18 +173,25 @@ export function createAskTurns(deps: AskTurnsDeps): AskTurns {
       }
       deps.send(channel, payload)
       // A delivered answer is remembered against the lines it read, so a later correction can name it (G15).
-      if (channel === IPC.streamDone) handle.recordOutput(entry.id)
+      if (channel === IPC.streamDone) {
+        entry.delivered = true
+        handle.recordOutput(entry.id)
+      }
       if (channel === IPC.streamDone || channel === IPC.streamError) finish(entry)
       return true
     }
   })
 
   return {
-    begin({ id, mode, handle }) {
+    begin(request) {
+      const { id, mode, handle } = request
+      if (request.ask) joinTurn(request, request.ask)
       if (!handle) {
         return Promise.resolve<AskTurn>({
           send(channel, payload) {
             deps.send(channel, payload)
+            if (channel === IPC.streamDone) ledger.settle(id, 'delivered')
+            else if (channel === IPC.streamError) ledger.settle(id, 'ended')
             return true
           }
         })
@@ -139,7 +199,7 @@ export function createAskTurns(deps: AskTurnsDeps): AskTurns {
       const previous = entries.get(id)
       if (previous) stop(previous, 'cancelled')
       return new Promise<AskTurn | null>((settleBegin) => {
-        const entry: Entry = { id, state: 'queued', release: null, settleBegin }
+        const entry: Entry = { id, state: 'queued', delivered: false, release: null, settleBegin }
         entries.set(id, entry)
         handle
           .enqueue(
@@ -161,11 +221,13 @@ export function createAskTurns(deps: AskTurnsDeps): AskTurns {
     cancel(id) {
       const entry = entries.get(id)
       if (entry) stop(entry, 'cancelled')
+      ledger.settle(id, 'ended')
     },
     fail(id, message) {
       deps.send(IPC.streamError, { id, message })
       const entry = entries.get(id)
       if (entry) finish(entry)
+      ledger.settle(id, 'ended')
     }
   }
 }

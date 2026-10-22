@@ -30,7 +30,13 @@ export const COUNTER_METRICS = [
   'intervention_displayed',
   'intervention_dismissed',
   'intervention_expired',
-  'intervention_superseded'
+  'intervention_superseded',
+  'router_local_first',
+  'router_cloud_first',
+  'router_unavailable',
+  'handoff_started',
+  'handoff_superseded',
+  'handoff_refused'
 ] as const
 export const PEAK_METRICS = ['queue_depth_peak'] as const
 
@@ -114,6 +120,12 @@ export const METRIC_DEFINITIONS: Readonly<Record<MetricId, MetricDefinition>> = 
   intervention_dismissed: counter('Interventions dismissed', { owner: 'G70' }),
   intervention_expired: counter('Interventions expired', { owner: 'G70' }),
   intervention_superseded: counter('Interventions superseded', { owner: 'G70' }),
+  router_local_first: counter('Requests routed on-device first', { wired: true }),
+  router_cloud_first: counter('Requests routed to a provider first', { wired: true }),
+  router_unavailable: counter('Requests the router refused', { wired: true }),
+  handoff_started: counter('Fast-to-deep handoffs started', { wired: true }),
+  handoff_superseded: counter('Fast answers superseded by a deep one', { wired: true }),
+  handoff_refused: counter('Deeper asks run fresh, not handed off', { wired: true }),
   queue_depth_peak: {
     kind: 'peak',
     unit: 'count',

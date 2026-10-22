@@ -65,6 +65,13 @@ describe('metric catalogue', () => {
         'asks_cancelled',
         'display_receipt_ms',
         'first_partial_ms',
+        // G29: the router's decisions and the fast-to-deep handoff, all counts
+        'handoff_refused',
+        'handoff_started',
+        'handoff_superseded',
+        'router_cloud_first',
+        'router_local_first',
+        'router_unavailable',
         'suggestions_displayed',
         'suggestions_shown',
         'useful_suggestion_ms'
