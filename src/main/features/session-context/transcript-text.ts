@@ -1,30 +1,31 @@
 import type { LedgerUtterance } from '@shared/kernel/transcript-ledger'
 import type { ContextSnapshot } from '@shared/kernel/session-context'
+import type { TranscriptLine } from '@shared/transcript-line'
+import { transcriptToText } from '@shared/transcript-text'
 import { LAST_THEM_SLOT, TRANSCRIPT_SLOT } from '@shared/session-context-request'
 
 /**
- * Renders the usable transcript of a SessionContext snapshot as prompt text, in the speaker-labelled shape the
- * renderer's `transcriptToText` produced (`THEM: ...` / `YOU: ...`, one line per final). Only finals reach a
- * snapshot's `segments`; interim text never does. Pure: no I/O, no settings, no redaction (the caller redacts).
+ * Renders the usable transcript of a SessionContext snapshot as prompt text through the same joiner the renderer used
+ * (`transcriptToText`, now shared): `THEM (Alice): ...` with the speaker name when one is known, and the
+ * `[conversation switches to ...]` marker when the tagged language changes. Only finals reach a snapshot's
+ * `segments`; interim text never does. Pure: no I/O, no settings, no redaction (the caller redacts).
  */
-const labelOf = (speakerId: string): string => (speakerId === 'THEM' ? 'THEM' : speakerId === 'YOU' ? 'YOU' : 'SPEAKER')
+type Segment = LedgerUtterance & { name?: string; lang?: string }
 
-const finalsOf = (snapshot: ContextSnapshot): readonly LedgerUtterance[] =>
-  snapshot.transcript.segments as unknown as readonly LedgerUtterance[]
+const finalsOf = (snapshot: ContextSnapshot): readonly Segment[] =>
+  snapshot.transcript.segments as unknown as readonly Segment[]
 
-/** The last `maxChars` of the transcript. Walks backwards so a long meeting never builds its whole text. */
+const lineOf = (segment: Segment): TranscriptLine => ({
+  speaker: segment.speakerId === 'THEM' ? 'them' : segment.speakerId === 'YOU' ? 'you' : 'unknown',
+  text: segment.text,
+  t: segment.startMs,
+  ...(segment.name ? { name: segment.name } : {}),
+  ...(segment.lang ? { lang: segment.lang } : {})
+})
+
+/** The last `maxChars` of the transcript, cut after the labels and language markers are in, as before. */
 export function transcriptTailText(snapshot: ContextSnapshot, maxChars: number): string {
-  const segments = finalsOf(snapshot)
-  const lines: string[] = []
-  let size = 0
-  for (let index = segments.length - 1; index >= 0 && size < maxChars; index -= 1) {
-    const segment = segments[index]
-    if (!segment) continue
-    const line = `${labelOf(segment.speakerId)}: ${segment.text}`
-    lines.push(line)
-    size += line.length + 1
-  }
-  return lines.reverse().join('\n').slice(-maxChars)
+  return transcriptToText(finalsOf(snapshot).map(lineOf)).slice(-maxChars)
 }
 
 /** The most recent line the other side spoke (the fact-check claim), at most `maxChars` from its end. */

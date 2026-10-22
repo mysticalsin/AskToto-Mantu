@@ -41,7 +41,9 @@ export type LocalModelSummary = z.infer<typeof LocalModelSummarySchema>
  *  so far (the recap's own prefix), bounded by the 80,000-char local summary transcript cap. */
 export const LocalPrewarmPayloadSchema = z.union([
   z.object({ text: z.string().min(1).max(24_000), purpose: z.literal('suggest').optional() }),
-  z.object({ text: z.string().min(1).max(80_000), purpose: z.literal('summary') })
+  z.object({ text: z.string().min(1).max(80_000), purpose: z.literal('summary') }),
+  // A live-meeting warm names no text: main reads the tail from its own transcript ledger (G13).
+  z.object({ live: z.literal(true), purpose: z.literal('suggest').optional() })
 ])
 export type LocalPrewarmPayload = z.infer<typeof LocalPrewarmPayloadSchema>
 

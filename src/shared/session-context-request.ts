@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import { SESSION_OUTPUT_KINDS } from './kernel/session-context'
+import { LEDGER_ID_PATTERN } from './kernel/transcript-ledger'
 
 /**
  * Main-derived conversation context (Métis 2.12 G13, CAP-02).
@@ -49,6 +50,11 @@ export const SESSION_CONTEXT_IPC = { appendLine: 'session-context:appendLine' } 
 const StartedAtSchema = z.number().int().positive().safe()
 const LineTimeSchema = z.number().int().nonnegative().safe()
 
+/** Speaker-intelligence label and detected language, as the renderer commits them (see transcriptToText). */
+const NameSchema = z.string().max(200)
+const LangSchema = z.string().max(80)
+const UtteranceIdSchema = z.string().regex(LEDGER_ID_PATTERN)
+
 export const SessionLedgerLineSchema = z.discriminatedUnion('op', [
   z
     .object({
@@ -56,10 +62,32 @@ export const SessionLedgerLineSchema = z.discriminatedUnion('op', [
       startedAt: StartedAtSchema,
       t: LineTimeSchema,
       speaker: z.enum(['you', 'them', 'unknown']),
-      text: z.string().min(1).max(16_384)
+      text: z.string().min(1).max(16_384),
+      name: NameSchema.optional(),
+      lang: LangSchema.optional()
     })
     .strict(),
-  z.object({ op: z.literal('retract'), startedAt: StartedAtSchema, t: LineTimeSchema }).strict()
+  z.object({ op: z.literal('retract'), startedAt: StartedAtSchema, t: LineTimeSchema }).strict(),
+  // A name resolved after the line committed (a voiceprint match), or a language tag, for a renderer-committed line.
+  z
+    .object({
+      op: z.literal('label-local'),
+      startedAt: StartedAtSchema,
+      t: LineTimeSchema,
+      name: NameSchema.optional(),
+      lang: LangSchema.optional()
+    })
+    .strict(),
+  // The same for a relay segment, which main ingested itself and the renderer knows by utterance id.
+  z
+    .object({
+      op: z.literal('label-segment'),
+      startedAt: StartedAtSchema,
+      utteranceId: UtteranceIdSchema,
+      name: NameSchema.optional(),
+      lang: LangSchema.optional()
+    })
+    .strict()
 ])
 export type SessionLedgerLine = z.infer<typeof SessionLedgerLineSchema>
 

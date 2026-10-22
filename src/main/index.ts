@@ -730,7 +730,7 @@ import { registerImportAudioIpc } from './ipc/import-audio-ipc'
 import { RecoveredDraftCount } from './recovered-draft-count'
 import { registerInputCaptureIpc } from './ipc/input-capture-ipc'
 import { bindRendererResets, createOwnerSessionWiring, ownerSessionLifecycle } from './lifecycle/owner-session-wiring'
-import { applyAskContext, createAskContextGate } from './features/session-context/ask-context'
+import { applyAskContext, createAskContextGate, prewarmText } from './features/session-context/ask-context'
 import { recoverOrphanDrafts } from './features/meetings/draft-recovery'
 import { writeMeetingOnce } from './features/meetings/save-identity'
 import { holdAppSuspensionWhileVisible } from './lifecycle/overlay-suspension-hold'
@@ -7412,28 +7412,26 @@ function registerIpc(): void {
     // publicSettings().providerReady is the same "can a cloud/CLI provider actually answer" test the ask
     // path uses — when it is false, local is what will serve the next suggest, so it is worth warming.
     const purpose = parsed.data.purpose ?? 'suggest'
+    const text = prewarmText(parsed.data, { registry: owners.meetingContexts, frame: e.senderFrame })
+    if (!text) return
     if (
       !speculativeLocalWorkAllowed() ||
       !localPrewarmEligible(s, getAllowedProviders(), publicSettings().providerReady, undefined, purpose)
     )
       return
-    // Warm the EXACT same [system, user] prefix a real suggest request sends (F4 hardening) — built by
-    // the SAME helper (llm/prewarm.ts) a unit test cross-checks against buildSystem()/userText() directly,
-    // so any future drift between the live suggest path and what prewarm warms fails a test.
-    // prewarmLocal (llm/local.ts) is engine-aware: it warms whichever engine pickLocalEngine would give
-    // the next real suggest — fm serve on macOS 27+ with Apple Intelligence live, llama-server otherwise.
+    // Warm the EXACT [system, user] prefix a real suggest sends (F4), built by the same helper (llm/prewarm.ts) a
+    // unit test cross-checks. prewarmLocal (llm/local.ts) is engine-aware: it warms whichever engine
+    // pickLocalEngine would give the next real suggest (fm serve on macOS 27+, llama-server otherwise).
     const warmFailed = (err: unknown): void =>
       mainLog.warn('[local-prewarm] failed', err instanceof Error ? err.message : String(err))
     if (purpose === 'summary') {
       // M2-0430: the Stop-time warm targets the summary slot with the recap's own prefix, so the recap
       // that follows the drain starts on a loaded model instead of queueing behind a cold start.
-      const summaryMessages = buildPrewarmMessages(parsed.data.text, s, 'summary')
+      const summaryMessages = buildPrewarmMessages(text, s, 'summary')
       void prewarmLocal(s.localLlm.modelId, summaryMessages, speculativeLocalWorkAllowed, 'summary').catch(warmFailed)
       return
     }
-    void prewarmLocal(s.localLlm.modelId, buildPrewarmMessages(parsed.data.text, s), speculativeLocalWorkAllowed).catch(
-      warmFailed
-    )
+    void prewarmLocal(s.localLlm.modelId, buildPrewarmMessages(text, s), speculativeLocalWorkAllowed).catch(warmFailed)
   })
   registerWriteupIpc(assertMainWindow)
 

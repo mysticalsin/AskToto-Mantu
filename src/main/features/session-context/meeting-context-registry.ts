@@ -46,9 +46,21 @@ export interface MeetingContextRegistry {
   /** One line a renderer-side engine committed (local ASR, legacy cloud). */
   ingestLocalLine(
     frame: FrameKey,
-    line: { startedAt: number; t: number; speaker: 'you' | 'them' | 'unknown'; text: string }
+    line: {
+      startedAt: number
+      t: number
+      speaker: 'you' | 'them' | 'unknown'
+      text: string
+      name?: string
+      lang?: string
+    }
   ): boolean
   retractLocalLine(frame: FrameKey, line: { startedAt: number; t: number }): boolean
+  /** A speaker name or language tag for a line, by its local commit time or its relay utterance id. */
+  labelLine(
+    frame: FrameKey,
+    line: { startedAt: number; t?: number; utteranceId?: string; name?: string; lang?: string }
+  ): boolean
   /** A snapshot for the meeting bound to this frame, or null when none is open (or the owner changed). */
   acquire(frame: FrameKey, kind: SessionOutputKind): ContextHandle | null
   close(meetingStartedAt: number): void
@@ -72,9 +84,14 @@ interface MeetingContext {
   readonly session: SessionContext
   readonly streamEpochs: Map<string, number>
   readonly localLines: Map<number, { utteranceId: string; speaker: 'you' | 'them' | 'unknown'; text: string }>
+  /** Speaker name and language by utterance id, as the renderer reports them (a name can arrive after the line). */
+  readonly labels: Map<string, { name?: string; lang?: string }>
   localSequence: number
+  publishCount: number
   degraded: boolean
 }
+
+const MAX_LABELS = 20_000
 
 const frameOwnerOf = (frame: FrameKey): string => `${frame.processId}:${frame.routingId}`
 const sameScope = (a: MeetingScope, b: MeetingScope): boolean =>
@@ -109,12 +126,37 @@ export function createMeetingContextRegistry(deps: MeetingContextRegistryDeps): 
   /** Hands the ledger's usable finals to the SessionContext: one revision for every output. */
   const publish = (context: MeetingContext): void => {
     const snapshot = context.ledger.snapshot()
+    // The context's own revision, because a label arriving later changes the text without a ledger event.
+    context.publishCount += 1
     context.session.updateTranscript({
       scope: context.scope.scope,
-      revision: snapshot.revision,
-      segments: snapshot.segments.slice(-CONTEXT_TRANSCRIPT_WINDOW) as unknown as JsonValue[],
+      revision: context.publishCount,
+      segments: snapshot.segments.slice(-CONTEXT_TRANSCRIPT_WINDOW).map((segment) => {
+        const label = context.labels.get(segment.utteranceId)
+        return label ? { ...segment, ...label } : segment
+      }) as unknown as JsonValue[],
       interim: []
     })
+  }
+
+  /** Records a name or language for an utterance. Returns true when it changed what the context would render. */
+  const setLabel = (context: MeetingContext, utteranceId: string, label: { name?: string; lang?: string }): boolean => {
+    const previous = context.labels.get(utteranceId)
+    const next = {
+      ...previous,
+      ...(label.name?.trim() ? { name: label.name } : {}),
+      ...(label.lang ? { lang: label.lang } : {})
+    }
+    if (previous && previous.name === next.name && previous.lang === next.lang) return false
+    if (!next.name && !next.lang) return false
+    context.labels.delete(utteranceId)
+    context.labels.set(utteranceId, next)
+    while (context.labels.size > MAX_LABELS) {
+      const oldest = context.labels.keys().next().value
+      if (oldest === undefined) break
+      context.labels.delete(oldest)
+    }
+    return true
   }
 
   const close = (meetingStartedAt: number): void => {
@@ -149,7 +191,9 @@ export function createMeetingContextRegistry(deps: MeetingContextRegistryDeps): 
         session: new SessionContext({ scope: scope.scope, permissions: deps.permissions(), mode: 'meeting' }),
         streamEpochs: new Map(),
         localLines: new Map(),
+        labels: new Map(),
         localSequence: 0,
+        publishCount: 0,
         degraded: false
       }
       contexts.set(meetingStartedAt, context)
@@ -197,6 +241,7 @@ export function createMeetingContextRegistry(deps: MeetingContextRegistryDeps): 
         const sequence = context.localSequence
         const utteranceId = known ? `local:${line.t}:${sequence}` : `local:${line.t}`
         const startMs = Math.max(0, line.t - line.startedAt)
+        setLabel(context, utteranceId, line)
         const accepted = apply(context, {
           eventId: `local:${line.startedAt}:${sequence}`,
           scope: context.scope.scope,
@@ -240,6 +285,21 @@ export function createMeetingContextRegistry(deps: MeetingContextRegistryDeps): 
         })
         if (retracted) context.localLines.delete(line.t)
         return retracted
+      } catch (error) {
+        degrade(context, error)
+        return false
+      }
+    },
+
+    labelLine(frame, line) {
+      const context = open(frame, line.startedAt)
+      if (!context) return false
+      const utteranceId =
+        line.utteranceId ?? (line.t === undefined ? undefined : context.localLines.get(line.t)?.utteranceId)
+      if (!utteranceId) return false
+      try {
+        if (setLabel(context, utteranceId, line)) publish(context)
+        return true
       } catch (error) {
         degrade(context, error)
         return false

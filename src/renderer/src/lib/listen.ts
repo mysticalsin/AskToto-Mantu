@@ -25,7 +25,7 @@ import { isWindows } from './keys'
 import { compileEntityCasingCandidates, applyEntityCasingCompiled } from './entity-casing'
 import { transcriptToText } from './transcript'
 import { evictOldest } from './bounded-map'
-import { journalCommittedLine, retractCommittedLine } from './meeting-journal-seam'
+import { journalCommittedLine, labelCommittedLine, retractCommittedLine } from './meeting-journal-seam'
 import { shouldUseBundledAsr } from './asr-offline'
 import { withDiagnosedThemNote } from './screen-permission-copy'
 import { sysRetryDelayMs } from './loopback-retry'
@@ -610,15 +610,15 @@ export function useListen(
     linesRef.current = next
     setLines(next)
   }, [])
-  // Speaker Intelligence (1C.2) — attaches a name resolved AFTER the line committed (Whisper / cloud
-  // speakerEmbed round trip) to its line, identified by the `t` commitLine returned. Upgrades empty /
-  // session ("Speaker N") / unknown placeholders; never overwrites a confirmed person name.
+  // Speaker Intelligence (1C.2) — attaches a name resolved AFTER the line committed to its line (by the `t`
+  // commitLine returned), here and in main's ledger. Upgrades placeholders; never overwrites a confirmed name.
   const attachSpeakerName = useCallback((t: number, name: string): void => {
     const idx = linesRef.current.findIndex((l) => l.t === t && l.speaker === 'them' && canUpgradeSpeakerLabel(l.name))
     if (idx < 0) return
     const next = linesRef.current.slice()
     next[idx] = { ...next[idx], name }
     linesRef.current = next
+    labelCommittedLine(sessionStartedAtRef.current, next[idx])
     setLines(next)
   }, [])
   // Operator echo through loopback: drop the line here and in main's ledger.

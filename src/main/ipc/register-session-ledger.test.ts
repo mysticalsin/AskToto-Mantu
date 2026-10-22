@@ -19,7 +19,8 @@ function harness(options: { signedIn?: boolean; accept?: boolean } = {}) {
   const authorizeSender = vi.fn(() => null) as unknown as AuthorizeSender & ReturnType<typeof vi.fn>
   const registry = {
     ingestLocalLine: vi.fn(() => options.accept !== false),
-    retractLocalLine: vi.fn(() => options.accept !== false)
+    retractLocalLine: vi.fn(() => options.accept !== false),
+    labelLine: vi.fn(() => options.accept !== false)
   }
   registerSessionLedgerIpc({
     ipcMain,
@@ -91,7 +92,30 @@ describe('session-context:appendLine IPC', () => {
     })
   })
 
+  it('routes a name or language label for a local line and for a relay segment to the registry', () => {
+    const h = harness()
+    expect(h.invoke({ op: 'label-local', startedAt: STARTED, t: STARTED + 5, name: 'Alice' })).toEqual({
+      status: 'accepted'
+    })
+    expect(
+      h.invoke({ op: 'label-segment', startedAt: STARTED, utteranceId: '1:system:1:4', lang: 'Portuguese' })
+    ).toEqual({
+      status: 'accepted'
+    })
+    expect(h.registry.labelLine).toHaveBeenCalledTimes(2)
+    expect(h.registry.labelLine).toHaveBeenLastCalledWith(
+      expect.objectContaining({ processId: 7, routingId: 3 }),
+      expect.objectContaining({ utteranceId: '1:system:1:4', lang: 'Portuguese' })
+    )
+  })
+
   it.each([
+    [
+      'a label with a path-like utterance id',
+      { op: 'label-segment', startedAt: STARTED, utteranceId: '../x y', name: 'A' }
+    ],
+    ['a label carrying text', { op: 'label-local', startedAt: STARTED, t: 1, text: 'forged line' }],
+    ['an oversized name', { ...final, name: 'n'.repeat(201) }],
     ['empty text', { ...final, text: '' }],
     ['oversized text', { ...final, text: 'x'.repeat(16_385) }],
     ['bad speaker', { ...final, speaker: 'admin' }],

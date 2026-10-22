@@ -295,8 +295,8 @@ describe('renderer live-journal write seam', () => {
     expect(payload.line.speech?.segment.final).toBe(true)
     expect(payload.line.text).toBe('We agreed to ship the pilot on Tuesday')
     expect(Object.keys(payload).sort()).toEqual(['line', 'startedAt'])
-    // Main sees a relay segment itself and feeds its own ledger from it: the renderer never forwards it.
-    expect(appendSessionLedgerLine).not.toHaveBeenCalled()
+    // Main sees a relay segment itself and feeds its own ledger from it: the renderer never forwards its text.
+    for (const call of appendSessionLedgerLine.mock.calls) expect((call[0] as { op: string }).op).toBe('label-segment')
   })
 
   it('sends one append per final, in commit order', async () => {
@@ -334,11 +334,17 @@ describe('renderer live-journal write seam', () => {
     expect(renderLocal(engine).lines.some((line) => line.text === 'a local engine sentence')).toBe(true)
     expect(appendMeetingJournal).not.toHaveBeenCalled()
     // Main never sees a committed local line, so the renderer forwards it to the ledger main owns: text and
-    // identity only, never a name, and never as part of any ask.
-    expect(appendSessionLedgerLine).toHaveBeenCalledTimes(1)
-    const sent = appendSessionLedgerLine.mock.calls[0]![0] as Record<string, unknown>
+    // identity and its speaker label only, never as part of any ask.
+    // (A name that resolves after the commit, as Whisper's voiceprint round trip does, follows as a label.)
+    const calls = appendSessionLedgerLine.mock.calls.map((call) => call[0] as Record<string, unknown>)
+    expect(calls.filter((call) => call.op === 'final')).toHaveLength(1)
+    expect(calls.filter((call) => call.op !== 'final').every((call) => call.op === 'label-local')).toBe(true)
+    const sent = calls.find((call) => call.op === 'final')!
     expect(sent).toMatchObject({ op: 'final', startedAt: STARTED_AT, speaker: 'them', text: 'a local engine sentence' })
-    expect(Object.keys(sent).sort()).toEqual(['op', 'speaker', 'startedAt', 't', 'text'])
+    expect(Object.keys(sent).sort()).toEqual(expect.arrayContaining(['op', 'speaker', 'startedAt', 't', 'text']))
+    expect(
+      Object.keys(sent).every((key) => ['op', 'speaker', 'startedAt', 't', 'text', 'name', 'lang'].includes(key))
+    ).toBe(true)
   })
 
   it('never lets the bridge change capture: a rejecting, throwing, hanging or missing bridge leaves lines untouched', async () => {

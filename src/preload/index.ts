@@ -635,11 +635,9 @@ const api = {
     ipcRenderer.invoke(IPC.asrModelState),
   asrModelFetch: (): Promise<{ ok: boolean }> => ipcRenderer.invoke(IPC.asrModelFetch),
   asrModelRemove: (): Promise<{ ok: boolean }> => ipcRenderer.invoke(IPC.asrModelRemove),
-  // Fire-and-forget: keep the local sidecar's per-slot KV cache hot while a meeting is live (PLAN.md
-  // §4.4's pre-warm path). The renderer never learns the sidecar's port/key — this only ever sends
-  // transcript text; main resolves the runtime/model/session key on its own.
-  localPrewarm: (text: string, purpose?: 'summary'): Promise<void> =>
-    ipcRenderer.invoke(IPC.localPrewarm, purpose ? { text, purpose } : { text }),
+  // Fire-and-forget KV-cache warm (PLAN.md §4.4). With no text, main warms from its own live transcript ledger.
+  localPrewarm: (text?: string, purpose?: 'summary'): Promise<void> =>
+    ipcRenderer.invoke(IPC.localPrewarm, text === undefined ? { live: true } : purpose ? { text, purpose } : { text }),
   localAppleEngineStatus: (): Promise<AppleEngineStatus> => ipcRenderer.invoke(IPC.localAppleEngineStatus),
   // Content-free post-meeting latency span (M2-0430): a span name and a millisecond count, nothing else.
   reportWriteupSpan: (report: WriteupSpanPayload): Promise<void> => ipcRenderer.invoke(IPC.writeupSpan, report),

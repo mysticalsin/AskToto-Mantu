@@ -1,5 +1,6 @@
 import type { AskStart } from '@shared/ipc'
 import { redactSecrets } from '@shared/redact'
+import { SESSION_CONTEXT_DEFAULT_TAIL } from '@shared/session-context-request'
 import type { ContextCheck, FrameKey, MeetingContextRegistry } from './meeting-context-registry'
 import { fillSlots, lastThemText, transcriptTailText } from './transcript-text'
 
@@ -79,4 +80,14 @@ export function createAskContextGate(): AskContextGate {
       return result?.state === 'stale' ? STALE_CONVERSATION_MESSAGE : null
     }
   }
+}
+
+/** The text a local pre-warm uses: what the caller named, or (a live-meeting warm) the tail of main's own ledger. */
+export function prewarmText(
+  payload: { text?: string; live?: true },
+  deps: Pick<AskContextDeps, 'registry' | 'frame'>
+): string {
+  if (!payload.live) return payload.text ?? ''
+  const handle = deps.frame ? deps.registry.acquire(deps.frame, 'conversation') : null
+  return handle ? transcriptTailText(handle.snapshot, SESSION_CONTEXT_DEFAULT_TAIL) : ''
 }

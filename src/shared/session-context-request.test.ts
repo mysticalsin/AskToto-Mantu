@@ -60,11 +60,25 @@ describe('SessionLedgerLineSchema', () => {
     expect(SessionLedgerLineSchema.safeParse({ op: 'retract', startedAt: 1_700_000_000_000, t: 5 }).success).toBe(true)
   })
 
+  it('accepts a speaker name and language on a final and a label by commit time or utterance id', () => {
+    expect(SessionLedgerLineSchema.safeParse({ ...final, name: 'Alice', lang: 'English' }).success).toBe(true)
+    expect(
+      SessionLedgerLineSchema.safeParse({ op: 'label-local', startedAt: 1_700_000_000_000, t: 5, name: 'A' }).success
+    ).toBe(true)
+    expect(
+      SessionLedgerLineSchema.safeParse({
+        op: 'label-segment',
+        startedAt: 1_700_000_000_000,
+        utteranceId: '1:system:1:2'
+      }).success
+    ).toBe(true)
+  })
+
   it('refuses empty or oversized text, unknown speakers, extra keys and a retraction that carries text', () => {
     expect(SessionLedgerLineSchema.safeParse({ ...final, text: '' }).success).toBe(false)
     expect(SessionLedgerLineSchema.safeParse({ ...final, text: 'x'.repeat(16_385) }).success).toBe(false)
     expect(SessionLedgerLineSchema.safeParse({ ...final, speaker: 'system' }).success).toBe(false)
-    expect(SessionLedgerLineSchema.safeParse({ ...final, name: 'Alice' }).success).toBe(false)
+    expect(SessionLedgerLineSchema.safeParse({ ...final, nickname: 'Alice' }).success).toBe(false)
     expect(
       SessionLedgerLineSchema.safeParse({ op: 'retract', startedAt: 1_700_000_000_000, t: 5, text: 'x' }).success
     ).toBe(false)

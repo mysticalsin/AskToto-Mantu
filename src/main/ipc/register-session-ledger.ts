@@ -12,7 +12,7 @@ export interface SessionLedgerIpcDependencies {
   /** Audited main-window top-frame gate; throws a typed refusal for any other sender. */
   authorizeSender: AuthorizeSender
   requireAuth(): boolean
-  registry: Pick<MeetingContextRegistry, 'ingestLocalLine' | 'retractLocalLine'>
+  registry: Pick<MeetingContextRegistry, 'ingestLocalLine' | 'retractLocalLine' | 'labelLine'>
 }
 
 const REFUSED: SessionLedgerLineResult = { status: 'refused' }
@@ -37,7 +37,11 @@ export function registerSessionLedgerIpc(deps: SessionLedgerIpcDependencies): vo
     if (!parsed.success || !frame) return REFUSED
     const line = parsed.data
     const accepted =
-      line.op === 'final' ? deps.registry.ingestLocalLine(frame, line) : deps.registry.retractLocalLine(frame, line)
+      line.op === 'final'
+        ? deps.registry.ingestLocalLine(frame, line)
+        : line.op === 'retract'
+          ? deps.registry.retractLocalLine(frame, line)
+          : deps.registry.labelLine(frame, line)
     return accepted ? ACCEPTED : REFUSED
   })
 }

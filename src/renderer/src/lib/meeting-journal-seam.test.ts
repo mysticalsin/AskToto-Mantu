@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { CloudSpeechEvent } from '@shared/cloud-speech'
 import type { TranscriptLine } from '@shared/transcript-line'
 import { evictOldest } from './bounded-map'
-import { journalCommittedLine, retractCommittedLine } from './meeting-journal-seam'
+import { journalCommittedLine, labelCommittedLine, retractCommittedLine } from './meeting-journal-seam'
 
 const speech = (final: boolean): Extract<CloudSpeechEvent, { type: 'segment' }> => ({
   type: 'segment',
@@ -62,7 +62,7 @@ describe('journalCommittedLine', () => {
 })
 
 describe('ledger forwarding (G13)', () => {
-  it('forwards a committed local final to the ledger bridge with text and identity only, never to the journal', () => {
+  it('forwards a committed local final to the ledger bridge with text, identity, name and language, never to the journal', () => {
     const appendMeetingJournal = vi.fn(async () => ({ status: 'durable' }))
     const appendSessionLedgerLine = vi.fn(async () => ({ status: 'accepted' }))
     vi.stubGlobal('window', { toto: { appendMeetingJournal, appendSessionLedgerLine } })
@@ -72,9 +72,39 @@ describe('ledger forwarding (G13)', () => {
       startedAt: 77,
       t: 90,
       speaker: 'them',
-      text: 'a local sentence'
+      text: 'a local sentence',
+      name: 'Alice',
+      lang: 'English'
     })
     expect(appendMeetingJournal).not.toHaveBeenCalled()
+  })
+
+  it('labels a relay segment by utterance id (name and language only) after journaling it', () => {
+    const appendMeetingJournal = vi.fn(async () => ({ status: 'durable' }))
+    const appendSessionLedgerLine = vi.fn(async () => ({ status: 'accepted' }))
+    vi.stubGlobal('window', { toto: { appendMeetingJournal, appendSessionLedgerLine } })
+    journalCommittedLine(77, { ...cloudLine, name: 'Alice', lang: 'English', utteranceId: '1:system:1:1', revision: 1 })
+    expect(appendMeetingJournal).toHaveBeenCalledTimes(1)
+    expect(appendSessionLedgerLine).toHaveBeenCalledExactlyOnceWith({
+      op: 'label-segment',
+      startedAt: 77,
+      utteranceId: '1:system:1:1',
+      name: 'Alice',
+      lang: 'English'
+    })
+  })
+
+  it('labels a line after the fact: by utterance id for a relay line, by commit time for a local one, never without a label', () => {
+    const appendSessionLedgerLine = vi.fn(async () => ({ status: 'accepted' }))
+    vi.stubGlobal('window', { toto: { appendSessionLedgerLine } })
+    labelCommittedLine(77, { speaker: 'them', text: 'x', t: 90, name: 'Jane' })
+    labelCommittedLine(77, { ...cloudLine, name: 'Jane', utteranceId: '1:system:1:1', revision: 1 })
+    labelCommittedLine(77, { speaker: 'them', text: 'x', t: 91 })
+    labelCommittedLine(undefined, { speaker: 'them', text: 'x', t: 92, name: 'Jane' })
+    expect(appendSessionLedgerLine.mock.calls.map((call) => (call[0] as { op: string }).op)).toEqual([
+      'label-local',
+      'label-segment'
+    ])
   })
 
   it('never forwards a relay segment (main sees it), a provisional line, or a line with no meeting start', () => {

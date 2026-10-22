@@ -1864,7 +1864,7 @@ export function App(): JSX.Element {
   //     click either way). Gated on localSuggestReady specifically (NOT providerReady): this only ever
   //     warms the on-device model, so a cloud-only setup has nothing to warm. Never fires while anything
   //     visible is streaming — same guard the speculative run above uses. The renderer never learns the
-  //     sidecar's port/key; it only ever sends transcript text.
+  //     sidecar's port/key, nor any transcript text: main warms from its own ledger.
   useEffect(() => {
     if (!listen.listening || !settings?.localSuggestReady) return
     const lines = listen.lines
@@ -1873,11 +1873,10 @@ export function App(): JSX.Element {
     if (lines.length === w.lineCount || Date.now() - w.at < 5_000) return
     if (ask.answer?.streaming || suggest.answer?.streaming || speculative.answer?.streaming) return
     prewarmWatermarkRef.current = { lineCount: lines.length, at: Date.now() }
-    void window.toto.localPrewarm(listen.text().slice(-6000))
+    void window.toto.localPrewarm() // no text: main warms from its own transcript ledger
   }, [
     listen.lines,
     listen.listening,
-    listen.text,
     settings?.localSuggestReady,
     ask.answer?.streaming,
     suggest.answer?.streaming,
