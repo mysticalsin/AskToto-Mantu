@@ -171,6 +171,8 @@ export interface ListenAudioRecoveryHost {
   currentEpoch(): number
   admissionOpen(epoch: number): boolean
   wantsSystemAudio(): boolean
+  /** True while the session is live and unpaused and its source includes the microphone (D2-3). */
+  wantsMic(): boolean
   micDeviceId(): string
   meetingStartedAt(): number | undefined
   acquireMic(deviceId: string, meetingStartedAt: number, signal?: AbortSignal): Promise<ListenMicCapture>
@@ -183,6 +185,8 @@ export interface ListenAudioRecoveryHost {
   publishMicRecoveryFailure(epoch: number): void
   micRecoverySucceeded(): void
   micRecoveryFailed(): void
+  /** The retry budget is spent; the banner must stop promising automatic reconnection. */
+  micRecoveryExhausted(): void
   systemRecoverySucceeded(): void
   systemRecoveryFailed(): void
   isLive(): boolean
@@ -223,6 +227,9 @@ export interface ListenAudioRecovery {
   watchSystemPermission(): () => void
 }
 
+/** Total microphone acquisition attempts per loss (the first plus the backed-off retries). */
+export const MIC_RECOVERY_MAX_ATTEMPTS = 4
+
 /** Coordinates device recovery without owning capture policy or UI state. */
 export function createListenAudioRecovery(host: () => ListenAudioRecoveryHost): ListenAudioRecovery {
   let micRecovering = false
@@ -230,8 +237,15 @@ export function createListenAudioRecovery(host: () => ListenAudioRecoveryHost): 
   let deviceChangeTimer: ReturnType<typeof setTimeout> | null = null
   let retryAttempts = 0
   let retryNextAt = 0
+  let micAttempts = 0
+  let micRetryTimer: ReturnType<typeof setTimeout> | null = null
 
-  const recoverMic = async (): Promise<void> => {
+  const clearMicRetry = (): void => {
+    if (micRetryTimer) clearTimeout(micRetryTimer)
+    micRetryTimer = null
+  }
+
+  const attemptMic = async (): Promise<void> => {
     const current = host()
     const epoch = current.currentEpoch()
     if (!current.admissionOpen(epoch) || micRecovering) return
@@ -250,14 +264,41 @@ export function createListenAudioRecovery(host: () => ListenAudioRecoveryHost): 
         await mic.release?.()
         return
       }
+      micAttempts = 0
       host().micRecoverySucceeded()
     } catch {
       if (!host().admissionOpen(epoch)) return
       host().publishMicRecoveryFailure(epoch)
       host().micRecoveryFailed()
+      micAttempts += 1
+      if (micAttempts >= MIC_RECOVERY_MAX_ATTEMPTS) {
+        micAttempts = 0
+        host().micRecoveryExhausted()
+        return
+      }
+      // Bounded, epoch-fenced backoff (same curve as the system side). A stale timer, a new meeting, a
+      // pause or a mic that is no longer wanted all end the retry chain instead of re-opening capture.
+      clearMicRetry()
+      micRetryTimer = setTimeout(
+        () => {
+          micRetryTimer = null
+          const latest = host()
+          if (!latest.admissionOpen(epoch) || !latest.wantsMic() || latest.hasChannel('you')) return
+          void attemptMic()
+        },
+        sysRetryDelayMs(micAttempts - 1)
+      )
     } finally {
       micRecovering = false
     }
+  }
+
+  // Every externally triggered recovery (track end, device change) starts a fresh retry budget.
+  const recoverMic = async (): Promise<void> => {
+    if (micRecovering) return
+    micAttempts = 0
+    clearMicRetry()
+    await attemptMic()
   }
 
   const recoverSystemAudio = async (): Promise<void> => {
@@ -330,6 +371,10 @@ export function createListenAudioRecovery(host: () => ListenAudioRecoveryHost): 
               if (retired && current.admissionOpen(originEpoch)) current.recoverMicNow()
             })
             .catch(() => {})
+        } else if (latest.wantsMic() && !micRecovering) {
+          // The mic channel was lost (a failed or exhausted recovery) and a device just changed: a headset
+          // came back or an input was plugged in. Give recovery a fresh budget (D2-3).
+          latest.recoverMicNow()
         }
         const action = latest.themDeviceChangeAction(latest.wantsSystemAudio(), latest.hasChannel('them'), null)
         if (action === 'watch') armThemProbation()
@@ -345,6 +390,7 @@ export function createListenAudioRecovery(host: () => ListenAudioRecoveryHost): 
       target.removeEventListener('devicechange', onDeviceChange)
       if (deviceChangeTimer) clearTimeout(deviceChangeTimer)
       deviceChangeTimer = null
+      clearMicRetry()
     }
   }
 

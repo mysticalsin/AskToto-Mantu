@@ -21,6 +21,13 @@ import {
 } from '@shared/cloud-speech'
 import type { ScreenDiagnosis } from '@shared/screen-permission'
 import type { MeetingMicCaptureRevoked } from '@shared/ipc'
+import {
+  CLOUD_LANGUAGE_NEXT_START_MSG,
+  cloudSpeechStartMessage,
+  cloudTrackLostMessage,
+  cloudTrackReconnectingMessage,
+  revokedCaptureMessage
+} from './listen-notes'
 import { WHISPER_WORKLET_SRC } from './whisper-worklet-src'
 
 // keys.ts freezes navigator.platform at import time, before beforeEach can stub the browser. Keep
@@ -534,6 +541,8 @@ beforeEach(() => {
       cloudSttStop: vi.fn(async () => ({ timedOut: false })),
       onCloudSttFinal: vi.fn(() => () => {}),
       onCloudSttError: vi.fn(() => () => {}),
+      onCloudSttTrackRecovered: vi.fn(() => () => {}),
+      cloudSttUpdateLang: vi.fn(async () => {}),
       cloudSpeechCapability: vi.fn(async () => ({
         disclosureVersion: 'cloud-speech-v1' as const,
         selected: { engine: 'deepgram-nova3', routeId: 'deepgram-via-gateway', modelId: 'nova-3' },
@@ -715,7 +724,7 @@ describe('meeting admission handshake', () => {
 
     const api = render()
     expect(api).toMatchObject({ listening: false, capturing: false })
-    expect(api.error).toContain('Meeting microphone admission was denied.')
+    expect(api.error).toBe("Métis couldn't start listening. Try again.")
     expect(streams).toHaveLength(0)
     expect(worklets).toHaveLength(0)
     expect(window.toto.armAudio).not.toHaveBeenCalledWith(true)
@@ -2385,6 +2394,113 @@ describe('useListen Stop flush ownership', () => {
     // Keep the deliberately unresolved decoder from leaking into teardown if a future assertion changes.
     resolveFeed({ text: 'Late local result.', name: 'Alice' })
     await settle()
+  })
+
+  it('a screen-locked revoke publishes endedBy and the lock copy', async () => {
+    const api = render('parakeet')
+    const revokeListener = vi.mocked(window.toto.onMeetingMicCaptureRevoked).mock.calls.at(-1)?.[0]
+    if (!revokeListener) throw new Error('test Listen hook did not register its meeting revocation listener')
+    await api.start('mic', 'fast', 'parakeet', 'English', 777)
+    await settle()
+    const grant = meetingGrants.at(-1)
+    if (!grant) throw new Error('test microphone capture did not open')
+    expect(render('parakeet').endedBy).toBeNull()
+
+    revokeListener({ ...grant, reason: 'screen-locked' })
+    // Fail-closed: the forced revoke tears capture down synchronously, with no drain.
+    await settle()
+
+    const ended = render('parakeet')
+    expect(ended.endedBy).toEqual({ reason: 'screen-locked', startedAt: 777 })
+    expect(ended.error).toBe(revokedCaptureMessage('screen-locked', platform.isWindows))
+    expect(ended.error).toMatch(/locked/)
+    expect(ended).toMatchObject({ listening: false, capturing: false })
+
+    // A fresh start clears the marker so an old lock never saves or banners a new meeting.
+    await ended.start('mic', 'fast', 'parakeet', 'English', 778)
+    await settle()
+    expect(render('parakeet').endedBy).toBeNull()
+  })
+
+  it('a user-stop notice never publishes endedBy', async () => {
+    const api = render('parakeet')
+    const revokeListener = vi.mocked(window.toto.onMeetingMicCaptureRevoked).mock.calls.at(-1)?.[0]
+    if (!revokeListener) throw new Error('test Listen hook did not register its meeting revocation listener')
+    await api.start('mic', 'fast', 'parakeet', 'English', 779)
+    await settle()
+    const grant = meetingGrants.at(-1)
+    if (!grant) throw new Error('test microphone capture did not open')
+    revokeListener({ ...grant, reason: 'user-stop' })
+    await settle()
+    expect(render('parakeet').endedBy).toBeNull()
+    expect(render('parakeet').capturing).toBe(true)
+  })
+
+  it('applies a mid-meeting language change to a live cloud session and says when it lands', async () => {
+    let api = render('cloud')
+    await api.start('mic', 'fast', 'cloud', 'English', 123)
+    await settle()
+    api = render('cloud')
+    expect(api).toMatchObject({ capturing: true, ready: true })
+    const before = api.recognizerStatus
+
+    await api.setLanguage('French')
+    await settle()
+
+    expect(window.toto.cloudSttUpdateLang).toHaveBeenCalledWith('French', null, 'listen:1')
+    api = render('cloud')
+    expect(api.error).toBe(CLOUD_LANGUAGE_NEXT_START_MSG)
+    expect(api.recognizerStatus).toEqual(before)
+  })
+
+  it('marks a dropped cloud track per side, then clears only its own note when main reconnects it', async () => {
+    let api = render('cloud')
+    await api.start('mic', 'fast', 'cloud', 'English', 123)
+    await settle()
+    const onError = vi.mocked(window.toto.onCloudSttError).mock.calls.at(-1)?.[0]
+    const onRecovered = vi.mocked(window.toto.onCloudSttTrackRecovered).mock.calls.at(-1)?.[0]
+    if (!onError || !onRecovered) throw new Error('test Listen hook did not subscribe to cloud track events')
+
+    onError('Cloud STT provider connection closed unexpectedly (them).', { channel: 'them', recovering: true })
+    api = render('cloud')
+    expect(api.captureDegraded).toEqual({
+      side: 'them',
+      note: cloudTrackReconnectingMessage('them'),
+      permission: false
+    })
+    expect(api.error).toBe(cloudTrackReconnectingMessage('them'))
+    expect(api.listening).toBe(true)
+
+    onRecovered('them')
+    api = render('cloud')
+    expect(api.captureDegraded).toBeNull()
+    expect(api.error).toBeNull()
+
+    onError('gave up', { channel: 'you', recovering: false })
+    expect(render('cloud').error).toBe(cloudTrackLostMessage('you'))
+  })
+
+  it('shows fixed copy, not raw transport text, when the cloud connection cannot start', async () => {
+    vi.mocked(window.toto.cloudSttStart).mockResolvedValue({
+      ok: false,
+      code: 'CONNECT',
+      error: 'Cloud STT nova WebSocket error: getaddrinfo ENOTFOUND gateway.example'
+    })
+    const api = render('cloud')
+    await api.start('mic', 'fast', 'cloud', 'English', 123)
+    await settle()
+    expect(render('cloud').error).toBe(cloudSpeechStartMessage('CONNECT'))
+    expect(render('cloud').error).not.toMatch(/getaddrinfo|WebSocket/)
+  })
+
+  it('classifies a busy microphone instead of blaming permissions', async () => {
+    getUserMediaImpl = async () => {
+      throw Object.assign(new Error('Could not start audio source'), { name: 'NotReadableError' })
+    }
+    const api = render('parakeet')
+    await api.start('mic', 'fast', 'parakeet', 'English', 123)
+    await settle()
+    expect(render('parakeet').error).toMatch(/another app is using it/)
   })
 
   it('keeps a completed graceful Stop after its delayed user-stop grant notice', async () => {

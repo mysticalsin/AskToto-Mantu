@@ -45,8 +45,9 @@ import {
   captureHealthForTrack,
   captureHealthIfCurrent,
   createListenCaptureState,
-  degradedAfterMicRecovery,
   listenSpeechEngine,
+  micLostState,
+  micRecoveredState,
   micSelectionOutcome,
   sameCaptureHealth,
   speakerEmbedResultIsStale,
@@ -87,18 +88,26 @@ import {
   shouldProbeLanguageWindow
 } from './listen-language-probe'
 import {
+  ADMISSION_DENIED_MSG,
+  CLOUD_LANGUAGE_NEXT_START_MSG,
   DROPPED_MSG,
+  LOADING_DROPPED_MSG,
   MIC_LOST_MSG,
+  MIC_RECOVERY_FAILED_MSG,
   OFFLINE_MSG,
   RECONNECTING_MSG,
   THEM_LOST_MSG,
   THEM_SILENT_MSG,
+  captureStartFailureMessage,
+  cloudSpeechStartMessage,
   looksLikeNetworkError,
-  noteAfterDecodedWindow
+  noteAfterDecodedWindow,
+  revokedCaptureMessage
 } from './listen-notes'
+import { cloudTrackListeners } from './listen-cloud-track'
 import { feedEmptyIsEcho, trimQueue } from './listen-queue-policy'
 import { isQuestion } from './listen-question'
-import { recognizerStatusFor, type RecognizerStatus } from './listen-recognizer-status'
+import { recognizerStatusFor, statusAfterLanguageChange, type RecognizerStatus } from './listen-recognizer-status'
 export {
   advanceLanguageProbe,
   probeMinWords,
@@ -248,6 +257,8 @@ export interface ListenApi {
   /** Low-priority current-session cue; true only after bounded live mic silence without admitted speech. */
   noSpeechWarning: boolean
   recognizerStatus: RecognizerStatus | null
+  /** Set only when main force-ended the meeting capture (lock, sleep, sign-out); null for a normal Stop. */
+  endedBy: { reason: string; startedAt: number } | null
   start: (
     source: AudioSource,
     quality?: 'best' | 'fast',
@@ -325,7 +336,8 @@ export function useListen(
     captureDegraded: null as CaptureDegraded | null,
     captureHealth: null as CaptureHealth | null,
     noSpeechWarning: false,
-    recognizerStatus: null as RecognizerStatus | null
+    recognizerStatus: null as RecognizerStatus | null,
+    endedBy: null as { reason: string; startedAt: number } | null
   })
   const [lines, setLines] = useState<TranscriptLine[]>([])
 
@@ -1266,7 +1278,8 @@ export function useListen(
         console.warn(`[listen] audio backpressure: dropped ${dropped} window(s) (queue > ${MAX_QUEUE})`)
         // Surface it — a silent drop reads as "the transcript stopped" with no explanation. Never
         // clobber a more specific note already showing (offline, device-lost, them-silent).
-        setState((s) => (s.error == null ? { ...s, error: DROPPED_MSG } : s))
+        const note = readyRef.current ? DROPPED_MSG : LOADING_DROPPED_MSG
+        setState((s) => (s.error == null ? { ...s, error: note } : s))
       }
       pump()
     },
@@ -1347,11 +1360,7 @@ export function useListen(
                   captureHealthForTrack(track, micCapture.health.requestedDevice, micCapture.health.selectionOutcome)
                 )
               }
-              setState((current) => ({
-                ...current,
-                error: MIC_LOST_MSG,
-                captureDegraded: { side: 'you', note: MIC_LOST_MSG, permission: false }
-              }))
+              setState((current) => micLostState(current, MIC_LOST_MSG))
               void (async () => {
                 await channel.micCapture?.release?.()
                 if (captureAdmissionIsOpen(channel.admissionEpoch)) await recoverMicRef.current?.()
@@ -1390,6 +1399,7 @@ export function useListen(
   // injected from Listen so stale device callbacks cannot mutate a successor capture.
   const recoverMicRef = useRef<(() => Promise<void>) | null>(null)
   const wantsSystemRef = useRef(false)
+  const wantsMicRef = useRef(false)
   const recoverSystemAudioRef = useRef<(() => Promise<void>) | null>(null)
   const audioRecovery = useMemo(
     () =>
@@ -1397,6 +1407,7 @@ export function useListen(
         currentEpoch: () => sessionEpochRef.current,
         admissionOpen: captureAdmissionIsOpen,
         wantsSystemAudio: () => wantsSystemRef.current,
+        wantsMic: () => wantsMicRef.current && liveRef.current && !pausedRef.current && !stoppingRef.current,
         micDeviceId: () => micDeviceIdRef.current,
         meetingStartedAt: () => sessionStartedAtRef.current,
         acquireMic: (deviceId, meetingStartedAt, signal) => acquireMic(deviceId, meetingStartedAt, signal),
@@ -1416,22 +1427,17 @@ export function useListen(
             )
           ),
         micRecoverySucceeded: () =>
-          setState((state) => ({
-            ...state,
-            error: state.error === MIC_LOST_MSG ? null : state.error,
-            captureDegraded: degradedAfterMicRecovery(
-              state.captureDegraded,
+          setState((s) =>
+            micRecoveredState(
+              s,
+              [MIC_LOST_MSG, MIC_RECOVERY_FAILED_MSG],
               themDegradedRef.current,
               wantsSystemRef.current,
               !!channels.current.them
             )
-          })),
-        micRecoveryFailed: () =>
-          setState((state) => ({
-            ...state,
-            error: MIC_LOST_MSG,
-            captureDegraded: { side: 'you', note: MIC_LOST_MSG, permission: false }
-          })),
+          ),
+        micRecoveryFailed: () => setState((s) => micLostState(s, MIC_LOST_MSG)),
+        micRecoveryExhausted: () => setState((s) => micLostState(s, MIC_RECOVERY_FAILED_MSG)),
         systemRecoverySucceeded: () => {
           themDegradedRef.current = null
           setState((state) => ({
@@ -1706,6 +1712,7 @@ export function useListen(
         busy.current = false
         liveRef.current = true
         wantsSystemRef.current = source === 'system' || source === 'both'
+        wantsMicRef.current = source === 'mic' || source === 'both'
         audioRecovery.resetSystemRetry() // fresh session → no carried-over loopback-retry backoff
         pausedRef.current = false
         disarmNetworkRetry() // a fresh session supersedes any retry armed for the previous one
@@ -1735,7 +1742,8 @@ export function useListen(
           recognizerStatus: recognizerStatusFor(engine, null, language, null),
           listening: true,
           capturing: false,
-          paused: false
+          paused: false,
+          endedBy: null
         }))
         // Both input paths and recovery must wait for Main's exact reservation. A live local
         // epoch alone is not permission to arm loopback, acquire media, or start speech transport.
@@ -1746,7 +1754,7 @@ export function useListen(
           return
         }
         if (!meetingAdmitted) {
-          failAdmittedCapture('Meeting microphone admission was denied.')
+          failAdmittedCapture(ADMISSION_DENIED_MSG)
           return
         }
         meetingAdmittedRef.current = true
@@ -1822,13 +1830,17 @@ export function useListen(
                 }
               }
             })
-            const offErr = window.toto.onCloudSttError((message) => {
-              if ((!liveRef.current && !cloudSttFinalizingRef.current) || sessionEpochRef.current !== myEpoch) return
-              setState((s) => ({ ...s, error: message || s.error }))
-            })
+            const track = cloudTrackListeners(
+              () => (liveRef.current || cloudSttFinalizingRef.current) && sessionEpochRef.current === myEpoch,
+              themDegradedRef,
+              setState
+            )
+            const offErr = window.toto.onCloudSttError(track.onError)
+            const offRecovered = window.toto.onCloudSttTrackRecovered(track.onRecovered)
             cloudSttUnsubRef.current = () => {
               offFinal()
               offErr()
+              offRecovered()
             }
             try {
               cloudSttFinalizingRef.current = false
@@ -1849,7 +1861,7 @@ export function useListen(
               }
               if (!started?.ok) {
                 console.warn('[listen] cloud STT start failed:', started?.error || started?.code)
-                failAdmittedCapture(started?.error || 'Cloud STT is not configured.', {
+                failAdmittedCapture(cloudSpeechStartMessage(started?.code), {
                   forceCloudStop: true,
                   cloudCaptureId
                 })
@@ -1983,6 +1995,7 @@ export function useListen(
         let sysOk = false
         let sysErr: Error | null = null // captured for error-message classification below
 
+        let micErrName: string | null = null
         if (micP) {
           let mic: MicCapture | null = null
           try {
@@ -2010,7 +2023,8 @@ export function useListen(
                 micSelectionOutcome(Boolean(micDeviceIdRef.current), false, true)
               )
             )
-            console.warn('[listen] microphone capture failed:', (e as Error)?.name, (e as Error)?.message)
+            micErrName = (e as Error)?.name ?? null
+            console.warn('[listen] microphone capture failed:', micErrName, (e as Error)?.message)
           }
         }
 
@@ -2077,18 +2091,12 @@ export function useListen(
         const micCaptured = capturedTracks.includes('microphone')
         const sysCaptured = capturedTracks.includes('system')
         if (!micOk && !sysOk) {
-          let msg: string
-          if (source === 'system') {
-            msg = isWindows
-              ? 'Could not capture system audio. Make sure the meeting plays through your default output device and no other app has it exclusively, or switch Listen to your microphone in Settings, Audio tab.'
-              : isSysPermDenied
-                ? 'System audio needs Screen Recording permission. Grant it in System Settings → Privacy & Security → Screen Recording, then restart Listen.'
-                : "Couldn't capture system audio. Grant Screen Recording in System Settings, or switch Listen to your microphone in Settings → Audio."
-          } else {
-            msg = isWindows
-              ? 'Could not start the microphone. Check that Windows microphone access is allowed for Métis and that a mic is connected.'
-              : "Couldn't start the microphone. Check Microphone access in System Settings → Privacy & Security → Microphone."
-          }
+          const msg = captureStartFailureMessage({
+            source,
+            micErrorName: micErrName,
+            sysPermDenied: isSysPermDenied,
+            windows: isWindows
+          })
           // Nothing came up.  A cloud start may still be in flight, so use its exact identity rather
           // than leaving an authenticated provider session alive behind an idle UI.
           failAdmittedCapture(msg, {
@@ -2824,11 +2832,12 @@ export function useListen(
         }
         // Main has already invalidated this exact meeting reservation. Tear down renderer-owned tracks,
         // worklets, recognizers, and cloud capture synchronously before returning to the event loop.
-        failAdmittedCapture('Meeting microphone admission was revoked.', {
+        failAdmittedCapture(revokedCaptureMessage(event.reason, isWindows), {
           force: true,
           forceCloudStop: true,
           cloudCaptureId: cloudCaptureIdRef.current ?? undefined
         })
+        setState((s) => ({ ...s, endedBy: { reason: event.reason, startedAt: event.startedAt } }))
       }),
     [failAdmittedCapture]
   )
@@ -2952,24 +2961,15 @@ export function useListen(
       pinnedLangRef.current = null
       probeWindowCountRef.current = 0
       probeSwitchRunRef.current = null
+      // A live cloud session cannot switch language on its open sockets, so the running session keeps its
+      // status and the banner says when the change lands (D2-2). Main's reconnect reads the updated options.
+      const cloudLive = engineRef.current === 'cloud' && liveRef.current
+      if (cloudLive)
+        void window.toto.cloudSttUpdateLang(language, null, cloudCaptureIdRef.current ?? undefined).catch(() => {})
       setState((state) => ({
         ...state,
-        recognizerStatus:
-          state.recognizerStatus?.engine === engineRef.current
-            ? engineRef.current === 'parakeet'
-              ? {
-                  ...state.recognizerStatus,
-                  languageMode: 'engine-auto',
-                  language: null,
-                  requestedLanguage: language === 'auto' ? null : language
-                }
-              : {
-                  ...state.recognizerStatus,
-                  languageMode: language === 'auto' ? 'detecting' : 'explicit',
-                  language: language === 'auto' ? null : language,
-                  requestedLanguage: language === 'auto' ? null : language
-                }
-            : recognizerStatusFor(engineRef.current, null, language, null)
+        error: cloudLive ? (state.error ?? CLOUD_LANGUAGE_NEXT_START_MSG) : state.error,
+        recognizerStatus: statusAfterLanguageChange(state.recognizerStatus, engineRef.current, language, cloudLive)
       }))
       if (engineRef.current !== 'whisper' || !workerRef.current || !liveRef.current) return
       try {

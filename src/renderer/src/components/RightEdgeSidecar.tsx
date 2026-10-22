@@ -163,7 +163,10 @@ function DockAction({
 function compactLiveNotice(notice: string): string {
   const message = notice.trim()
   if (/^mic silent\b/i.test(message)) return 'Mic silent · check input'
+  if (/^microphone input stopped and could not reconnect/i.test(message)) return 'Mic lost · connect a microphone'
   if (/^microphone input stopped\b/i.test(message)) return 'Mic lost · reconnecting'
+  if (/another app is using it/i.test(message)) return 'Mic in use by another app'
+  if (/^no microphone was found/i.test(message)) return 'No microphone found'
   if (/^could(?: not|n['’]t) start the microphone\b/i.test(message)) return 'Mic unavailable · check access'
   if (/^microphone unavailable\. listening to system audio only\./i.test(message))
     return 'Mic unavailable · system audio only'

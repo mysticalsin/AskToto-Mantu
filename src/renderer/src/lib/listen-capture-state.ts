@@ -230,3 +230,25 @@ export function degradedAfterMicRecovery(
 export function themRecoveryFailureIsNoop(error: string | null, captureDegraded: CaptureDegraded | null): boolean {
   return error !== null && captureDegraded !== null
 }
+
+type NoteSlots = { error: string | null; captureDegraded: CaptureDegraded | null }
+
+/** The microphone side is down: one note in both banner slots (the same text keeps the exact-string clears working). */
+export function micLostState<T extends NoteSlots>(state: T, note: string): T {
+  return { ...state, error: note, captureDegraded: { side: 'you', note, permission: false } }
+}
+
+/** The microphone reopened: drop its own lost/exhausted notes and fall back to the 'them' degradation if any. */
+export function micRecoveredState<T extends NoteSlots>(
+  state: T,
+  lostNotes: readonly string[],
+  themDegraded: CaptureDegraded | null,
+  wantsSystem: boolean,
+  hasThemChannel: boolean
+): T {
+  return {
+    ...state,
+    error: state.error !== null && lostNotes.includes(state.error) ? null : state.error,
+    captureDegraded: degradedAfterMicRecovery(state.captureDegraded, themDegraded, wantsSystem, hasThemChannel)
+  }
+}

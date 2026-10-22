@@ -216,11 +216,12 @@ function assertForcedRendererTeardownContract(listenSourceText: string): void {
     /\n[\t ]*\}[\t ]*\n[\t ]*\/\/ Main has already invalidated this exact meeting reservation/
   )
   expect(hasDirectStatement(userStopBranch, 'return')).toBe(true)
-  const revokeCallIndex = requiredIndex(revocation, "failAdmittedCapture('Meeting microphone admission was revoked.'")
+  // Q03: the copy is now derived from event.reason; the fail-closed teardown itself is unchanged.
+  const revokeCallIndex = requiredIndex(revocation, 'failAdmittedCapture(revokedCaptureMessage(event.reason')
   expect(requiredIndex(revocation, "if (event.reason === 'user-stop')")).toBeLessThan(revokeCallIndex)
   const revokeCall = boundedBody(
     revocation,
-    /failAdmittedCapture\(\s*'Meeting microphone admission was revoked\.'\s*,\s*\{\s*/,
+    /failAdmittedCapture\(\s*revokedCaptureMessage\(event\.reason,\s*isWindows\)\s*,\s*\{\s*/,
     /\}\s*\)/
   )
   expect(revokeCall).toContain('force: true')

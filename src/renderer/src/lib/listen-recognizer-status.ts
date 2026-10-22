@@ -35,3 +35,27 @@ export function recognizerStatusFor(
       ? { engine, model, languageMode: 'pinned', language: pinnedLanguage, requestedLanguage: null }
       : { engine, model, languageMode: 'detecting', language: null, requestedLanguage: null }
 }
+
+/**
+ * Status after a Settings language change while a session is running. A live cloud session keeps the status
+ * it was opened with (Q03/D2-2): the provider socket is not reopened, so claiming the new language would
+ * report something the recognizer is not doing.
+ */
+export function statusAfterLanguageChange(
+  current: RecognizerStatus | null,
+  engine: RecognizerStatus['engine'],
+  language: string,
+  cloudLive: boolean
+): RecognizerStatus | null {
+  if (cloudLive) return current
+  if (current?.engine !== engine) return recognizerStatusFor(engine, null, language, null)
+  const requestedLanguage = language === 'auto' ? null : language
+  return engine === 'parakeet'
+    ? { ...current, languageMode: 'engine-auto', language: null, requestedLanguage }
+    : {
+        ...current,
+        languageMode: language === 'auto' ? 'detecting' : 'explicit',
+        language: requestedLanguage,
+        requestedLanguage
+      }
+}

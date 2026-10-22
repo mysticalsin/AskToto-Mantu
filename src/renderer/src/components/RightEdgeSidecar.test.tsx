@@ -302,6 +302,19 @@ describe('right-edge dock', () => {
     expect(visibleNotice("Couldn't start the microphone. Check Microphone access in System Settings.")).toBe(
       'Mic unavailable · check access'
     )
+    expect(
+      visibleNotice(
+        'Microphone input stopped and could not reconnect. Connect or choose a microphone, and Métis will try again.'
+      )
+    ).toBe('Mic lost · connect a microphone')
+    expect(
+      visibleNotice(
+        "Couldn't start the microphone because another app is using it. Close that app or choose another microphone in Settings → Audio, then try again."
+      )
+    ).toBe('Mic in use by another app')
+    expect(
+      visibleNotice('No microphone was found. Connect one or choose another in Settings → Audio, then try again.')
+    ).toBe('No microphone found')
     expect(visibleNotice('Microphone unavailable. Listening to system audio only.')).toBe(
       'Mic unavailable · system audio only'
     )
@@ -402,7 +415,7 @@ describe('right-edge dock', () => {
       expect(call).toContain('spotlightReady={spotlightRefReady}')
       expect(call).toContain('onHistory={onBarHistory}')
       expect(call).toContain('onSettings={onBarSettings}')
-      expect(call).toContain('liveNotice={listen.error}')
+      expect(call).toContain('liveNotice={liveError}')
     }
     expect(app.match(/meetingPauseRef\.current = freshMeetingPauseClock\(\)/g)).toHaveLength(2)
     expect(app).toContain('meetingPauseRef.current = setMeetingPaused(meetingPauseRef.current')
@@ -524,7 +537,7 @@ describe('right-edge dock', () => {
       /else if \(a === 'metis-command'\) \{[\s\S]*?reduceRightEdgeDismissalLock\(rightEdgeDismissalLockRef\.current,\s*\{\s*type:\s*'metis-command'\s*\}/
     )
     expect(app).toMatch(/\{showWideMeetingChrome && \(\s*<QuickActions/)
-    expect(app).toMatch(/\{showWideMeetingChrome && listen\.error/)
+    expect(app).toMatch(/\{showWideMeetingChrome && liveError/)
     expect(e2eSmoke).toContain('verifyRightEdgeReferenceLayout')
     expect(e2eSmoke).toContain('right-edge action rail did not keep every action on one compact row')
     expect(e2eSmoke).toContain('verifyLongSidecarResponse')

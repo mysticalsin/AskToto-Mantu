@@ -18,6 +18,7 @@ import {
   trimQueue
 } from './listen'
 import type { CaptureDegraded } from './listen'
+import { micRecoveredState } from './listen-capture-state'
 import { transcriptToText } from './transcript'
 import type { TranscriptLine } from '@shared/ipc'
 
@@ -271,9 +272,20 @@ describe('degradedAfterMicRecovery — a mic recovery must not erase a live them
 
   it('MQA-156 — is what recoverMic writes, and every them-degradation site remembers its cause', () => {
     // The clear site that used to lie.
+    // Q03: the clear moved into the pure micRecoveredState helper, which still delegates to
+    // degradedAfterMicRecovery with exactly the same four inputs.
     expect(listenSrc).toMatch(
-      /captureDegraded: degradedAfterMicRecovery\(\s*state\.captureDegraded,\s*themDegradedRef\.current,\s*wantsSystemRef\.current,\s*!!channels\.current\.them\s*\)/
+      /micRecoveredState\(\s*s,\s*\[MIC_LOST_MSG, MIC_RECOVERY_FAILED_MSG\],\s*themDegradedRef\.current,\s*wantsSystemRef\.current,\s*!!channels\.current\.them\s*\)/
     )
+    const LOST_NOTE = 'Microphone input stopped'
+    const slots = { error: LOST_NOTE, captureDegraded: MIC_DEGRADED }
+    expect(micRecoveredState(slots, [LOST_NOTE], THEM_PERMISSION_DEGRADED, true, false).captureDegraded).toEqual(
+      degradedAfterMicRecovery(MIC_DEGRADED, THEM_PERMISSION_DEGRADED, true, false)
+    )
+    expect(micRecoveredState(slots, [LOST_NOTE], null, true, true)).toEqual({
+      error: null,
+      captureDegraded: null
+    })
     // Remembered at the start-time mic-only fallback, at a mid-session 'them' death, and at the
     // probation recycle — and dropped again only once 'them' is genuinely capturing (or a new session).
     expect(listenSrc).toMatch(/themDegradedRef\.current = captureDegraded\?\.side === 'them' \? captureDegraded : null/)
@@ -433,7 +445,9 @@ describe('trimQueue — backpressure drop keeps the newest window per speaker (1
 
   it('is what pushAudio actually calls on backpressure, surfacing DROPPED_MSG', () => {
     expect(listenSrc).toMatch(/queue\.current = trimQueue\(queue\.current, MAX_QUEUE\)/)
-    expect(listenSrc).toMatch(/setState\(\(s\) => \(s\.error == null \? \{ \.\.\.s, error: DROPPED_MSG \} : s\)\)/)
+    // Q03/D2-7: while the model is still loading the note says so; once ready it is the original DROPPED_MSG.
+    expect(listenSrc).toMatch(/const note = readyRef\.current \? DROPPED_MSG : LOADING_DROPPED_MSG/)
+    expect(listenSrc).toMatch(/setState\(\(s\) => \(s\.error == null \? \{ \.\.\.s, error: note \} : s\)\)/)
   })
 })
 
