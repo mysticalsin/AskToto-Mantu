@@ -1,6 +1,7 @@
-import { createHash } from 'node:crypto'
 import { join } from 'node:path'
 import type { IpcMain } from 'electron'
+import { isSummaryOnlyProfile, resolveEnterpriseLiveProfile } from '@shared/enterprise-live-profile'
+import { resolveDictationEnabled } from '@shared/dictation-options'
 import type { OwnerSessionRef, OwnerSessionRevokeReason } from '@shared/contracts/owner-session'
 import {
   createDictationMemory,
@@ -16,8 +17,10 @@ import {
   wrapContentKey,
   writeWrappedKeyFile
 } from '../infra/security/content-key-wrap'
+import { memoryAccess, onMemoryPartitionChange } from '../memory-partition/memory-access'
 import { registerDictationMemoryIpc } from '../ipc/dictation-memory-ipc'
 import type { AuthorizeSender } from '../ipc/sender-auth'
+import type { SettingsObservation } from '../settings-observation'
 
 export interface DictationMemoryWiringDeps {
   ipcMain: Pick<IpcMain, 'handle'>
@@ -25,12 +28,18 @@ export interface DictationMemoryWiringDeps {
   requireAuth(): boolean
   ownerSession: { onRevoked(cb: (ref: OwnerSessionRef, reason: OwnerSessionRevokeReason) => void): () => void }
   userDataPath(): string
-  /** The signed-in owner's key now, or null while signed out. */
-  currentOwnerKey(): string | null
+  /** The last published settings (managed policy already merged in), or null before any. */
+  readSettings(): SettingsObservation | null
+  /** The QA-identity build turns dictation on by default; release builds follow the owner flag. */
+  qaIdentity: boolean
   audit(record: DictationMemoryAuditRecord): void
   onWillQuit(listener: () => void): void
   /** Defaults to the real wrap/unwrap in `content-key-wrap.ts`; a test seam. */
   keys?: DictationKeyCustody
+  /** Defaults to G19's partition in force (`memoryAccess()`); a test seam. */
+  partition?(): string | null
+  /** Subscribes to a change of the partition in force; defaults to G19's. A test seam. */
+  onPartitionChange?(listener: () => void): () => void
 }
 
 const DEFAULT_KEYS: DictationKeyCustody = {
@@ -41,14 +50,35 @@ const DEFAULT_KEYS: DictationKeyCustody = {
   readFile: readWrappedKeyFile
 }
 
+/** G19's partition in force: its id, or null while none is open (signed out, unverified, a switch in flight). */
+function activePartition(): string | null {
+  const access = memoryAccess()
+  return access.status === 'ok' ? access.partitionId : null
+}
+
 /**
- * The opaque memory partition of the verified person: a one-way digest of the owner key, so no file name carries it.
- * With no owner (signed out, or an install that allows an unsigned profile) it is the local profile partition. This
- * is the typed seam for G19's local memory partition: when that API lands, its id replaces this derivation.
+ * Whether dictated text may be recorded or learned right now. Fails closed: signed out, an unreadable or absent
+ * settings snapshot, dictation not effectively on (the person's or the organization's choice) and a managed
+ * summary-only profile (the organization chose that no transcript is kept) all say no.
  */
-export function dictationPartitionId(ownerKey: string | null): string {
-  if (!ownerKey) return 'local'
-  return createHash('sha256').update(`dictation-memory:${ownerKey}`).digest('hex').slice(0, 32)
+export function dictationMemoryAllowed(
+  published: SettingsObservation | null,
+  signedIn: boolean,
+  qaIdentity: boolean
+): boolean {
+  if (!signedIn || !published || !published.readable) return false
+  const settings = published.settings
+  if (!resolveDictationEnabled(settings.voiceActions?.dictation, { qaIdentity })) return false
+  return dictationTextAtRest(published) === 'allowed'
+}
+
+/** Whether dictated text may exist at rest: a managed summary-only profile keeps no text, so it is `denied`. */
+export function dictationTextAtRest(published: SettingsObservation | null): 'allowed' | 'denied' | 'unknown' {
+  if (!published || !published.readable) return 'unknown'
+  const summaryOnly = isSummaryOnlyProfile(
+    resolveEnterpriseLiveProfile(published.settings.enterpriseLive ?? published.settings)
+  )
+  return summaryOnly ? 'denied' : 'allowed'
 }
 
 /**
@@ -61,8 +91,9 @@ export function bootstrapDictationMemory(deps: DictationMemoryWiringDeps): Dicta
   const memory = createDictationMemory({
     rootDir: () => join(deps.userDataPath(), 'dictation-memory'),
     keys: deps.keys ?? DEFAULT_KEYS,
-    partition: () => dictationPartitionId(deps.currentOwnerKey()),
-    enabled: () => deps.requireAuth(),
+    partition: deps.partition ?? activePartition,
+    enabled: () => dictationMemoryAllowed(deps.readSettings(), deps.requireAuth(), deps.qaIdentity),
+    atRest: () => dictationTextAtRest(deps.readSettings()),
     now: Date.now,
     audit: deps.audit
   })
@@ -75,6 +106,8 @@ export function bootstrapDictationMemory(deps: DictationMemoryWiringDeps): Dicta
   installDictationMemory(memory)
   // The disposers are discarded on purpose: these bindings live for the app lifetime.
   deps.ownerSession.onRevoked(() => memory.onOwnerRevoked())
+  // An account switch: the correction window of the previous partition's person is forgotten at once.
+  ;(deps.onPartitionChange ?? onMemoryPartitionChange)(() => memory.onOwnerRevoked())
   deps.onWillQuit(() => {
     void memory
       .flush()

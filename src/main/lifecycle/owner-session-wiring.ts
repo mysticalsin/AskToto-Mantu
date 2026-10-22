@@ -12,6 +12,7 @@ import { authSessionGeneration, authStatus, requireAuth } from '../auth'
 import { auditLog, mainLog } from '../logger'
 import { getResponsivenessRecorder } from '../infra/observability/responsiveness-recorder'
 import { bindMeetingMicRendererReset } from '../meeting-mic-capture-authority'
+import { QA_IDENTITY_BUILD } from '../qa-identity'
 import { getPublishedSettingsObservation } from '../settings-observation'
 import type { SpeechDesktopHooks } from '../speech-desktop-boundary'
 import type { RendererResetSource } from '../features/meetings/session-closure'
@@ -128,7 +129,8 @@ export function createOwnerSessionWiring(deps: OwnerSessionWiringDeps): OwnerSes
     requireAuth: () => requireAuth(),
     ownerSession,
     userDataPath: () => app.getPath('userData'),
-    currentOwnerKey: () => ownerSession.currentOwnerKey(),
+    readSettings: getPublishedSettingsObservation,
+    qaIdentity: QA_IDENTITY_BUILD,
     audit: (record) => auditLog('dictation.memory', { ...record }),
     onWillQuit: (listener) => app.once('will-quit', listener)
   })

@@ -53,8 +53,11 @@ export interface DictationJournalDeps {
   /** `<userData>/dictation-memory/journal`. Created on first write. */
   rootDir(): string
   keyring: MemoryKeyring
-  /** The opaque partition of the verified person this process is working for, on every use. */
-  partition(): string
+  /**
+   * The memory partition in force (G19), on every use; null when none is open (signed out, unverified, switching).
+   * Without one nothing is recorded, offered or resolved. Records of another partition are never touched.
+   */
+  partition(): string | null
   /** Whether the journal may record or offer right now. Deleting never needs it. */
   enabled(): boolean
   now(): number
@@ -76,6 +79,8 @@ export interface DictationJournal {
   take(): Promise<DictationRecoveryItem[]>
   /** The person acted on an offered record: delete it and hand its text to the owned-span path. */
   resolve(id: string): Promise<JournalResolve>
+  /** Deletes every record that is not being dictated now, whatever its partition. Returns how many. */
+  purge(): Promise<number>
   /** Launch housekeeping: expired, unreadable, temp, over-cap and (optionally) offered-and-ignored records. */
   sweep(options: { retireOffered: boolean }): Promise<JournalSweepCounts>
   /** The file id (opaque, 32 hex) a turn is journaled under. */
@@ -224,7 +229,9 @@ export function createDictationJournal(deps: DictationJournalDeps): DictationJou
     return lane(id, async (): Promise<JournalOutcome> => {
       const existing = await read(id)
       if (existing.status === 'unreadable') return { status: 'refused', reason: 'UNAVAILABLE' }
-      if (existing.status === 'ok' && existing.entry.partition !== safe(deps.partition, '')) {
+      const partition = safe(deps.partition, null)
+      if (partition === null) return { status: 'refused', reason: 'UNAVAILABLE' }
+      if (existing.status === 'ok' && existing.entry.partition !== partition) {
         return { status: 'refused', reason: 'UNAVAILABLE' }
       }
       const next = change(existing.status === 'ok' ? existing.entry : null)
@@ -262,7 +269,7 @@ export function createDictationJournal(deps: DictationJournalDeps): DictationJou
       if (refusal) return { status: 'refused', reason: refusal }
       const id = fileIdFor(turnId)
       live.add(id)
-      const partition = safe(deps.partition, '')
+      const partition = safe(deps.partition, null) ?? ''
       return mutate(turnId, (existing) => {
         const entry = existing ?? blank(id, partition)
         if (entry.segments.length >= limits.maxSegments) return 'LIMIT'
@@ -278,7 +285,7 @@ export function createDictationJournal(deps: DictationJournalDeps): DictationJou
       const refusal = precheck(turnId, draft.text)
       if (refusal) return { status: 'refused', reason: refusal }
       const id = fileIdFor(turnId)
-      const partition = safe(deps.partition, '')
+      const partition = safe(deps.partition, null) ?? ''
       return mutate(turnId, (existing) => ({
         ...(existing ?? blank(id, partition)),
         updatedAtMs: deps.now(),
@@ -305,8 +312,8 @@ export function createDictationJournal(deps: DictationJournalDeps): DictationJou
     },
 
     async take() {
-      if (!safe(deps.enabled, false)) return []
-      const partition = safe(deps.partition, '')
+      const partition = safe(deps.partition, null)
+      if (!safe(deps.enabled, false) || partition === null) return []
       const offered: Array<{ item: DictationRecoveryItem; order: number }> = []
       for (const name of await names()) {
         const id = ENTRY_NAME.exec(name)?.[1]
@@ -334,7 +341,8 @@ export function createDictationJournal(deps: DictationJournalDeps): DictationJou
 
     async resolve(id) {
       if (!/^[0-9a-f]{32}$/.test(id) || live.has(id)) return { status: 'unknown' }
-      const partition = safe(deps.partition, '')
+      const partition = safe(deps.partition, null)
+      if (partition === null) return { status: 'unknown' }
       return lane(id, async (): Promise<JournalResolve> => {
         const current = await read(id)
         if (current.status !== 'ok' || current.entry.partition !== partition || !current.entry.offered) {
@@ -344,6 +352,15 @@ export function createDictationJournal(deps: DictationJournalDeps): DictationJou
         if (!(await remove(id))) return { status: 'unknown' }
         return { status: 'resolved', text, span: mintOwnedSpan(text, 'recovered-draft') }
       })
+    },
+
+    async purge() {
+      let count = 0
+      for (const name of await names()) {
+        const id = ENTRY_NAME.exec(name)?.[1]
+        if (id && !live.has(id) && (await lane(id, () => remove(id)))) count++
+      }
+      return count
     },
 
     async sweep(options) {

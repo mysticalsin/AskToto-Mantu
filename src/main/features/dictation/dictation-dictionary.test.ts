@@ -176,4 +176,22 @@ describe('personal dictionary: owned-span learning (G26)', () => {
     })
     expect((await dictionary.list()).entries).toEqual([])
   })
+
+  it("is unavailable with no partition open and accepts G19's ids (legacy and 24 hex)", async () => {
+    const part = { id: null as string | null }
+    const { dictionary } = setup({ partition: () => part.id })
+    expect(await dictionary.list()).toEqual({ status: 'unavailable', entries: [] })
+    expect(await dictionary.learnFromCorrection(span('ask tota about it now'), 'ask Toto about it now')).toEqual({
+      learned: 0
+    })
+    expect(await dictionary.clear()).toBe(0)
+    for (const id of ['legacy', 'ab12'.repeat(6)]) {
+      part.id = id
+      expect(await dictionary.learnFromCorrection(span('ask tota about it now'), 'ask Toto about it now')).toEqual({
+        learned: 1
+      })
+    }
+    part.id = 'not a partition'
+    expect(await dictionary.list()).toEqual({ status: 'unavailable', entries: [] })
+  })
 })

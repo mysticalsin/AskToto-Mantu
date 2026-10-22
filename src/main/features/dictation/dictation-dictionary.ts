@@ -7,9 +7,8 @@
  * field's readback, and no entry point that takes a term directly.
  *
  * Storage, per partition: `<userData>/dictation-memory/dictionary/<partition>.dd1`, one sealed record (AES-256-GCM,
- * the partition bound in as additional data). The partition is the opaque id of the verified person; when G19's memory
- * partition API lands, its id replaces the wiring's `partition()` and nothing here changes (typed seam). Another
- * partition's file is neither read, changed nor deleted.
+ * the partition bound in as additional data). The partition is G19's active (tenant, owner) memory partition; with none
+ * open the dictionary is unavailable. Another partition's file is neither read, changed nor deleted.
  *
  * Inspect and delete: `list`, `remove` (one entry) and `clear` (the whole dictionary). A delete never needs a span
  * and works on an unreadable file. A file that cannot be read is reported `unavailable` and never overwritten.
@@ -32,8 +31,8 @@ export interface DictationDictionaryDeps {
   /** `<userData>/dictation-memory/dictionary`. Created on first write. */
   rootDir(): string
   keyring: MemoryKeyring
-  /** The opaque partition of the verified person, on every use. */
-  partition(): string
+  /** The memory partition in force (G19), on every use; null when none is open: the dictionary is then unavailable. */
+  partition(): string | null
   now(): number
   newId?(): string
   /** Test seam: may only tighten the policy. */
@@ -72,7 +71,8 @@ const FileSchema = z
 type Stored = z.infer<typeof FileSchema>
 type StoredEntry = Stored['entries'][number]
 
-const PARTITION = /^(?:[0-9a-f]{32}|local)$/
+/** G19 ids: `legacy` or 24 hex characters (32 is accepted for synthetic fixtures). */
+const PARTITION = /^(?:legacy|[0-9a-f]{24,32})$/
 const isMissing = (error: unknown): boolean => (error as NodeJS.ErrnoException | undefined)?.code === 'ENOENT'
 
 export function createDictationDictionary(deps: DictationDictionaryDeps): DictationDictionary {
@@ -90,7 +90,7 @@ export function createDictationDictionary(deps: DictationDictionaryDeps): Dictat
   const partitionOf = (): string | null => {
     try {
       const partition = deps.partition()
-      return PARTITION.test(partition) ? partition : null
+      return partition !== null && PARTITION.test(partition) ? partition : null
     } catch {
       return null
     }

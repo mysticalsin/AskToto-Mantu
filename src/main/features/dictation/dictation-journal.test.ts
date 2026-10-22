@@ -362,3 +362,33 @@ describe('dictation journal: retention and bounds (G26)', () => {
     expect((await journal.sweep({ retireOffered: false })).expired).toBe(1)
   })
 })
+
+describe('dictation journal: partition and purge (G26)', () => {
+  it('with no partition open nothing is recorded, offered or resolved', async () => {
+    const part = { id: PARTITION_A as string | null }
+    const { journal, journalDir } = setup({ partition: () => part.id })
+    await journal.appendSegment('turn-1', 'kept words')
+    journal.endTurn('turn-1')
+    part.id = null
+    expect(await journal.appendSegment('turn-2', 'refused words')).toEqual({ status: 'refused', reason: 'UNAVAILABLE' })
+    expect(await journal.take()).toEqual([])
+    expect(await journal.resolve(journal.idFor('turn-1'))).toEqual({ status: 'unknown' })
+    expect(await files(journalDir)).toHaveLength(1)
+    part.id = PARTITION_A
+    expect(await journal.take()).toHaveLength(1)
+  })
+
+  it('purge deletes every record that is not being dictated, whatever its partition', async () => {
+    const dir = makeTempRoot()
+    roots.push(dir)
+    const a = setup({ dir: dir.path, partition: () => PARTITION_A })
+    const b = setup({ dir: dir.path, partition: () => PARTITION_B })
+    await a.journal.appendSegment('turn-1', 'a words')
+    a.journal.endTurn('turn-1')
+    await b.journal.appendSegment('turn-2', 'b words')
+    b.journal.endTurn('turn-2')
+    await a.journal.appendSegment('live', 'live words')
+    expect(await a.journal.purge()).toBe(2)
+    expect(await files(a.journalDir)).toHaveLength(1)
+  })
+})

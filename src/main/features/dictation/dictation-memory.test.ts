@@ -265,3 +265,37 @@ describe('dictation memory: audit carries counts only (G26)', () => {
     }
   })
 })
+
+describe('dictation memory: policy gates (G26)', () => {
+  it('does not learn while dictated text is not allowed, but inspect and delete still work', async () => {
+    const flag = { on: true }
+    const { memory } = setup({ enabled: () => flag.on })
+    memory.sink.inserted('turn-1', 'ask tota about the plan')
+    const id = memory.spansRecent().spans[0].id
+    await memory.spansCorrect({ id, correctedText: 'ask Toto about the plan' })
+    expect((await memory.dictionaryList()).entries).toHaveLength(1)
+    flag.on = false
+    memory.sink.inserted('turn-2', 'use mantis for notes')
+    expect(memory.spansRecent().spans).toEqual([])
+    expect((await memory.dictionaryList()).entries).toHaveLength(1)
+    expect(await memory.dictionaryClear()).toEqual({ ok: true, count: 1 })
+  })
+
+  it('a denied at-rest policy purges the journal and the dictionary at launch; unknown deletes nothing', async () => {
+    const policy = { value: 'allowed' as 'allowed' | 'denied' | 'unknown' }
+    const { memory, root, audits } = setup({ atRest: () => policy.value })
+    memory.sink.segmentRecognized('turn-1', 'words')
+    memory.sink.turnEnded('turn-1')
+    await settle(memory)
+    memory.sink.inserted('turn-0', 'ask tota about the plan')
+    await memory.spansCorrect({ id: memory.spansRecent().spans[0].id, correctedText: 'ask Toto about the plan' })
+    policy.value = 'unknown'
+    await memory.launch()
+    expect(await readdir(join(root.path, 'dictation-memory', 'journal'))).toHaveLength(1)
+    policy.value = 'denied'
+    await memory.launch()
+    expect(await readdir(join(root.path, 'dictation-memory', 'journal'))).toEqual([])
+    expect((await memory.dictionaryList()).entries).toEqual([])
+    expect(audits.at(-1)).toEqual({ phase: 'text_purged', count: 2 })
+  })
+})

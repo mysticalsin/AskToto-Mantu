@@ -41,6 +41,7 @@ export type DictationMemoryAuditPhase =
   | 'dictionary_learned'
   | 'dictionary_removed'
   | 'dictionary_cleared'
+  | 'text_purged'
 
 /** Counts and enums only. */
 export interface DictationMemoryAuditRecord {
@@ -67,12 +68,20 @@ export interface DictationMemoryDeps {
   rootDir(): string
   keys: DictationKeyCustody
   /**
-   * The opaque partition of the verified person, on every use (typed seam: G19's memory partition API replaces the
-   * wiring's derivation when it lands). Records of another partition are never offered, read or changed.
+   * The memory partition in force (G19's verified tenant and user), on every use; null when none is open. Records of
+   * another partition are never offered, read or changed, and with none open nothing is recorded or learned.
    */
-  partition(): string
-  /** Whether dictation may record right now (signed in). Deleting and reading the dictionary never need it. */
+  partition(): string | null
+  /**
+   * Whether dictated text may be recorded or learned right now: signed in, dictation effectively on, and not a managed
+   * summary-only profile. Deleting and reading the dictionary never need it.
+   */
   enabled(): boolean
+  /**
+   * Whether dictated text may exist at rest at all. `denied` (a managed summary-only profile) purges the journal and
+   * the active partition's dictionary at launch; `unknown` (settings unreadable) refuses writes but deletes nothing.
+   */
+  atRest?(): 'allowed' | 'denied' | 'unknown'
   now(): number
   newId?(): string
   audit?(record: DictationMemoryAuditRecord): void
@@ -161,6 +170,7 @@ export function createDictationMemory(deps: DictationMemoryDeps): DictationMemor
   }
 
   const learn = async (span: OwnedSpan, correctedText: string): Promise<number> => {
+    if (!deps.enabled()) return 0
     const { learned } = await dictionary.learnFromCorrection(span, correctedText)
     if (learned > 0) audit({ phase: 'dictionary_learned', count: learned })
     return learned
@@ -206,6 +216,17 @@ export function createDictationMemory(deps: DictationMemoryDeps): DictationMemor
     sink,
 
     async launch() {
+      let denied = false
+      try {
+        denied = deps.atRest?.() === 'denied'
+      } catch {
+        denied = false
+      }
+      if (denied) {
+        const count = (await journal.purge()) + (await dictionary.clear())
+        if (count > 0) audit({ phase: 'text_purged', count })
+        return
+      }
       const counts = await journal.sweep({ retireOffered: true })
       const count = counts.expired + counts.evicted + counts.retired + counts.unreadable + counts.temp
       if (count > 0) audit({ phase: 'journal_swept', count, ...counts })
