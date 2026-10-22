@@ -405,6 +405,8 @@ export type AuditEvent =
   | 'task.recovered'
   | 'task.effect_uncertain'
   | 'task.dispatch_denied'
+  // G32: Stop invalidated desktop tasks. Counts only (queued, running, dropped steers); never an action argument.
+  | 'task.stopped'
   // Metadata-only: the global voice hold chord watcher (V01). A kind and an event type, never a key or text.
   | 'voice.chord'
   // WP02 contract names (content-free by schema).

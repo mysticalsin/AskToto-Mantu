@@ -24,7 +24,10 @@ export interface CommandConfirmRuntimeOptions {
 }
 
 export interface CommandConfirmRuntime {
-  deps: Pick<CommandConfirmationDeps, 'execute' | 'recoverTasks' | 'preflight' | 'card' | 'isAssistiveTechnologyOn'>
+  // stopTasks is required here, not optional: dropping it would leave Stop, sign-out and lock unable to reach queued
+  // and running desktop tasks (G32) while everything still type-checks.
+  deps: Pick<CommandConfirmationDeps, 'execute' | 'recoverTasks' | 'preflight' | 'card' | 'isAssistiveTechnologyOn'> &
+    Required<Pick<CommandConfirmationDeps, 'stopTasks'>>
   takeRecoveryNotices(): Promise<MetisCommandRecoveryNotice[]>
   dispose(): void
 }
@@ -61,6 +64,7 @@ export function createCommandConfirmRuntime(options: CommandConfirmRuntimeOption
     deps: {
       execute: tasks.execute,
       recoverTasks: tasks.recoverTasks,
+      stopTasks: tasks.stopTasks,
       preflight: (request, stage) => {
         ensureWatcher()
         return preflight(request, stage)
