@@ -1,11 +1,13 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { mkdtempSync, rmSync, readFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readdirSync, rmSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import type { Settings } from '@shared/ipc'
 import { DealEntitySchema, type DealEntity } from '@shared/brain'
-import { brainDir, readDeal, writeDeal, setDealOutcome } from './store'
+import { brainDir, readDeal, writeDeal, setDealOutcome, purgeBrain } from './store'
+import { HUMAN_MARKS_FILE, readHumanMarks } from './human-marks'
 import { settleBrainWritesForTests } from '../test-helpers/settle-brain-writes'
+import { useStorageForTests } from '../infra/storage/meetings-storage'
 
 vi.mock('electron')
 
@@ -82,5 +84,59 @@ describe.each([
     expect(updated?.stage).toBe('defense')
     expect(updated?.win_likelihood_band).toBe('mixed')
     expect(updated?.band_evidence).toBe('price pressure')
+  })
+})
+
+describe('human-marks.json (D8-2 sidecar)', () => {
+  let folder: string
+  let s: Settings
+  beforeEach(() => {
+    useStorageForTests()
+    folder = mkdtempSync(join(tmpdir(), 'asktoto-human-marks-file-'))
+    s = { meetingsFolder: folder, encryptTranscripts: false } as Settings
+  })
+  afterEach(async () => {
+    await settleBrainWritesForTests()
+    rmSync(folder, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
+  })
+
+  const plant = async (): Promise<void> => {
+    await writeDeal(s, 'acme', DealEntitySchema.parse({ name: 'Acme', account: 'Acme' }))
+  }
+
+  it('setDealOutcome records the mark in the sidecar before the deal changes', async () => {
+    await plant()
+    await setDealOutcome(s, 'acme', 'won')
+    const marks = await readHumanMarks(s)
+    expect(marks.dealOutcomes.acme?.outcome).toBe('won')
+    expect(readFileSync(join(brainDir(s), HUMAN_MARKS_FILE), 'utf8')).toContain('"v": 1')
+  })
+
+  it('human-marks.json survives purgeBrain(rebuild) next to corrections.json', async () => {
+    await plant()
+    await setDealOutcome(s, 'acme', 'lost')
+    writeFileSync(join(brainDir(s), 'corrections.json'), '[]', 'utf8')
+
+    expect(purgeBrain(s, { mode: 'rebuild', preserveCorrections: true })).toEqual({ ok: true })
+
+    expect(readdirSync(brainDir(s)).sort()).toEqual(['corrections.json', HUMAN_MARKS_FILE])
+    expect((await readHumanMarks(s)).dealOutcomes.acme?.outcome).toBe('lost')
+    expect(readDeal(s, 'acme')).toBeNull()
+  })
+
+  it('purgeBrain(erase) removes the sidecar with everything else', async () => {
+    await plant()
+    await setDealOutcome(s, 'acme', 'won')
+    expect(purgeBrain(s, { mode: 'erase' })).toEqual({ ok: true })
+    expect(existsSync(brainDir(s))).toBe(false)
+  })
+
+  it('an unreadable sidecar is set aside, not overwritten', async () => {
+    await plant()
+    writeFileSync(join(brainDir(s), HUMAN_MARKS_FILE), '{ not json', 'utf8')
+    await setDealOutcome(s, 'acme', 'won')
+    const names = readdirSync(brainDir(s))
+    expect(names.some((n) => n.startsWith('human-marks.corrupt-'))).toBe(true)
+    expect((await readHumanMarks(s)).dealOutcomes.acme?.outcome).toBe('won')
   })
 })

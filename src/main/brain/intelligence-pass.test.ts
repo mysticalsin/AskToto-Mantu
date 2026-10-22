@@ -121,6 +121,18 @@ describe('Update Intelligence pass — local first, API once', () => {
     expect(createStreamMock.mock.calls[0][0].providerId).toBe('local')
   })
 
+  it('Local ready, no API key, fallback off: the queued pass job is picked and extracted on Local', async () => {
+    writeFileSync(join(meetingsFolder, 'local-only.md'), '---\ndate: 2026-08-07\n---\nAcme local only.', 'utf8')
+    createStreamMock.mockImplementation(respondJson())
+
+    expect(await startIntelligencePass()).toEqual({ queued: 1 })
+    await waitForIdle()
+
+    expect(readIndex(getSettings()).ingested['local-only.md']?.ok).toBe(true)
+    expect(createStreamMock).toHaveBeenCalledTimes(1)
+    expect(createStreamMock.mock.calls[0][0].providerId).toBe('local')
+  })
+
   it('falls over to the configured API once when Local errors', async () => {
     writeFileSync(join(meetingsFolder, 'local-error.md'), '---\ndate: 2026-08-02\n---\nAcme wants a date.', 'utf8')
     setApiKey('anthropic', 'fake-anthropic-key')

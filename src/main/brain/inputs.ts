@@ -151,6 +151,25 @@ export function hasSourceDrift(scan: SourceScan, idx: BrainIndex): boolean {
   return false
 }
 
+/**
+ * Split source drift by what it needs. `changed`: a recorded source whose file is still present but whose
+ * version moved, which needs only that meeting re-extracted. `missing`: a recorded source with no file (or
+ * no readable version) in the scan, which only a rebuild can remove from the entity files. Same inputs and
+ * same "unknown scan means no drift" rule as hasSourceDrift.
+ */
+export function classifySourceDrift(scan: SourceScan, idx: BrainIndex): { changed: string[]; missing: string[] } {
+  const out = { changed: [] as string[], missing: [] as string[] }
+  const current = sourceVersions(scan)
+  if (!current) return out
+  for (const [file, record] of Object.entries(idx.ingested)) {
+    if (!record.ok) continue
+    const version = current.get(file)
+    if (!version) out.missing.push(file)
+    else if (!record.sourceVersion || record.sourceVersion !== version) out.changed.push(file)
+  }
+  return out
+}
+
 export function hasIncompleteSource(scan: SourceScan, idx: BrainIndex): boolean {
   for (const folder of scan) {
     if (folder.status !== 'ok') return true

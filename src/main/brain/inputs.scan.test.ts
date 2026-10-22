@@ -10,6 +10,7 @@ import type { FileClass, ListResult, StorageGateway } from '../infra/storage/gat
 import { storageAt, useStorageForTests } from '../infra/storage/meetings-storage'
 import {
   canonicalSourceRootId,
+  classifySourceDrift,
   formatSourceVersion,
   hasIncompleteSource,
   hasSourceDrift,
@@ -117,6 +118,34 @@ describe('scanMeetingSources missing-root classification', () => {
     expect(sourceVersions(scan)).toBeNull()
     expect(hasSourceDrift(scan, prior)).toBe(false)
     expect(hasIncompleteSource(scan, prior)).toBe(true)
+  })
+
+  it('splits drift into changed present sources and missing sources', async () => {
+    const root = join(temp, 'classify')
+    mkdirSync(root)
+    writeFileSync(join(root, 'same.md'), 'unchanged\n', 'utf8')
+    writeFileSync(join(root, 'edited.md'), 'edited since it was indexed\n', 'utf8')
+    const scan = await scanOnly(settings(root))
+    const current = sourceVersions(scan)!
+    const idx = BrainIndexSchema.parse({
+      ingested: {
+        'same.md': { at: 1, ok: true, sourceVersion: current.get('same.md') },
+        'edited.md': { at: 1, ok: true, sourceVersion: 'stale-version' },
+        'deleted.md': { at: 1, ok: true, sourceVersion: '1:1' },
+        'failed.md': { at: 1, ok: false, sourceVersion: 'stale-version' }
+      }
+    })
+
+    expect(classifySourceDrift(scan, idx)).toEqual({ changed: ['edited.md'], missing: ['deleted.md'] })
+    expect(hasSourceDrift(scan, idx)).toBe(true)
+    expect(classifySourceDrift(scan, emptyIndex())).toEqual({ changed: [], missing: [] })
+  })
+
+  it('reports no drift of either kind while the scan cannot prove versions', async () => {
+    const root = join(temp, 'absent-classify')
+    const scan = await scanOnly(settings(root))
+    const idx = BrainIndexSchema.parse({ ingested: { 'a.md': { at: 1, ok: true, sourceVersion: '1:1' } } })
+    expect(classifySourceDrift(scan, idx)).toEqual({ changed: [], missing: [] })
   })
 
   it('keeps a regular file configured as a root failed rather than missing or usable', async () => {

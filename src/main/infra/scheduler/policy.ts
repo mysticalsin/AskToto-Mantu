@@ -14,8 +14,7 @@ export type WorkTrigger = 'user' | 'automatic'
 export const MAX_INGEST_ATTEMPTS = 6
 
 const MAX_RETRY_DELAY_MS = 30 * 60_000
-const retryDelayMs = (attempts: number): number =>
-  Math.min(MAX_RETRY_DELAY_MS, 60_000 * 2 ** Math.max(0, attempts - 1))
+const retryDelayMs = (attempts: number): number => Math.min(MAX_RETRY_DELAY_MS, 60_000 * 2 ** Math.max(0, attempts - 1))
 
 /** One source file as one scan sees it. `changedAtMs` is its ctime: edits move it, and so do cloud
  *  hydration and eviction, which leave mtime and size unchanged (infra/storage/dataless.ts relies on the same). */
@@ -88,7 +87,7 @@ export type MaintenanceDeferral =
   | 'awaiting_first_interaction'
   | 'maintenance_running'
   | 'interactive_active'
-export type DeferredReason = MaintenanceDeferral | 'ledger_unavailable'
+export type DeferredReason = MaintenanceDeferral | 'ledger_unavailable' | 'budget'
 
 export interface MaintenanceState {
   uptimeMs: number
@@ -101,7 +100,8 @@ export interface MaintenanceState {
 
 export function deferralFor(state: MaintenanceState): MaintenanceDeferral | null {
   if (state.uptimeMs < BOOT_QUIET_PERIOD_MS) return 'boot_quiet_period'
-  if (!state.interacted && (state.priorExit === undefined || state.priorExit === 'unclean')) return 'awaiting_first_interaction'
+  if (!state.interacted && (state.priorExit === undefined || state.priorExit === 'unclean'))
+    return 'awaiting_first_interaction'
   if (state.holding) return 'maintenance_running'
   if (state.interactiveActive) return 'interactive_active'
   return null

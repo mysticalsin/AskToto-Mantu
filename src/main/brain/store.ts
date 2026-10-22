@@ -32,8 +32,6 @@ import {
   type AccountEntity,
   type DealEntity,
   type MeetingExtraction,
-  type Confidence,
-  type ProvenantField,
   type IndexUnavailableCause
 } from '@shared/brain'
 import { resolveMeetingsFolder, readSavedFile, writeSaved, decodeSavedResult, envelopeKeyKind } from '../transcripts'
@@ -42,6 +40,8 @@ import { readStableSnapshotBytes } from '../infra/storage/stable-read'
 import { mainLog, auditLog } from '../logger'
 import { fileKeyState, isKeychainAvailable } from '../secrets'
 import { cloneEntity } from './entity-values'
+import { migrateAccount, migrateDeal, migratePerson } from './entity-migrate'
+import { HUMAN_MARKS_FILE, recordDealOutcomeMark } from './human-marks'
 
 export { cloneEntity }
 export {
@@ -199,75 +199,6 @@ export function withEntityLock<T>(fn: () => Promise<T>): Promise<T> {
     () => undefined
   )
   return run
-}
-
-// ── v1 → v2 lazy migration (B2) ──────────────────────────────────────────────
-//
-// A v1 entity file has role/org/sector/stage/win_likelihood_band/velocity as plain values with zero
-// per-field provenance. Rather than replacing those fields in place (see the ProvenantField doc comment
-// in shared/brain.ts for why that would break buildBrainContext/mars.ts/BrainView.tsx), v2 keeps them
-// exactly as they are and adds a `<field>_provenance` sidecar the first time each file is read. The
-// sidecar is synthesized HONESTLY, never fabricated:
-//   - source_file: '' — we genuinely don't know which meeting first asserted the value; inventing one
-//     would be a fabricated citation, so it stays empty (an honest "unknown" sentinel).
-//   - date: the entity's EARLIEST known meeting date — the best available lower bound for when this
-//     value could first have been true — or '' if the entity has no dated meetings at all.
-//   - confidence: reuses the field's own REAL historical confidence where one already existed on disk
-//     (AccountEntity.sector_confidence); everything else (role/org/stage/band/velocity) never had a
-//     per-field confidence in v1, so it gets 'INFERRED' — honest because we cannot claim EXTRACTED-grade
-//     provenance for a value that was never tagged as such.
-//   - state: 'extracted' — the normal merge/date-gate rules apply to it going forward.
-// Migration never fires for a field whose plain value is absent (null/''/the bland velocity default) —
-// there is nothing to attach honest provenance to.
-
-function earliestDate(meetings: Array<{ date: string }>): string {
-  const dates = meetings
-    .map((m) => m.date)
-    .filter(Boolean)
-    .sort()
-  return dates[0] ?? ''
-}
-
-function migrateField<T>(
-  value: T,
-  meetings: Array<{ date: string }>,
-  confidence: Confidence = 'INFERRED',
-  quote?: string
-): ProvenantField<T> {
-  return { value, source_file: '', date: earliestDate(meetings), quote, confidence, state: 'extracted', superseded: [] }
-}
-
-function migratePerson(p: PersonEntity, slug: string): PersonEntity {
-  p.id = p.id || slug
-  p.aliases ??= []
-  if (!p.role_provenance && p.role) p.role_provenance = migrateField(p.role, p.meetings)
-  if (!p.org_provenance && p.account) p.org_provenance = migrateField(p.account, p.meetings)
-  return p
-}
-
-function migrateAccount(a: AccountEntity, slug: string): AccountEntity {
-  a.id = a.id || slug
-  a.aliases ??= []
-  if (!a.sector_provenance) a.sector_provenance = migrateField(a.sector, a.meetings, a.sector_confidence)
-  return a
-}
-
-function migrateDeal(d: DealEntity, slug: string): DealEntity {
-  d.id = d.id || slug
-  d.aliases ??= []
-  if (!d.stage_provenance && d.stage) d.stage_provenance = migrateField(d.stage, d.meetings)
-  if (!d.win_likelihood_band_provenance && d.win_likelihood_band) {
-    d.win_likelihood_band_provenance = migrateField(
-      d.win_likelihood_band,
-      d.meetings,
-      'INFERRED',
-      d.band_evidence || undefined
-    )
-  }
-  if (!d.velocity_provenance && d.velocity.signal !== 'no-hard-date-found') {
-    d.velocity_provenance = migrateField(d.velocity, d.meetings)
-  }
-  return d
 }
 
 export type BrainEntityKind = 'person' | 'account' | 'deal'
@@ -849,6 +780,7 @@ export async function setDealOutcome(
   return withEntityLock(async () => {
     const read = readDeal(s, dealSlug)
     if (!read) return null
+    await recordDealOutcomeMark(s, dealSlug, outcome) // D8-2: the human mark is durable first
     const deal = cloneEntity(read)
     deal.outcome = outcome
     await writeDeal(s, dealSlug, deal)
@@ -1118,6 +1050,10 @@ function preserveUnreadableIndexBeforeRebuild(settings: Settings): void {
   }
 }
 
+// Human-authored root files a rebuild keeps. Each is escrowed to a sibling `<root>.<stem>-preserve.json`
+// across the wipe and restored after it. The journal's escrow name is unchanged.
+const REBUILD_KEPT_ROOT_FILES = ['corrections.json', HUMAN_MARKS_FILE] as const
+
 /**
  * Erase the entire `.brain/` store — every meeting extraction, entity file, the graph, and the index.
  *
@@ -1143,24 +1079,34 @@ export function purgeBrain(
 ): { ok: boolean } {
   const root = brainDir(settings)
   if (opts.mode === 'rebuild') preserveUnreadableIndexBeforeRebuild(settings)
-  const journalPath = join(root, 'corrections.json')
-  const preserveTo = `${root}.corrections-preserve.json`
-  let preserve = false
+  const escrowOf = (name: string): string => `${root}.${basename(name, '.json')}-preserve.json`
+  const kept: string[] = []
+  const restoreKept = (): void => {
+    mkdirSync(root, { recursive: true })
+    for (const name of kept) {
+      if (!existsSync(escrowOf(name))) continue
+      cpSync(escrowOf(name), join(root, name))
+      rmSync(escrowOf(name), { force: true })
+    }
+  }
   try {
-    preserve = opts.mode === 'rebuild' && opts.preserveCorrections && existsSync(journalPath)
-    if (preserve) cpSync(journalPath, preserveTo)
+    if (opts.mode === 'rebuild' && opts.preserveCorrections) {
+      for (const name of REBUILD_KEPT_ROOT_FILES) {
+        if (!existsSync(join(root, name))) continue
+        cpSync(join(root, name), escrowOf(name))
+        kept.push(name)
+      }
+    }
     const preservedDir = preservedIndexDir(settings)
     if (existsSync(root)) rmSync(root, { recursive: true, force: true })
     if (opts.mode === 'erase') rmSync(preservedDir, { recursive: true, force: true })
     resetMatchKeyCacheForTests() // Receipt Mode must not match against a wiped corpus
-    if (preserve) {
-      mkdirSync(root, { recursive: true })
-      cpSync(preserveTo, journalPath)
-      rmSync(preserveTo, { force: true })
-      // Everything except the restored journal is confirmed gone; the journal's presence here is
-      // deliberate, not a failed wipe — success means "nothing but the preserved file remains".
+    if (kept.length > 0) {
+      restoreKept()
+      // Everything except the restored human files is confirmed gone; their presence here is
+      // deliberate, not a failed wipe — success means "nothing but the preserved files remains".
       const remaining = readdirSync(root)
-      return { ok: remaining.length === 1 && remaining[0] === 'corrections.json' }
+      return { ok: remaining.length === kept.length && remaining.every((name) => kept.includes(name)) }
     }
     return { ok: !existsSync(root) && (opts.mode !== 'erase' || !existsSync(preservedDir)) }
   } catch (e) {
@@ -1171,16 +1117,10 @@ export function purgeBrain(
     // partially emptied, or untouched). Best-effort and never throws out of this already-failing path;
     // the caller still gets `ok: false` either way and must abort rather than proceed with a rebuild atop
     // an unverified store.
-    if (preserve) {
-      try {
-        if (existsSync(preserveTo)) {
-          if (!existsSync(root)) mkdirSync(root, { recursive: true })
-          cpSync(preserveTo, journalPath)
-          rmSync(preserveTo, { force: true })
-        }
-      } catch (restoreErr) {
-        console.warn('[brain] purgeBrain: could not restore preserved journal after failed wipe', restoreErr)
-      }
+    try {
+      restoreKept()
+    } catch (restoreErr) {
+      console.warn('[brain] purgeBrain: could not restore preserved human files after failed wipe', restoreErr)
     }
     return { ok: false }
   }

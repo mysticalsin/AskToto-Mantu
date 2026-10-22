@@ -32,6 +32,7 @@ import {
   scanMeetingSources,
   sourceVersions,
   hasSourceDrift,
+  classifySourceDrift,
   hasIncompleteSource,
   countUnextracted,
   hasSavedReconciliationCandidate,
@@ -71,11 +72,6 @@ import {
   indexUnavailable,
   indexUnavailableAsync,
   writeMeetingExtraction,
-  readPerson,
-  writePerson,
-  readDeal,
-  writeDeal,
-  listEntities,
   listMeetingExtractions,
   loadMeetingExtractionSlugs,
   removeMeetingExtraction,
@@ -89,6 +85,9 @@ import {
 } from './store'
 import { applyCorrections, readAliasMap, replayCorrections, readCorrectionsJournalSafe } from './corrections'
 import { mergeExtraction } from './merge-extraction'
+import { applyHumanMarks } from './human-marks-apply'
+import { lintBrain } from './lint'
+import { preserveQuarantinedBeforeRebuild } from './rebuild-quarantine'
 import { publishForExtraction, publishIndexes, publishAll } from './publish'
 import { refuseIfDemoTagged } from '@shared/demo-guard'
 import { pickIntelligencePassCandidates, type IntelligencePassCandidate } from './intelligence-pass-route'
@@ -132,6 +131,13 @@ export type IngestRoute = 'default' | 'intelligence-pass'
  *  one reinforcement retry) on a call that's guaranteed to reject with "No configured AI provider". */
 export function hasUsableProvider(s: Settings): boolean {
   return pickProvider(s) !== null
+}
+
+/** Route-aware twin of hasUsableProvider. A queued job carries its own route (the Update Intelligence
+ *  pass is Local-first, API-once and must not be judged by the default cloud-first waterfall, which with
+ *  fallback off and no key finds nothing and parks a job that Local could run). */
+function hasUsableProviderForRoute(s: Settings, route: IngestRoute = 'default'): boolean {
+  return pickProviderCandidates(s, route).length > 0
 }
 
 /** Ordered eligible candidates for brain extraction — the SAME eligibility checks pickProvider always
@@ -469,106 +475,8 @@ export function prepareMeetingText(s: Settings, transcriptMd: string): string {
 export { commitmentKey }
 export { SELF_PERSON_NAME, SELF_PERSON_SLUG, mergeExtraction } from './merge-extraction'
 
-// ── Lint (Karpathy's "health check" pass — flag, never auto-fix) ─────────────
-
-/** One lintBrainDetailed finding, entity-linked so a consumer (brain:attention, Task MI-3) can offer a
- *  jump action straight to the record page — `lintBrain`'s plain string[] (idx.warnings, unchanged since
- *  before MI-3) throws that linkage away, keeping only `detail`. */
-export interface LintFinding {
-  entityKind: 'person' | 'deal'
-  id: string
-  label: string
-  detail: string
-}
-
-export function lintBrainDetailed(s: Settings): LintFinding[] {
-  const findings: LintFinding[] = []
-  for (const slug of listEntities(s, 'person')) {
-    const p = readPerson(s, slug)
-    if (!p) continue
-    // A2 fix (D8): the old check derived "orgs" from the single p.account field mapped once per
-    // stance_trail entry, so it could never produce more than one distinct value — it never fired.
-    // org_provenance's current value + its full superseded history (see mergeExtraction's org merge)
-    // is the actual per-meeting account association record; dedupe by SLUG (not raw text) since two
-    // spellings of the same account name must not falsely count as "multiple accounts".
-    const bySlug = new Map<string, string>() // account slug -> a display value seen for it
-    const consider = (v: string | null | undefined): void => {
-      if (v && !bySlug.has(slugify(v))) bySlug.set(slugify(v), v)
-    }
-    consider(p.org_provenance?.value)
-    for (const prior of p.org_provenance?.superseded ?? []) consider(prior.value)
-    if (bySlug.size > 1) {
-      findings.push({
-        entityKind: 'person',
-        id: slug,
-        label: p.name,
-        detail: `Person "${p.name}" is linked to multiple accounts: ${[...bySlug.values()].join(', ')}`
-      })
-    }
-  }
-  for (const slug of listEntities(s, 'deal')) {
-    const d = readDeal(s, slug)
-    if (!d) continue
-    if (d.outcome !== 'open' && d.win_likelihood_band) {
-      findings.push({
-        entityKind: 'deal',
-        id: slug,
-        label: d.name,
-        detail: `Deal "${d.name}" is ${d.outcome} but still carries a live win-likelihood band`
-      })
-    }
-  }
-  return findings
-}
-
-/** Plain-string lint warnings (idx.warnings — the shape the dashboard and index.json have always used).
- *  A thin projection over lintBrainDetailed so there is exactly one implementation of the checks
- *  themselves; behavior/wording is unchanged from before Task MI-3. */
-export function lintBrain(s: Settings): string[] {
-  return lintBrainDetailed(s).map((f) => f.detail)
-}
-
-/**
- * Settle a commitment — the human closes the loop the LLM never may. Flips the matching row (by
- * normalized text) on the deal's ledger AND any person ledger holding the same promise, so the two
- * copies can't diverge. This is what makes the ledger a live count of what is actually owed, and
- * what makes a per-person kept-promise rate computable at all.
- *
- * MQA-085: runs on store.ts's withEntityLock — the one lane every read-modify-write of a `.brain/` entity
- * file must take (see its doc comment). This is a read-deal → mutate-row → write-deal round trip over the
- * same deal/person files an in-flight ingest job merges, and mergeExtraction awaits writeAccount between
- * ITS read and write of the deal: unlocked, a settle landing in that window is overwritten by the job's
- * older snapshot and the promise silently reappears in the rail. Never called from inside the lane
- * (its only callers are the IPC handler and tests), so there is no re-entrancy risk.
- */
-export async function settleCommitment(
-  s: Settings,
-  dealSlug: string,
-  text: string,
-  status: 'open' | 'kept' | 'broken'
-): Promise<{ ok: boolean; error?: string }> {
-  return withEntityLock(async () => {
-    const key = commitmentKey(text)
-    const readDealFile = readDeal(s, dealSlug)
-    if (!readDealFile) return { ok: false, error: 'Deal not found.' }
-    if (!readDealFile.commitments.some((c) => commitmentKey(c.text) === key)) {
-      return { ok: false, error: 'Commitment not found on this deal.' }
-    }
-    // Clone before mutating — readJson hands back the cached object by reference (see cloneEntity).
-    const deal = cloneEntity(readDealFile)
-    for (const c of deal.commitments) if (commitmentKey(c.text) === key) c.status = status
-    await writeDeal(s, dealSlug, deal)
-    // Mirror onto the named person's own ledger when one holds the same promise.
-    for (const pslug of listEntities(s, 'person')) {
-      const readPersonFile = readPerson(s, pslug)
-      if (!readPersonFile?.commitments?.some((c) => commitmentKey(c.text) === key)) continue
-      const person = cloneEntity(readPersonFile)
-      for (const c of person.commitments ?? []) if (commitmentKey(c.text) === key) c.status = status
-      await writePerson(s, pslug, person)
-    }
-    return { ok: true }
-  })
-}
+export { lintBrainDetailed, lintBrain, type LintFinding } from './lint'
+export { settleCommitment } from './human-marks-apply'
 
 // ── Queue + backfill ─────────────────────────────────────────────────────────
 
@@ -883,8 +791,8 @@ function extractConcurrency(s: Settings): number {
  * revived by exactly the paths that revive a no-provider stall: a finishing job's pump(), the 60s
  * reconcile tick, and Retry index (MQA-023).
  */
-function localExtractionShouldYield(s: Settings): boolean {
-  return pickProviderCandidates(s)[0]?.provider === 'local' && localActiveStreams() > extracting.size
+function localExtractionShouldYield(s: Settings, route: IngestRoute = 'default'): boolean {
+  return pickProviderCandidates(s, route)[0]?.provider === 'local' && localActiveStreams() > extracting.size
 }
 
 /** MQA-023: is any job actually being worked on right now? A job pump() parked in `queue` because no
@@ -1058,6 +966,21 @@ async function observeSourceFile(file: string): Promise<SourceObservation> {
 
 async function meetingSourceVersion(file: string): Promise<string | undefined> {
   return meetingSourceVersionFromObservation(await observeSourceFile(file))
+}
+
+/**
+ * D8-1: an in-app metadata-only write (Confidential flag, CRM-pushed marker) changes the transcript file's
+ * version without changing anything the extraction read. Record the new version on the ingested record so the
+ * reconcile tick does not read it as drift. Never re-extracts; does nothing for a meeting not ingested ok.
+ */
+export async function acknowledgeMetadataEdit(s: Settings, file: string): Promise<void> {
+  const key = basename(file)
+  const version = await meetingSourceVersion(file)
+  if (!version) return
+  await updateIndex(s, (idx) => {
+    const record = idx.ingested[key]
+    if (record?.ok) record.sourceVersion = version
+  })
 }
 
 /**
@@ -1466,6 +1389,17 @@ async function currentMeetingSourceVersions(s: Settings): Promise<Map<string, st
   }
 }
 
+async function meetingSourceDrift(s: Settings, idx: BrainIndex): Promise<{ changed: string[]; missing: string[] }> {
+  try {
+    return classifySourceDrift(await scanMeetingSources(s), idx)
+  } catch (error) {
+    mainLog.warn(
+      `[brain] could not inspect meeting source drift: ${error instanceof Error ? error.message : String(error)}`
+    )
+    return { changed: [], missing: [] }
+  }
+}
+
 async function hasMeetingSourceDrift(s: Settings, idx: BrainIndex): Promise<boolean> {
   try {
     return hasSourceDrift(await scanMeetingSources(s), idx)
@@ -1593,14 +1527,24 @@ function pump(): void {
     const idx = queue.findIndex((j) => {
       if (j.origin !== 'backfill' || j.strategy === 'reconcile') return true
       s ??= getSettings()
-      return hasUsableProvider(s) && !localExtractionShouldYield(s) && (j.trigger === 'user' || deferral === null)
+      return (
+        hasUsableProviderForRoute(s, j.route ?? 'default') &&
+        !localExtractionShouldYield(s, j.route ?? 'default') &&
+        (j.trigger === 'user' || deferral === null)
+      )
     })
     if (idx === -1) {
       // Every queued backfill job is blocked. Two different reasons land here and they need different
       // handling: no configured provider is something only the user can fix (say so, once per stall),
       // while MQA-048's yield to a live local stream clears itself within one meeting — logging that
       // would be noise, and claiming "no configured AI provider" for it would be wrong.
-      if (queue.length > 0 && !hasUsableProvider(s ?? getSettings()) && !loggedNoProviderStall) {
+      if (
+        queue.length > 0 &&
+        !loggedNoProviderStall &&
+        queue.some(
+          (j) => j.origin === 'backfill' && !hasUsableProviderForRoute(s ?? getSettings(), j.route ?? 'default')
+        )
+      ) {
         loggedNoProviderStall = true
         mainLog.warn('[brain] backfill paused: no configured AI provider — will resume next time one is available')
       }
@@ -1831,6 +1775,15 @@ async function startReplayBackfill(
 
 async function performRebuildReplay(s: Settings): Promise<void> {
   const r = await replayCorrections(s)
+  if (!r.error) {
+    // D8-2: re-apply human deal outcomes and commitment settlements after the corrections, so a merge or
+    // rename resolves identity first. A failure keeps replayPending set, exactly like a replay failure.
+    try {
+      await applyHumanMarks(s)
+    } catch (error) {
+      r.error = `your deal outcomes and commitment marks could not be re-applied (${error instanceof Error ? error.message : String(error)})`
+    }
+  }
   if (r.error) {
     mainLog.error(`[brain] rebuild replay could not run: ${r.error}`)
     await updateIndex(s, (i) => {
@@ -1988,6 +1941,14 @@ async function performStartRebuild(
   // Fix 2 (sync guard): a corrupt/blocked journal fails the gate — refuse before touching the store.
   const gate = await readCorrectionsJournalSafe(s)
   if (!gate.ok) return { queued: 0, error: gate.error }
+  // D8-3: quarantined corrupt journal/index copies live inside the root purgeBrain wipes. Move them to
+  // .brain-preserved first; if that fails the rebuild refuses with the evidence untouched.
+  try {
+    await preserveQuarantinedBeforeRebuild(s)
+  } catch (error) {
+    mainLog.warn(`[brain] could not preserve quarantined files before rebuild: ${String(error)}`)
+    return { queued: 0, error: 'Could not keep the damaged correction files safe, so nothing was rebuilt. Try again.' }
+  }
   // MQA-046: an index.json write can still be mid tmp+rename right now — maybeFinishDrain fires a
   // DETACHED one and calls maybeStartSourceRefresh on the very next statement, so purgeBrain's rmSync
   // lands inside that write's window. Either the stray tmp file survives the wipe and fails purgeBrain's
@@ -2200,6 +2161,8 @@ export type BackfillStartOptions = {
   trigger?: WorkTrigger
   /** Update Intelligence button: stamp jobs so extraction uses local-first then API once. */
   route?: IngestRoute
+  /** Source keys already ingested ok whose file changed on disk: queue only these again (D8-1). */
+  reingestKeys?: ReadonlySet<string>
 }
 
 export interface BackfillCompletion {
@@ -2495,7 +2458,7 @@ async function startBackfillAsync(
       })
     const already = new Set(
       Object.entries(idx.ingested)
-        .filter(([, v]) => v.ok)
+        .filter(([k, v]) => v.ok && !options.reingestKeys?.has(k))
         .map(([k]) => k)
     )
     // An extraction file is a resumable checkpoint, not proof of a successful ingest: a crash can land
@@ -2743,10 +2706,32 @@ export async function reconcileMeetingsInBackground(): Promise<void> {
     // no longer bails on hasActiveBackfill() alone. requestBackfill re-pumps the stalled queue below.
     if (backfillPreparing || sourceRefreshRunning || (hasActiveBackfill() && hasJobsInFlight())) return
     const idx = await readIndexAsync(s)
-    if (idx.sourceRefreshRequested || (await hasMeetingSourceDrift(s, idx))) {
-      // The try/catch below only catches synchronous throws; an async rejection escaping here would be
-      // reported as an unhandledRejection → a false app.crash record on EVERY 60s tick (same as MQA-155).
-      void requestSourceRefresh(s).catch((e) => mainLog.warn('[brain] source refresh request failed:', e))
+    const drift = await meetingSourceDrift(s, idx)
+    // D8-1: a missing source (or a refresh already requested) can only be cleared by a rebuild, which
+    // re-extracts everything, so it spends the daily budget. A changed source that is still present
+    // re-extracts only that meeting. Only a usable provider can spend either, so without one nothing is
+    // consumed or wiped.
+    if (idx.sourceRefreshRequested || drift.missing.length > 0 || drift.changed.length > 0) {
+      const rebuild = idx.sourceRefreshRequested || drift.missing.length > 0
+      // The catches below: an async rejection escaping here would be reported as an unhandledRejection →
+      // a false app.crash record on EVERY 60s tick (same as MQA-155).
+      if (!hasUsableProvider(s)) {
+        if (rebuild)
+          void requestSourceRefresh(s).catch((e) => mainLog.warn('[brain] source refresh request failed:', e))
+        return
+      }
+      if (!(await consumeDailyBackfillRun(s))) {
+        reportDeferred('backfill', 'budget')
+        return
+      }
+      if (rebuild) {
+        void requestSourceRefresh(s).catch((e) => mainLog.warn('[brain] source refresh request failed:', e))
+      } else {
+        const reingestKeys = new Set(drift.changed)
+        void startBackfill(undefined, { allowSourceRefresh: true, reingestKeys, trigger: 'automatic' }).catch((e) =>
+          mainLog.warn('[brain] changed-source re-ingest failed:', e)
+        )
+      }
       return
     }
     if (!hasUsableProvider(s) && !(await hasSavedReconciliationCandidateForSettings(s))) return

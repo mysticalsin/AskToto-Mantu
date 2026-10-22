@@ -29,6 +29,7 @@ import { resetSecretKeyCache } from '../secrets'
 import { setSettings } from '../store'
 import { envelopeKeyKind, writeSaved } from '../transcripts'
 import { startBackfill } from './ingest'
+import { preserveQuarantinedBeforeRebuild } from './rebuild-quarantine'
 import { useStorageForTests } from '../infra/storage/meetings-storage'
 import {
   brainDir,
@@ -54,7 +55,10 @@ function indexJson(): string {
 }
 
 function futureSchemaIndexBytes(): Buffer {
-  return Buffer.from(JSON.stringify({ ...BrainIndexSchema.parse({}), schema_version: BRAIN_SCHEMA_VERSION + 1 }), 'utf8')
+  return Buffer.from(
+    JSON.stringify({ ...BrainIndexSchema.parse({}), schema_version: BRAIN_SCHEMA_VERSION + 1 }),
+    'utf8'
+  )
 }
 
 function foreignFileEnvelope(): Buffer {
@@ -96,7 +100,9 @@ function restoreElectronMocks(userData: string): void {
   })
   ;(app as typeof app & { isPackaged?: boolean }).isPackaged = false
   ;(safeStorage.isEncryptionAvailable as ReturnType<typeof vi.fn>).mockReturnValue(true)
-  ;(safeStorage.encryptString as ReturnType<typeof vi.fn>).mockImplementation((value: string) => Buffer.from(`enc:${value}`))
+  ;(safeStorage.encryptString as ReturnType<typeof vi.fn>).mockImplementation((value: string) =>
+    Buffer.from(`enc:${value}`)
+  )
   ;(safeStorage.decryptString as ReturnType<typeof vi.fn>).mockImplementation(decryptElectronMockBuffer)
 }
 
@@ -191,7 +197,10 @@ describe('rebuild preserves unreadable indexes', () => {
     })()
 
     expectRebuildError(error, 'brain-index-changed-during-rebuild')
-    expectBytesUnchanged(join(meetingsFolder, '.brain-preserved', fs.readdirSync(join(meetingsFolder, '.brain-preserved'))[0]), expected)
+    expectBytesUnchanged(
+      join(meetingsFolder, '.brain-preserved', fs.readdirSync(join(meetingsFolder, '.brain-preserved'))[0]),
+      expected
+    )
   })
 
   it('aborts rebuild when the index decrypts again', async () => {
@@ -301,7 +310,11 @@ describe('rebuild preserves unreadable indexes', () => {
     expect(purgeBrain(settings, { mode: 'rebuild', preserveCorrections: true }).ok).toBe(true)
     expect(existsSync(join(userData, 'secret-key.bin'))).toBe(false)
 
-    const preserved = join(meetingsFolder, '.brain-preserved', fs.readdirSync(join(meetingsFolder, '.brain-preserved'))[0])
+    const preserved = join(
+      meetingsFolder,
+      '.brain-preserved',
+      fs.readdirSync(join(meetingsFolder, '.brain-preserved'))[0]
+    )
     expectBytesUnchanged(preserved, expected)
   })
 
@@ -349,7 +362,11 @@ describe('rebuild preserves unreadable indexes', () => {
     expect(purgeBrain(settings, { mode: 'rebuild', preserveCorrections: true }).ok).toBe(false)
 
     expectBytesUnchanged(primary, expected)
-    const preserved = join(meetingsFolder, '.brain-preserved', fs.readdirSync(join(meetingsFolder, '.brain-preserved'))[0])
+    const preserved = join(
+      meetingsFolder,
+      '.brain-preserved',
+      fs.readdirSync(join(meetingsFolder, '.brain-preserved'))[0]
+    )
     expectBytesUnchanged(preserved, expected)
   })
 
@@ -363,6 +380,47 @@ describe('rebuild preserves unreadable indexes', () => {
     expect(purgeBrain(settings, { mode: 'rebuild', preserveCorrections: true }).ok).toBe(true)
 
     expectBytesUnchanged(corrections, expected)
+  })
+
+  it('rebuild moves quarantined corrections.corrupt-* into the preserved dir', async () => {
+    const root = brainDir(settings)
+    const preserved = join(meetingsFolder, '.brain-preserved')
+    const names = [
+      'corrections.corrupt-2026-10-01.json',
+      'index.corrupt-auto-2026-10-01.json',
+      'human-marks.corrupt-1.json'
+    ]
+    for (const name of names) writeFileSync(join(root, name), `damaged ${name}`, 'utf8')
+    writeFileSync(join(root, 'corrections.json'), '[]', 'utf8')
+
+    expect(await preserveQuarantinedBeforeRebuild(settings)).toEqual({ moved: 3 })
+    expect(purgeBrain(settings, { mode: 'rebuild', preserveCorrections: true }).ok).toBe(true)
+
+    for (const name of names) {
+      expect(existsSync(join(root, name)), name).toBe(false)
+      expect(readFileSync(join(preserved, name), 'utf8')).toBe(`damaged ${name}`)
+    }
+    // The live journal is untouched by the move and kept by the purge.
+    expect(existsSync(join(root, 'corrections.json'))).toBe(true)
+  })
+
+  it('never overwrites an earlier preserved copy of the same name', async () => {
+    const root = brainDir(settings)
+    const preserved = join(meetingsFolder, '.brain-preserved')
+    mkdirSync(preserved, { recursive: true })
+    writeFileSync(join(preserved, 'corrections.corrupt-a.json'), 'older', 'utf8')
+    writeFileSync(join(root, 'corrections.corrupt-a.json'), 'newer', 'utf8')
+
+    await preserveQuarantinedBeforeRebuild(settings)
+
+    expect(readFileSync(join(preserved, 'corrections.corrupt-a.json'), 'utf8')).toBe('older')
+    expect(readFileSync(join(preserved, '1-corrections.corrupt-a.json'), 'utf8')).toBe('newer')
+  })
+
+  it('delete-all still erases quarantined copies with the rest of the brain', () => {
+    writeFileSync(join(brainDir(settings), 'corrections.corrupt-x.json'), 'damaged', 'utf8')
+    expect(purgeBrain(settings, { mode: 'erase' }).ok).toBe(true)
+    expect(existsSync(brainDir(settings))).toBe(false)
   })
 
   it('delete-all erases preserved indexes', () => {
@@ -418,17 +476,25 @@ describe('rebuild preserves unreadable indexes', () => {
     await writeSaved(primary, indexJson(), false)
     const currentBefore = sha256(readFileSync(primary))
     const copy = join(preserved, 'index.unreadable-readable.json')
-    await writeSaved(copy, JSON.stringify(BrainIndexSchema.parse({ ingested: { 'restored.md': { at: 1, ok: true } } })), true)
+    await writeSaved(
+      copy,
+      JSON.stringify(BrainIndexSchema.parse({ ingested: { 'restored.md': { at: 1, ok: true } } })),
+      true
+    )
     const restoredBytes = sha256(readFileSync(copy))
 
     expect(currentBrainIndexIsReadable(settings)).toBe(true)
-    expect(restorePreservedBrainIndex(settings, 'index.unreadable-readable.json', { allowReplaceReadable: false })).toEqual({
+    expect(
+      restorePreservedBrainIndex(settings, 'index.unreadable-readable.json', { allowReplaceReadable: false })
+    ).toEqual({
       ok: false,
       error: 'current-readable'
     })
     expectBytesUnchanged(primary, currentBefore)
 
-    expect(restorePreservedBrainIndex(settings, 'index.unreadable-readable.json', { allowReplaceReadable: true })).toEqual({ ok: true })
+    expect(
+      restorePreservedBrainIndex(settings, 'index.unreadable-readable.json', { allowReplaceReadable: true })
+    ).toEqual({ ok: true })
 
     expectBytesUnchanged(primary, restoredBytes)
     const beforeRestore = fs.readdirSync(preserved).filter((f) => f.startsWith('index.before-restore-'))
@@ -441,16 +507,25 @@ describe('rebuild preserves unreadable indexes', () => {
     mkdirSync(preserved, { recursive: true })
     await writeSaved(primary, indexJson(), false)
     const copy = join(preserved, 'index.unreadable-readable.json')
-    await writeSaved(copy, JSON.stringify(BrainIndexSchema.parse({ ingested: { 'verified.md': { at: 1, ok: true } } })), true)
+    await writeSaved(
+      copy,
+      JSON.stringify(BrainIndexSchema.parse({ ingested: { 'verified.md': { at: 1, ok: true } } })),
+      true
+    )
     const verifiedBytes = sha256(readFileSync(copy))
-    const changedBytes = Buffer.from(JSON.stringify(BrainIndexSchema.parse({ ingested: { 'changed.md': { at: 2, ok: true } } })), 'utf8')
+    const changedBytes = Buffer.from(
+      JSON.stringify(BrainIndexSchema.parse({ ingested: { 'changed.md': { at: 2, ok: true } } })),
+      'utf8'
+    )
     const changedSha = sha256(changedBytes)
     vi.spyOn(fs, 'copyFileSync').mockImplementation((from, to, mode) => {
       actualFs.copyFileSync!(from, to, mode)
       if (from === primary) writeFileSync(copy, changedBytes)
     })
 
-    expect(restorePreservedBrainIndex(settings, 'index.unreadable-readable.json', { allowReplaceReadable: true })).toEqual({ ok: true })
+    expect(
+      restorePreservedBrainIndex(settings, 'index.unreadable-readable.json', { allowReplaceReadable: true })
+    ).toEqual({ ok: true })
 
     expectBytesUnchanged(primary, verifiedBytes)
     expect(sha256(readFileSync(primary))).not.toBe(changedSha)
@@ -464,7 +539,9 @@ describe('rebuild preserves unreadable indexes', () => {
     writeFileSync(primary, indexJson())
     const currentBefore = sha256(readFileSync(primary))
 
-    expect(restorePreservedBrainIndex(settings, 'index.unreadable-locked.json', { allowReplaceReadable: true })).toEqual({
+    expect(
+      restorePreservedBrainIndex(settings, 'index.unreadable-locked.json', { allowReplaceReadable: true })
+    ).toEqual({
       ok: false,
       error: 'not-restorable'
     })
