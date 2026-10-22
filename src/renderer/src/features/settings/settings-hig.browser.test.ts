@@ -276,10 +276,13 @@ describe('Settings HIG behaviour (C25)', () => {
       }
     })
     const toggle = page.getByRole('switch', { name: 'Launch at login' })
-    await page.getByText('macOS needs your approval before Métis can open at login.').waitFor()
+    // The refusal is worded for the host OS (macOS login items, Windows startup apps).
+    const refusal =
+      /macOS needs your approval before Métis can open at login\.|Windows has turned off Métis in your startup apps\./
+    await page.getByText(refusal).waitFor()
     expect(await toggle.getAttribute('aria-checked')).toBe('false')
     const hintId = await toggle.getAttribute('aria-describedby')
-    expect(await page.locator(`[id="${hintId}"]`).textContent()).toContain('needs your approval')
+    expect(await page.locator(`[id="${hintId}"]`).textContent()).toMatch(refusal)
     await page.getByRole('button', { name: /^Open (System )?Settings$/ }).click()
     await expect
       .poll(async () => (await inspect()).callArgs.find((c) => c.name === 'openSystemSettings')?.args)

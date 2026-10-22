@@ -168,7 +168,9 @@ const hostedCi = process.env.CI === 'true' && process.env.GITHUB_ACTIONS === 'tr
 // Hosted macos-latest (quality matrix leg since 2e1e9b08) has no provisioned native binaries (ffmpeg sidecar,
 // mac-helper, llama-server, Apple speech), no Windows tooling and no candidate artifacts: 30 declared skips, all
 // listed in REASONS. A provisioned local Mac keeps the stricter 6.
-const BASELINE = { win32: 41, darwin: hostedCi ? 31 : 6, linux: hostedCi ? 26 : 29 }
+// Q09 (2.12) added three cases to the declared opt-in OnboardingExperience browser check (focus on scene change,
+// short-window scroll, managed-lock toggle): +3 on every platform.
+const BASELINE = { win32: 44, darwin: hostedCi ? 34 : 9, linux: hostedCi ? 29 : 32 }
 // windows/baseline.contract.test.ts skips its four pwsh-driven cases only off hosted CI on a host with no
 // `pwsh`; on hosted CI they must run, so the allowance never applies there.
 const PWSH_BASELINE_SKIPS = 4
