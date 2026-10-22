@@ -9,6 +9,7 @@ import { registerOwnerSessionIpc } from '../ipc/register-owner-session'
 import type { AuthorizeSender } from '../ipc/sender-auth'
 import { authSessionGeneration, authStatus, requireAuth } from '../auth'
 import { auditLog, mainLog } from '../logger'
+import { getResponsivenessRecorder } from '../infra/observability/responsiveness-recorder'
 import { bindMeetingMicRendererReset } from '../meeting-mic-capture-authority'
 import { getPublishedSettingsObservation } from '../settings-observation'
 import type { SpeechDesktopHooks } from '../speech-desktop-boundary'
@@ -90,8 +91,14 @@ export function createOwnerSessionWiring(deps: OwnerSessionWiringDeps): OwnerSes
       return !status.signedIn && !status.configured
     },
     onMeetingEnd: onDraftMeetingFinalizing,
-    onDegraded: (code) => mainLog.warn('[session-context] ledger degraded', code)
+    onDegraded: (code) => mainLog.warn('[session-context] ledger degraded', code),
+    // G14 queue health lands in the G12 responsiveness recorder, resolved on every use (it is created lazily).
+    queueHealth: {
+      recordLatency: (id, ms) => getResponsivenessRecorder().recordLatency(id, ms),
+      observePeak: (id, value) => getResponsivenessRecorder().observePeak(id, value)
+    }
   })
+  activeMeetingContexts = meetingContexts.registry
   // WP03 live meeting journal: one durable record per committed cloud final, behind the `liveMeetingJournal` switch.
   bootstrapLiveMeetingJournal({
     ipcMain,
@@ -130,6 +137,13 @@ export function createOwnerSessionWiring(deps: OwnerSessionWiringDeps): OwnerSes
 /** Process-wide handle on the one authority `createOwnerSessionWiring` built, so earlier-constructed Main objects can
  *  resolve it lazily. Null before registerIpc runs. */
 let activeOwnerSession: OwnerSessionAuthority | null = null
+
+/** The live meeting-context registry, for screen observation (built earlier than registerIpc). Null before it runs. */
+let activeMeetingContexts: MeetingContexts['registry'] | null = null
+
+export function currentMeetingContexts(): MeetingContexts['registry'] | null {
+  return activeMeetingContexts
+}
 
 /** The owner-session authority, or null until `createOwnerSessionWiring` has run. Resolve it on every use. */
 export function currentOwnerSession(): OwnerSessionAuthority | null {

@@ -37,11 +37,10 @@ describe('G14: ask and suggest publish through their meeting queue turn', () => 
     expect(body).toMatch(/onRefused: \(message\) => askTurns\.fail\(/)
   })
 
-  it('a renderer cancel releases the turn before it aborts the provider stream', () => {
+  it('a renderer cancel is timed by G12, then releases the turn and aborts the provider stream', () => {
     const start = source.indexOf('ipcMain.handle(IPC.askCancel')
     const body = source.slice(start, start + 400)
-    expect(body.indexOf('askTurns.cancel(id)')).toBeGreaterThan(0)
-    expect(body.indexOf('askTurns.cancel(id)')).toBeLessThan(body.indexOf('streams.get(id)?.abort()'))
+    expect(body).toMatch(/askTiming\.cancel\(streams, id\)\s*\n\s*askTurns\.cancel\(id\)/)
   })
 
   it('builds the turn registry over the main process stream map and the window', () => {

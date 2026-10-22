@@ -568,4 +568,28 @@ describe('the per-meeting SessionQueue (G14)', () => {
     gate.resolve()
     await Promise.all(held)
   })
+
+  it('a changed screen source outdates a running ask; the same source again does not (G16)', async () => {
+    const h = harness()
+    const handle = open(h)
+    const gate = deferred()
+    let signal: AbortSignal | undefined
+    const running = codeOf(
+      handle.enqueue((job) => {
+        signal = job.signal
+        return gate.promise
+      })
+    )
+    await flush()
+    h.registry.observeScreen('display:1', 1_000)
+    expect(signal?.aborted).toBe(true)
+    expect(await running).toBe('TASK_INVALIDATED')
+    const next = open(h)
+    const again = codeOf(next.enqueue(() => gate.promise))
+    await flush()
+    h.registry.observeScreen('display:1', 2_000)
+    expect(next.check().state).toBe('current')
+    h.registry.observeScreen(null, 3_000)
+    expect(await again).toBe('TASK_INVALIDATED')
+  })
 })

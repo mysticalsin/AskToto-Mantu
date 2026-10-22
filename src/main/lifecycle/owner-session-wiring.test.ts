@@ -42,6 +42,7 @@ import {
   bindRendererResets,
   createOwnerSessionRendererBinder,
   createOwnerSessionWiring,
+  currentMeetingContexts,
   currentOwnerSession,
   ownerSessionLifecycle,
   type OwnerSessionRendererSource
@@ -86,6 +87,11 @@ describe('owner session wiring', () => {
     expect(installedAtFirstHandler).toEqual([true, true, true])
     expect(getMeetingSpeechLimits()).toEqual(MEETING_SPEECH_LIMITS)
     expect(getMeetingSpeechReadLimitBytes()).toBe(MEETING_SPEECH_WORKER_BOUNDS.maxInputBytes)
+  })
+
+  it('exposes the live meeting registry to screen observation and feeds queue health to the G12 recorder', () => {
+    const { wiring } = wire()
+    expect(currentMeetingContexts()).toBe(wiring.meetingContexts)
   })
 
   it('hands input capture the same authority and authorizer it exposes', () => {

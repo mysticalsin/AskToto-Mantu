@@ -91,6 +91,11 @@ export interface ScreenObservationDeps {
   backgroundAllowed: () => boolean
   /** The opt-in `screenHoverPrewarm` setting (R-11: a hover does not capture unless the user allowed it). */
   prewarmAllowed: () => boolean
+  /**
+   * The observed screen source changed: a new source id after a capture, `null` after a revocation. The meeting context
+   * listens (G14) so an answer built from the previous screen stops. A prewarm is opportunistic and never reports.
+   */
+  onSourceChange?: (sourceId: string | null, at: number) => void
   now?: () => number
   /** How long a whole-display frame is reused for the next ask. */
   reuseMs?: number
@@ -145,10 +150,19 @@ export function createScreenObservation(deps: ScreenObservationDeps): ScreenObse
     return deps.captureOnce(region ? { displayId, region } : { displayId })
   })
 
+  function notifySource(sourceId: string | null): void {
+    try {
+      deps.onSourceChange?.(sourceId, now())
+    } catch {
+      // observation consumers never change what a capture does
+    }
+  }
+
   function revoke(reason: ScreenRevocationReason): number {
     generation += 1
     reusable = null
     audit('capture.revoked', { reason, generation })
+    notifySource(null)
     return generation
   }
 
@@ -201,6 +215,7 @@ export function createScreenObservation(deps: ScreenObservationDeps): ScreenObse
       now() - reusable.at < reuseMs &&
       reusable.shot.observation.sourceId === screenSourceId(scope, displayId)
     ) {
+      if (!quiet) notifySource(reusable.shot.observation.sourceId)
       return reusable.shot
     }
     let frame: CapturedFrame
@@ -244,6 +259,7 @@ export function createScreenObservation(deps: ScreenObservationDeps): ScreenObse
     const shot: ScreenShot = { ...frame, capturedAt, observation }
     remember(observation, frame.image)
     if (wholeDisplay) reusable = { shot, at: capturedAt }
+    if (!quiet) notifySource(observation.sourceId)
     audit('capture.screen', { width: frame.width, height: frame.height, bytes: frame.image.length, ...tag })
     return shot
   }

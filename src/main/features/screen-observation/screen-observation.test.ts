@@ -545,3 +545,40 @@ describe('failure audit', () => {
     ])
   })
 })
+
+describe('screen source changes reach the meeting context (G14)', () => {
+  it('reports a new source after a capture and null after a revocation, never for a prewarm', async () => {
+    const seen: Array<string | null> = []
+    const h = makeHarness()
+    const observation = createScreenObservation({ ...harnessDeps(h), onSourceChange: (id) => void seen.push(id) })
+    await observation.capture({ reason: 'prewarm', phase: 'prewarm' })
+    expect(seen).toEqual([])
+    await observation.capture({ reason: 'ask' })
+    expect(seen).toEqual(['display:7'])
+    observation.revoke('private-view')
+    expect(seen).toEqual(['display:7', null])
+  })
+
+  it('an observer that throws never changes the capture', async () => {
+    const h = makeHarness()
+    const observation = createScreenObservation({
+      ...harnessDeps(h),
+      onSourceChange: () => {
+        throw new Error('observer down')
+      }
+    })
+    await expect(observation.capture({ reason: 'ask' })).resolves.toMatchObject({ dispId: 7 })
+  })
+})
+
+function harnessDeps(h: ReturnType<typeof makeHarness>): ScreenObservationDeps {
+  return {
+    captureOnce: h.captureOnce,
+    cursorDisplayId: () => h.state.cursorDisplay,
+    privateViewOn: () => h.state.privateView,
+    privateViewBlockedError: () => new PrivateViewError(),
+    screenAccess: () => h.state.access,
+    backgroundAllowed: () => h.state.background,
+    prewarmAllowed: () => h.state.prewarm
+  }
+}

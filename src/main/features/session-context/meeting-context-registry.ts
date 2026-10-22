@@ -92,6 +92,12 @@ export interface MeetingContextRegistry {
     frame: FrameKey,
     line: { startedAt: number; t?: number; utteranceId?: string; name?: string; lang?: string }
   ): boolean
+  /**
+   * The screen source main is observing changed (G16): a different display or region, or `null` once access to the
+   * screen was withdrawn. Moves every open meeting's context, so an ask or suggestion still running from a snapshot
+   * of the previous screen is outdated and stops. The same source seen again moves nothing.
+   */
+  observeScreen(sourceId: string | null, observedAtMs: number): void
   /** A snapshot for the meeting bound to this frame, or null when none is open (or the owner changed). */
   acquire(frame: FrameKey, kind: SessionOutputKind): ContextHandle | null
   close(meetingStartedAt: number): void
@@ -120,6 +126,8 @@ interface MeetingContext {
   readonly session: SessionContext
   /** One queue per meeting: ask and suggest publish through it. Disposed with the meeting. */
   readonly queue: SessionQueue
+  /** The screen source this context was last told about, so a repeat observation does not outdate anything. */
+  screenSource: string | null
   /** Jobs accepted and not yet finished (the active one plus the pending ones), for queue health. */
   inFlight: number
   readonly streamEpochs: Map<string, number>
@@ -287,6 +295,7 @@ export function createMeetingContextRegistry(deps: MeetingContextRegistryDeps): 
           timeoutMs: ASK_QUEUE_TIMEOUT_MS,
           tolerate: ['transcript']
         }),
+        screenSource: null,
         inFlight: 0,
         streamEpochs: new Map(),
         localLines: new Map(),
@@ -429,6 +438,18 @@ export function createMeetingContextRegistry(deps: MeetingContextRegistryDeps): 
         snapshot,
         check: checkFor(context, snapshot),
         enqueue: (work, options) => enqueue(context, kind, work, options)
+      }
+    },
+
+    observeScreen(sourceId, observedAtMs) {
+      for (const context of contexts.values()) {
+        if (context.screenSource === sourceId) continue
+        context.screenSource = sourceId
+        try {
+          context.session.setScreen(sourceId === null ? null : { scope: context.scope.scope, sourceId, observedAtMs })
+        } catch {
+          // an unusable observation leaves the context as it was
+        }
       }
     },
 

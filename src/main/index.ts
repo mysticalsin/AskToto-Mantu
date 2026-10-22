@@ -729,7 +729,12 @@ import { registerWorkspaceIpc } from './ipc/workspace-ipc'
 import { registerImportAudioIpc } from './ipc/import-audio-ipc'
 import { RecoveredDraftCount } from './recovered-draft-count'
 import { registerInputCaptureIpc } from './ipc/input-capture-ipc'
-import { bindRendererResets, createOwnerSessionWiring, ownerSessionLifecycle } from './lifecycle/owner-session-wiring'
+import {
+  bindRendererResets,
+  createOwnerSessionWiring,
+  currentMeetingContexts,
+  ownerSessionLifecycle
+} from './lifecycle/owner-session-wiring'
 import { applyAskContext, createAskContextGate, prewarmText } from './features/session-context/ask-context'
 import { askStartFailureMessage, createAskTurns } from './features/session-context/ask-turn'
 import { recoverOrphanDrafts } from './features/meetings/draft-recovery'
@@ -4688,6 +4693,7 @@ const screenObservation = createScreenObservation({
     process.platform === 'darwin' ? systemPreferences.getMediaAccessStatus('screen') : windowsScreenStatus(),
   backgroundAllowed: () => getSettings().backgroundScreenContext === true,
   prewarmAllowed: () => getSettings().screenHoverPrewarm === true,
+  onSourceChange: (sourceId, at) => currentMeetingContexts()?.observeScreen(sourceId, at),
   audit: (event, data) => auditLog(event, data)
 })
 
