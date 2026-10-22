@@ -8,6 +8,7 @@ import type { SaveDraftTranscriptResult, SaveMeeting, TranscriptLine } from '@sh
 import { recapPersistAction } from './lib/transcript'
 import { startDraftAutosave } from './lib/draft-autosave'
 import { errorWithSavedNote, saveRevokedMeeting } from './lib/revoked-meeting-save'
+import { retiringMeeting } from './lib/retiring-meeting'
 import {
   OwnedOperationGate,
   RecapWriteCoordinator,
@@ -372,10 +373,10 @@ function lifecycleHost(save: (payload: SaveMeeting) => Promise<{ path: string }>
     context[name] = callback(name, context)
   }
   const exitPromises: Promise<void>[] = []
-  const persist = context.persistAndRetireLiveMeeting as (snapshot: AnswerState | null) => Promise<void>
-  context.persistAndRetireLiveMeeting = (snapshot: AnswerState | null) => {
+  const persist = context.persistAndRetireLiveMeeting as (...args: unknown[]) => Promise<void>
+  context.persistAndRetireLiveMeeting = (...args: unknown[]) => {
     events.push(`persist:${context.meetingStartRef.current}`)
-    const promise = persist(snapshot)
+    const promise = persist(...args)
     exitPromises.push(promise)
     return promise
   }
@@ -1823,5 +1824,148 @@ describe('actual App periodic draft autosave ownership', () => {
     } finally {
       await h.dispose()
     }
+  })
+})
+
+// Q02 (D2-1): reset / New meeting while Stop's drain is still running. The real `reset` and `newMeeting`
+// callbacks run against the real persist chain; only React state and IPC are supplied by the host.
+describe('meeting exit while the stop drain is in flight', () => {
+  type Drained = (outcome: 'drained' | 'aborted' | 'revoked') => void
+
+  function drainHost(options: { listening?: boolean; view?: string } = {}) {
+    const h = lifecycleHost(async () => ({ path: '/synthetic/meetings/a.md' }))
+    const live: TranscriptLine[] = [...lines]
+    const stops: Drained[] = []
+    const listen = {
+      listening: options.listening ?? true,
+      lines: [...lines],
+      getLines: () => live,
+      stop: vi.fn((onDrained?: Drained) => {
+        if (onDrained) stops.push(onDrained)
+      }),
+      clear: vi.fn(() => {
+        h.events.push('clear')
+      })
+    }
+    const stoppingRef = ref(true)
+    Object.assign(h.context, {
+      listen,
+      stoppingRef,
+      retiringMeeting,
+      view: options.view ?? 'review',
+      persistLiveMeetingOnExitRef: ref(h.context.persistAndRetireLiveMeeting),
+      suggest: { cancel: vi.fn(), clear: vi.fn() },
+      followup: { clear: vi.fn() },
+      nextMeetingStart: (previous: number) => previous + 1,
+      retireSpeculativeMeeting: vi.fn(),
+      freshMeetingPauseClock: () => ({}),
+      meetingPauseRef: ref({}),
+      pendingRecapRef: ref(true),
+      historyRef: ref([]),
+      copilotHistoryRef: ref([]),
+      pendingUserRef: ref(null),
+      newMeetingWaitRef: ref(false),
+      setRecapSkipped: vi.fn(),
+      setInput: vi.fn(),
+      setCaptureError: vi.fn(),
+      setPastMeeting: vi.fn(),
+      setView: vi.fn(),
+      setCollapsed: vi.fn()
+    })
+    h.context.window.toto.resetAskContext = vi.fn(async () => undefined)
+    h.context.ask.clear = vi.fn()
+    return {
+      h,
+      live,
+      listen,
+      stops,
+      stoppingRef,
+      reset: callback<() => void>('reset', h.context),
+      newMeeting: callback<() => void>('newMeeting', h.context)
+    }
+  }
+
+  it('reset during the stop drain persists after the drain with the drained tail lines', async () => {
+    const { h, live, listen, stops, reset } = drainHost()
+    reset()
+    // The save waits for the drain: nothing is persisted or cleared yet, and reset joined the drain.
+    expect(h.saveTranscript).not.toHaveBeenCalled()
+    expect(listen.clear).not.toHaveBeenCalled()
+    expect(listen.stop).toHaveBeenCalledTimes(1)
+    expect(stops).toHaveLength(1)
+    // The drain commits one more window after reset was clicked.
+    const tail: TranscriptLine = { speaker: 'them', text: 'Synthetic late tail committed by the drain.', t: 9 }
+    live.push(tail)
+    stops[0]!('drained')
+    await Promise.all(h.exitPromises)
+    expect(h.saveTranscript).toHaveBeenCalledTimes(1)
+    const payload = h.saveTranscript.mock.calls[0]![0] as SaveMeeting
+    expect(payload.startedAt).toBe(100)
+    expect(payload.lines).toEqual([...lines, tail])
+    // Cleared only after the save started, and the owner moved on.
+    expect(h.events.indexOf('clear')).toBeGreaterThan(h.events.indexOf('persist:101'))
+    expect(h.context.meetingStartRef.current).toBe(101)
+  })
+
+  it('reset during the drain never wipes a meeting that started before the drain finished', async () => {
+    const { h, listen, stops, reset } = drainHost()
+    reset()
+    h.context.meetingStartRef.current = 205 // a new meeting began while the old drain was settling
+    stops[0]!('aborted')
+    await Promise.all(h.exitPromises)
+    expect(h.saveTranscript).toHaveBeenCalledTimes(1)
+    expect((h.saveTranscript.mock.calls[0]![0] as SaveMeeting).startedAt).toBe(100)
+    expect(listen.clear).not.toHaveBeenCalled()
+  })
+
+  it('reset keeps the click-time lines when the drain callback finds the live read already cleared', async () => {
+    const { h, live, stops, reset } = drainHost()
+    reset()
+    live.length = 0
+    stops[0]!('aborted')
+    await Promise.all(h.exitPromises)
+    expect((h.saveTranscript.mock.calls[0]![0] as SaveMeeting).lines).toEqual(lines)
+  })
+
+  it('reset after the drain already settled still persists synchronously and clears at once', async () => {
+    const { h, listen, reset } = drainHost({ listening: false })
+    reset()
+    expect(listen.stop).not.toHaveBeenCalled()
+    await Promise.all(h.exitPromises)
+    expect(h.saveTranscript).toHaveBeenCalledTimes(1)
+    expect(listen.clear).toHaveBeenCalledTimes(1)
+  })
+
+  it('New meeting during the stop drain saves the drained tail first, then starts the new meeting', async () => {
+    const { h, live, stops, newMeeting } = drainHost()
+    newMeeting()
+    expect(h.startListen).not.toHaveBeenCalled()
+    expect(h.saveTranscript).not.toHaveBeenCalled()
+    expect(h.ui.setNewMeetingToast).toHaveBeenCalledWith(true)
+    const tail: TranscriptLine = { speaker: 'you', text: 'Synthetic late tail from the drain.', t: 9 }
+    live.push(tail)
+    stops[0]!('drained')
+    await Promise.all(h.exitPromises)
+    expect(h.saveTranscript).toHaveBeenCalledTimes(1)
+    expect((h.saveTranscript.mock.calls[0]![0] as SaveMeeting).lines).toEqual([...lines, tail])
+    expect(h.events.indexOf('start:false')).toBeGreaterThan(h.events.indexOf('persist:100'))
+    expect(h.startListen).toHaveBeenCalledTimes(1)
+  })
+
+  it('a second New meeting click during the same drain does not start two meetings', async () => {
+    const { h, stops, newMeeting } = drainHost()
+    newMeeting()
+    newMeeting()
+    for (const settle of stops) settle('drained')
+    await Promise.all(h.exitPromises)
+    expect(h.startListen).toHaveBeenCalledTimes(1)
+  })
+
+  it('New meeting with no drain running keeps the immediate save and start', async () => {
+    const { h, newMeeting } = drainHost({ listening: false })
+    newMeeting()
+    await Promise.all(h.exitPromises)
+    expect(h.startListen).toHaveBeenCalledTimes(1)
+    expect(h.saveTranscript).toHaveBeenCalledTimes(1)
   })
 })

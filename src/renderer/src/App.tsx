@@ -103,6 +103,9 @@ import {
   recapFileIdentity,
   retireRecapWriteKeys
 } from './lib/recap-write-coordinator'
+import { type RetiringMeeting, retiringMeeting } from './lib/retiring-meeting'
+import { runQuitFlush } from './lib/quit-flush'
+import { fetchSpotlightWinsFrom } from './lib/spotlight-wins'
 import { useConversationMemory } from './lib/conversation-memory'
 import { useAppSoundCues } from './lib/app-sound-cues'
 import { useAddKeyNudgeExpired } from './lib/add-key-nudge'
@@ -561,8 +564,10 @@ export function App(): JSX.Element {
   // after its final rescue settles, so the set is bounded by the current meeting plus in-flight exits.
   const liveRecapWritesRef = useRef<Set<string>>(new Set())
   const persistLiveMeetingOnExitRef = useRef<
-    ((snapshot: AnswerState | null, maxAttempts?: number) => Promise<void>) | null
+    ((snapshot: AnswerState | null, maxAttempts?: number, retiring?: RetiringMeeting) => Promise<void>) | null
   >(null)
+  // New meeting clicked while Stop's drain runs: the new meeting starts only after the old one is saved.
+  const newMeetingWaitRef = useRef(false)
   const savedRef = useRef('')
   // Explicit Disregard owns this meeting until reset completes; exit effects must not recreate its save.
   const discardedMeetingRef = useRef<string | null>(null)
@@ -2102,44 +2107,7 @@ export function App(): JSX.Element {
   const fetchSpotlightWins = useCallback(
     async (topic: string): Promise<string> => {
       const refAgent = settings?.providerModelsSpotlightRef?.['dust'] ?? ''
-      if (!spotlightRefReady || !refAgent) return ''
-      const id = `wins-${Date.now()}`
-      return new Promise<string>((resolve) => {
-        let text = ''
-        let settled = false
-        const finish = (value: string): void => {
-          if (settled) return
-          settled = true
-          offDelta()
-          offDone()
-          offErr()
-          resolve(value)
-        }
-        const offDelta = window.toto.onDelta((d) => {
-          if (d.id === id) text += d.text
-        })
-        const offDone = window.toto.onDone((d) => {
-          if (d.id === id) finish(text.trim())
-        })
-        const offErr = window.toto.onError((e) => {
-          if (e.id === id) finish('')
-        })
-        window.toto
-          .ask({
-            id,
-            mode: 'answer',
-            prompt:
-              `From our reference library, list up to 3 REAL customer wins or case studies relevant to: ${topic}. ` +
-              `For each, one line: the customer (or "a comparable customer" if it must stay anonymous), the result, and why it fits. ` +
-              `Only genuine references from the library. Never invent one. If nothing clearly fits, reply with the single word NONE.`,
-            agentOverride: refAgent,
-            providerOverride: 'dust',
-            history: []
-          })
-          .catch(() => finish(''))
-        // Safety net: never hang the email waiting on a wins lookup.
-        setTimeout(() => finish(text.trim()), 30_000)
-      })
+      return spotlightRefReady && refAgent ? fetchSpotlightWinsFrom(refAgent, topic) : ''
     },
     [spotlightRefReady, settings?.providerModelsSpotlightRef]
   )
@@ -2555,21 +2523,22 @@ export function App(): JSX.Element {
   // Leave/reset/quit rescue. The hook's synchronous cancel snapshot is the only terminal state accepted;
   // if it does not own this exact meeting+run, preserve the ASR transcript with no attributed recap.
   const persistLiveMeetingOnExit = useCallback(
-    async (snapshot: AnswerState | null, maxAttempts = MAX_SAVE_RETRIES): Promise<void> => {
-      const started = meetingStartRef.current
+    async (snapshot: AnswerState | null, maxAttempts = MAX_SAVE_RETRIES, retiring?: RetiringMeeting): Promise<void> => {
+      // A retiring meeting (left during Stop's drain) saves under its own identity, recap target and drained lines.
+      const started = retiring?.started ?? meetingStartRef.current
       const ownerId = String(started)
       if (discardPendingOwnerRef.current === ownerId) return
       const preserveDraft = async (): Promise<void> => {
         if (started > 0) await window.toto.preserveDraftTranscript(started).catch(() => ({ ok: false }))
       }
       if (discardedMeetingRef.current === ownerId) return
-      const lines = [...listen.lines]
+      const lines = retiring ? retiring.readLines() : [...listen.lines]
       if (!lines.length) {
         const pendingPath = savingPromiseRef.current ? await savingPromiseRef.current : null
         if (!pendingPath) await preserveDraft()
         return
       }
-      const target = liveRecapTargetRef.current
+      const target = retiring ? retiring.target : liveRecapTargetRef.current
       const action = recapPersistAction(snapshot, target, ownerId)
       const actionKey = action ? recapWriteKey(action.ownerId, action.runId) : ''
       const pendingSave = savingPromiseRef.current
@@ -2619,10 +2588,10 @@ export function App(): JSX.Element {
     [listen.lines, savedPath, saveMeetingNow]
   )
   const persistAndRetireLiveMeeting = useCallback(
-    async (snapshot: AnswerState | null, maxAttempts?: number): Promise<void> => {
-      const ownerId = String(meetingStartRef.current)
+    async (snapshot: AnswerState | null, maxAttempts?: number, retiring?: RetiringMeeting): Promise<void> => {
+      const ownerId = String(retiring?.started ?? meetingStartRef.current)
       try {
-        await persistLiveMeetingOnExit(snapshot, maxAttempts)
+        await persistLiveMeetingOnExit(snapshot, maxAttempts, retiring)
       } finally {
         retireRecapWriteKeys(liveRecapWritesRef.current, ownerId)
       }
@@ -2641,12 +2610,36 @@ export function App(): JSX.Element {
   // to miss on a misclick mid-call — so surface a brief toast confirming what just happened.
   const newMeeting = useCallback(() => {
     cancelledRef.current = true
+    if (listen.listening && stoppingRef.current) {
+      // Stop's drain is still committing windows. Starting now would abort it and drop that tail, so the
+      // old meeting is saved from the drain's own callback and only then does the new one start.
+      if (newMeetingWaitRef.current) return
+      newMeetingWaitRef.current = true
+      const owner = meetingStartRef.current
+      const retiring = retiringMeeting(owner, liveRecapTargetRef.current, listen.lines, listen.getLines)
+      const snapshot = ask.cancel()
+      listen.stop(() => {
+        newMeetingWaitRef.current = false
+        void persistLiveMeetingOnExitRef.current?.(snapshot, undefined, retiring)
+        if (meetingStartRef.current === owner) startListen(false)
+      })
+      setNewMeetingToast(true)
+      return
+    }
     beginOwnedMeetingExit(ask.cancel, (snapshot) => {
       void persistAndRetireLiveMeeting(snapshot)
     })
     startListen(false)
     setNewMeetingToast(true)
-  }, [ask.cancel, persistAndRetireLiveMeeting, startListen])
+  }, [
+    ask.cancel,
+    persistAndRetireLiveMeeting,
+    startListen,
+    listen.listening,
+    listen.lines,
+    listen.getLines,
+    listen.stop
+  ])
 
   // Quit / Log out (from Settings) must first persist any in-flight meeting — a single best-effort save
   // (maxAttempts=0) so app teardown is never blocked on the retry loop. Covers the "every started meeting
@@ -2726,17 +2719,24 @@ export function App(): JSX.Element {
     cancelledRef.current = true // resetting mid-stream is a cancel, not a completion → no chime
     const recapSnapshot = ask.cancel()
     suggest.cancel()
-    if (discardedMeetingRef.current !== String(meetingStartRef.current) && (wasListening || view === 'review')) {
-      void persistAndRetireLiveMeeting(recapSnapshot)
-    }
+    const owner = meetingStartRef.current
+    const persistsOnExit = discardedMeetingRef.current !== String(owner) && (wasListening || view === 'review')
+    const retiring = retiringMeeting(owner, liveRecapTargetRef.current, listen.lines, listen.getLines)
+    // Stop's drain may still commit windows. Save after it settles, not from the click-time snapshot.
+    if (persistsOnExit && !wasListening) void persistAndRetireLiveMeeting(recapSnapshot)
     liveRecapTargetRef.current = null
-    if (wasListening) {
-      void listen.stop() // fire-and-forget here — reset doesn't need the final flushed line
-      stoppingRef.current = true // mask the up-to-4s drain window, same as endReview's own guard
-    }
     // Invalidate this meeting even when it was already stopped in Review. Monotonic ownership prevents a
     // same-millisecond reset/restart from letting its late save publish a path or release the next lock.
     meetingStartRef.current = nextMeetingStart(meetingStartRef.current)
+    const resetOwner = meetingStartRef.current
+    if (wasListening) {
+      stoppingRef.current = true // mask the up-to-4s drain window, same as endReview's own guard
+      listen.stop(() => {
+        if (persistsOnExit) void persistLiveMeetingOnExitRef.current?.(recapSnapshot, undefined, retiring)
+        // Clear only the transcript this reset retired, never a meeting that began while it drained.
+        if (meetingStartRef.current === resetOwner) listen.clear()
+      })
+    }
     retireSpeculativeMeeting()
     meetingPauseRef.current = freshMeetingPauseClock()
     pendingRecapRef.current = false // cancel any recap still waiting on endReview's drain — reset abandons it
@@ -2745,7 +2745,7 @@ export function App(): JSX.Element {
     suggest.clear()
     followup.clear() // whatever was being reviewed is being left — a stale follow-up draft must not
     // survive to attach itself to whatever's reviewed next (see followup's own declaration comment).
-    listen.clear()
+    if (!wasListening) listen.clear()
     historyRef.current = []
     copilotHistoryRef.current = []
     pendingUserRef.current = null
@@ -2767,6 +2767,7 @@ export function App(): JSX.Element {
     retireSpeculativeMeeting,
     followup.clear,
     listen.lines,
+    listen.getLines,
     listen.stop,
     listen.clear,
     view,
@@ -3181,8 +3182,14 @@ export function App(): JSX.Element {
     }
   }, [pastMeeting, startListen])
 
-  const handlersRef = useRef<(a: HotkeyAction) => void>(() => {})
-  handlersRef.current = (a: HotkeyAction): void => {
+  const handlersRef = useRef<(a: HotkeyAction | 'quit-flush') => void>(() => {})
+  handlersRef.current = (a: HotkeyAction | 'quit-flush'): void => {
+    // Quit with a live meeting (Q02): main waits for this ack. Before the gates and the pill expansion, so
+    // it always answers, and without guardReviewNav, which could open a sheet instead of saving.
+    if (a === 'quit-flush') {
+      void runQuitFlush(flushLiveMeeting, () => window.toto.quitFlushDone())
+      return
+    }
     // Onboarding/sign-in gates block the RENDER tree (see the SignInWall/Onboarding early returns further
     // down this component), but they never stopped this handler's side effects — capture()/factCheck()/
     // toggle-listen() etc. can still fire a screen capture, an LLM call, or start a recording session

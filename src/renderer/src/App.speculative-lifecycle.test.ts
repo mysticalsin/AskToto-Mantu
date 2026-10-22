@@ -3,6 +3,7 @@ import ts from 'typescript'
 import { describe, expect, it, vi } from 'vitest'
 import { transcriptStateKey } from '@shared/hash'
 import { transcriptTail } from './lib/ask-context'
+import { retiringMeeting } from './lib/retiring-meeting'
 import { readModuleSource } from '../../test-helpers/module-source'
 
 const appModule = readModuleSource(__dirname, './App')
@@ -244,6 +245,7 @@ function makeHarness() {
       error: null,
       text: vi.fn(() => transcript),
       clear: vi.fn(() => events.push('listen.clear')),
+      getLines: () => lines,
       start: listenStart,
       stop: vi.fn(() => Promise.resolve())
     },
@@ -295,6 +297,7 @@ function makeHarness() {
     playListenChime: vi.fn(),
     beginOwnedMeetingExit: vi.fn(),
     persistAndRetireLiveMeeting: vi.fn(() => Promise.resolve()),
+    retiringMeeting,
     window: { toto: { resetAskContext: vi.fn(() => Promise.resolve()) } }
   })
   const tryAdoptSpeculative = callback<() => boolean>('tryAdoptSpeculative', context)

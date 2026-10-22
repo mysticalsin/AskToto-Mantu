@@ -55,6 +55,7 @@ import {
   themRecoveryFailureIsNoop
 } from './listen-capture-state'
 import type { CaptureDegraded, CaptureHealth, CaptureSelectionOutcome } from './listen-capture-state'
+import { settleStopCallbacks, type StopDrainCallback } from './listen-stop-drain'
 import {
   createListenAudioChannels,
   playListenChime,
@@ -208,9 +209,6 @@ interface BrokerStartInput {
   consent: CloudSpeechConsentAcknowledgement
 }
 
-type StopDrainOutcome = 'drained' | 'aborted' | 'revoked'
-type StopDrainCallback = (outcome: StopDrainOutcome) => void
-
 interface StopDrainOperation {
   epoch: number
   requestId: string
@@ -221,17 +219,6 @@ interface StopDrainOperation {
   flushIncomplete: boolean
   drainIncomplete: boolean
   beginDrain: () => void
-}
-
-function settleStopCallbacks(operation: StopDrainOperation, outcome: StopDrainOutcome): void {
-  const callbacks = operation.callbacks.splice(0)
-  for (const callback of callbacks) {
-    try {
-      callback(outcome)
-    } catch (error) {
-      console.warn('[listen] stop drain callback failed:', error)
-    }
-  }
 }
 
 export interface ListenApi {
@@ -277,6 +264,8 @@ export interface ListenApi {
   resume: () => void
   clear: () => void
   text: () => string
+  /** The committed lines right now, read from the ref (state lags a render), for a save after the drain. */
+  getLines: () => TranscriptLine[]
   /** Apply a changed spoken-language setting to the RUNNING session (no capture restart): Whisper gets
    *  a warm re-init (the worker updates its language-follow seed before the already-loaded early
    *  return), Apple Speech reads settings per window main-side, Parakeet always auto-detects. */
@@ -2851,6 +2840,7 @@ export function useListen(
   const text = useCallback((): string => {
     return transcriptToText(linesRef.current)
   }, [])
+  const getLines = useCallback((): TranscriptLine[] => linesRef.current, [])
 
   useEffect(() => {
     return () => {
@@ -2986,7 +2976,7 @@ export function useListen(
   // identity when a real piece of it changes — start/stop/pause/resume/clear/text are already
   // useCallback-stable, so without this the returned object was a fresh literal on every render.
   return useMemo(
-    () => ({ ...state, lines, start, stop, pause, resume, clear, text, setLanguage }),
-    [state, lines, start, stop, pause, resume, clear, text, setLanguage]
+    () => ({ ...state, lines, start, stop, pause, resume, clear, text, getLines, setLanguage }),
+    [state, lines, start, stop, pause, resume, clear, text, getLines, setLanguage]
   )
 }

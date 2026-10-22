@@ -1,6 +1,6 @@
 import { EventEmitter } from 'node:events'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { installAppQuitLifecycle } from './app-quit-lifecycle'
+import { QUIT_FLUSH_CEILING_MS, installAppQuitLifecycle } from './app-quit-lifecycle'
 import { createQuitTrace } from './quit-trace'
 
 class TestApp extends EventEmitter {
@@ -165,87 +165,116 @@ describe('app quit lifecycle', () => {
     ])
   })
 
-  it('keeps input authority through the two-second meeting flush, then shuts it down at will-quit', async () => {
-    vi.useFakeTimers()
-    const app = new TestApp()
-    let shutdownCalls = 0
-    let beginCalls = 0
-    let flushRequests = 0
-    let flushDone = false
-    let flushMarkCalls = 0
-    const flushMessages: { channel: string; args: unknown[] }[] = []
-    const flushEvents: string[] = []
-    installAppQuitLifecycle(app, {
-      speechPackDesktop: () => null,
-      beginInputShutdown: () => {
-        beginCalls += 1
-      },
-      quitTrace: createQuitTrace(false, () => undefined),
-      isQuitFlushDone: () => {
-        flushEvents.push(`done:${String(flushDone)}`)
-        return flushDone
-      },
-      markQuitFlushDone: () => {
-        expect(app.lastBeforeQuitEvent?.defaultPrevented).toBe(true)
-        flushMarkCalls += 1
-        flushDone = true
-        flushEvents.push('mark')
-      },
-      meetingFlushPending: () => {
-        flushEvents.push('pending')
-        return true
-      },
-      window: () => ({
-        isDestroyed: () => false,
-        webContents: {
-          send: (channel, ...args) => {
-            flushRequests += 1
-            flushMessages.push({ channel, args })
-            expect(flushDone).toBe(true)
-            expect(vi.getTimerCount()).toBe(0)
-            flushEvents.push('reset')
+  describe('before-quit waits for the renderer flush ack, with a 12 s ceiling', () => {
+    function flushHarness() {
+      vi.useFakeTimers()
+      const app = new TestApp()
+      const counts = { shutdown: 0, begin: 0, requests: 0, marks: 0 }
+      let flushDone = false
+      const flushMessages: { channel: string; args: unknown[] }[] = []
+      const flushEvents: string[] = []
+      const lifecycle = installAppQuitLifecycle(app, {
+        speechPackDesktop: () => null,
+        beginInputShutdown: () => {
+          counts.begin += 1
+        },
+        quitTrace: createQuitTrace(false, () => undefined),
+        isQuitFlushDone: () => {
+          flushEvents.push(`done:${String(flushDone)}`)
+          return flushDone
+        },
+        markQuitFlushDone: () => {
+          expect(app.lastBeforeQuitEvent?.defaultPrevented).toBe(true)
+          counts.marks += 1
+          flushDone = true
+          flushEvents.push('mark')
+        },
+        meetingFlushPending: () => {
+          flushEvents.push('pending')
+          return true
+        },
+        window: () => ({
+          isDestroyed: () => false,
+          webContents: {
+            send: (channel, ...args) => {
+              counts.requests += 1
+              flushMessages.push({ channel, args })
+              expect(flushDone).toBe(true)
+              expect(vi.getTimerCount()).toBe(0)
+              flushEvents.push('send')
+            }
           }
-        }
-      }),
-      hotkeyChannel: 'hotkey',
-      speechDesktop: () => null,
-      invalidateCloudSttOwner: () => undefined,
-      shutdownInputSessions: () => {
-        shutdownCalls += 1
-      },
-      setBootPowerSaveBlock: () => undefined,
-      endBootWatch: () => undefined,
-      globalShortcut: { unregisterAll: () => undefined },
-      notifTimer: () => null,
-      backgroundTimers: [],
-      observability: () => null,
-      uptime: () => 1,
-      wrapLifecycleListener: (_name, listener) => listener,
-      warn: () => undefined
+        }),
+        hotkeyChannel: 'hotkey',
+        speechDesktop: () => null,
+        invalidateCloudSttOwner: () => undefined,
+        shutdownInputSessions: () => {
+          counts.shutdown += 1
+        },
+        setBootPowerSaveBlock: () => undefined,
+        endBootWatch: () => undefined,
+        globalShortcut: { unregisterAll: () => undefined },
+        notifTimer: () => null,
+        backgroundTimers: [],
+        observability: () => null,
+        uptime: () => 1,
+        wrapLifecycleListener: (_name, listener) => listener,
+        warn: () => undefined
+      })
+      return { app, counts, flushMessages, flushEvents, lifecycle }
+    }
+
+    it('asks the renderer for quit-flush, not reset, and does not quit at the old 2 s mark', async () => {
+      const { app, counts, flushMessages, flushEvents } = flushHarness()
+      app.quit()
+      expect(app.quits).toBe(1)
+      expect(counts.begin).toBe(1)
+      expect(flushMessages).toEqual([{ channel: 'hotkey', args: ['quit-flush'] }])
+      expect(flushEvents).toEqual(['done:false', 'pending', 'mark', 'send'])
+      expect(counts.shutdown).toBe(0)
+      expect(vi.getTimerCount()).toBe(1)
+      await vi.advanceTimersByTimeAsync(2000)
+      expect(app.quits).toBe(1)
+      await vi.advanceTimersByTimeAsync(QUIT_FLUSH_CEILING_MS - 2001)
+      expect(app.quits).toBe(1)
+      expect(counts.shutdown).toBe(0)
     })
 
-    app.quit()
-    expect(app.quits).toBe(1)
-    expect(beginCalls).toBe(1)
-    expect(flushRequests).toBe(1)
-    expect(flushMarkCalls).toBe(1)
-    expect(flushMessages).toEqual([{ channel: 'hotkey', args: ['reset'] }])
-    expect(flushEvents).toEqual(['done:false', 'pending', 'mark', 'reset'])
-    expect(shutdownCalls).toBe(0)
-    expect(vi.getTimerCount()).toBe(1)
-    await vi.advanceTimersByTimeAsync(1999)
-    expect(app.quits).toBe(1)
-    expect(shutdownCalls).toBe(0)
-    expect(vi.getTimerCount()).toBe(1)
-    await vi.advanceTimersByTimeAsync(1)
-    expect(app.quits).toBe(2)
-    expect(beginCalls).toBe(1)
-    expect(shutdownCalls).toBe(1)
-    expect(flushRequests).toBe(1)
-    expect(flushMarkCalls).toBe(1)
-    expect(flushMessages).toEqual([{ channel: 'hotkey', args: ['reset'] }])
-    expect(flushEvents).toEqual(['done:false', 'pending', 'mark', 'reset', 'done:true'])
-    expect(vi.getTimerCount()).toBe(0)
+    it('quits immediately on the renderer ack, once, and clears the ceiling timer', async () => {
+      const { app, counts, lifecycle } = flushHarness()
+      app.quit()
+      expect(app.quits).toBe(1)
+      lifecycle.acknowledgeQuitFlush()
+      expect(app.quits).toBe(2)
+      expect(counts.begin).toBe(1)
+      expect(counts.shutdown).toBe(1)
+      expect(vi.getTimerCount()).toBe(0)
+      // Idempotent: a duplicate ack (or the ceiling) never quits a second time.
+      lifecycle.acknowledgeQuitFlush()
+      await vi.advanceTimersByTimeAsync(QUIT_FLUSH_CEILING_MS)
+      expect(app.quits).toBe(2)
+      expect(counts.shutdown).toBe(1)
+    })
+
+    it('quits at the 12 s ceiling when the renderer never acks', async () => {
+      const { app, counts, lifecycle } = flushHarness()
+      expect(QUIT_FLUSH_CEILING_MS).toBe(12_000)
+      app.quit()
+      await vi.advanceTimersByTimeAsync(QUIT_FLUSH_CEILING_MS - 1)
+      expect(app.quits).toBe(1)
+      await vi.advanceTimersByTimeAsync(1)
+      expect(app.quits).toBe(2)
+      expect(counts.shutdown).toBe(1)
+      expect(vi.getTimerCount()).toBe(0)
+      lifecycle.acknowledgeQuitFlush() // a late ack after the ceiling is ignored
+      expect(app.quits).toBe(2)
+    })
+
+    it('ignores an ack when no quit flush is pending', () => {
+      const { app, lifecycle } = flushHarness()
+      lifecycle.acknowledgeQuitFlush()
+      expect(app.quits).toBe(0)
+    })
   })
 
   it.each([

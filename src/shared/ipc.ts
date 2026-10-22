@@ -244,6 +244,8 @@ export const IPC = {
   windowToggle: 'window:toggle',
   windowQuit: 'window:quit',
   windowRelaunch: 'window:relaunch',
+  // Renderer -> main (one way): the live meeting is flushed, so a pending quit may proceed (Q02).
+  quitFlushDone: 'window:quitFlushDone',
   windowMinimize: 'window:minimize',
   // Vibe-Island auto-hide: pin the overlay to the top-center of its current display and re-arm the
   // resizeTo anchor there, so the peek strip / revealed bar grow downward from the top edge. Never
@@ -1814,38 +1816,7 @@ export const DEFAULT_SHORTCUTS: Record<HotkeyAction, string> = {
   agenda: ''
 }
 
-const CommandSpeechSessionIdSchema = z.string().regex(/^[a-f0-9]{48}$/)
-export const CommandSpeechStartSchema = z.object({ sessionId: CommandSpeechSessionIdSchema }).strict()
-export const CommandSpeechFrameSchema = z
-  .object({
-    sessionId: CommandSpeechSessionIdSchema,
-    sequence: z.number().int().nonnegative().safe(),
-    samples: z.instanceof(Float32Array)
-  })
-  .strict()
-export const CommandSpeechFinishSchema = z
-  .object({
-    sessionId: CommandSpeechSessionIdSchema,
-    frameCount: z.number().int().nonnegative().safe()
-  })
-  .strict()
-export const CommandSpeechCancelSchema = z.object({ sessionId: CommandSpeechSessionIdSchema }).strict()
-export type CommandSpeechResult =
-  | { ok: true }
-  | {
-      ok: false
-      reason:
-        | 'policy_blocked'
-        | 'unsupported_engine'
-        | 'busy'
-        | 'stale'
-        | 'invalid'
-        | 'no_speech'
-        | 'recognition_unavailable'
-    }
-export type CommandMicAvailabilityResult =
-  | { ok: true }
-  | { ok: false; reason: 'policy_blocked' | 'unsupported_engine' | 'unauthorized' }
+export * from './command-speech'
 
 /** A hotkey main failed to bind (combo already held by another app, or OS-reserved) — IPC.shortcutFailures. */
 export interface ShortcutFailure {

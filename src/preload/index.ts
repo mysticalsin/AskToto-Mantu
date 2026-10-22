@@ -675,12 +675,13 @@ const api = {
   toggle: (): Promise<void> => ipcRenderer.invoke(IPC.windowToggle),
   quit: (): Promise<void> => ipcRenderer.invoke(IPC.windowQuit),
   relaunch: (): Promise<void> => ipcRenderer.invoke(IPC.windowRelaunch),
+  quitFlushDone: (): void => ipcRenderer.send(IPC.quitFlushDone),
 
   onDelta: (cb: (d: StreamDelta) => void): Unsub => sub(IPC.streamDelta, cb),
   onDone: (cb: (d: StreamDone) => void): Unsub => sub(IPC.streamDone, cb),
   onError: (cb: (d: StreamError) => void): Unsub => sub(IPC.streamError, cb),
   onMeta: (cb: (d: StreamMeta) => void): Unsub => sub(IPC.streamMeta, cb),
-  onHotkey: (cb: (a: HotkeyAction) => void): Unsub => sub(IPC.hotkey, cb),
+  onHotkey: (cb: (a: HotkeyAction | 'quit-flush') => void): Unsub => sub(IPC.hotkey, cb),
   // Command authority is main-owned. The renderer only observes sanitized state and returns its opaque pair.
   onMetisCommandState: (cb: (state: MetisCommandState) => void): Unsub => sub(IPC.metisCommandState, cb),
   confirmMetisCommand: (

@@ -14,6 +14,9 @@ type SpeechPackQuit = {
   beforeQuit(event: BeforeQuitEvent, quit: () => void, meetingFlushPending: boolean): void
 } | null
 
+/** Hard ceiling on how long quit waits for the renderer to flush a live meeting. The ack ends the wait early. */
+export const QUIT_FLUSH_CEILING_MS = 12_000
+
 export function installAppQuitLifecycle(
   app: QuitLifecycleApp,
   deps: {
@@ -39,8 +42,9 @@ export function installAppQuitLifecycle(
     wrapLifecycleListener(name: string, listener: () => void): () => void
     warn(message: string, error: unknown): void
   }
-): void {
+): { acknowledgeQuitFlush(): void } {
   let inputShutdownBegun = false
+  let resolveQuitFlush: (() => void) | null = null
   app.on('window-all-closed', () => {
     deps.quitTrace.mark('WINDOW_ALL_CLOSED')
     // Overlay app: stay alive in tray; quit only via tray/menu.
@@ -62,12 +66,18 @@ export function installAppQuitLifecycle(
     if (!window || window.isDestroyed()) return
     event.preventDefault()
     deps.markQuitFlushDone()
-    try {
-      window.webContents.send(deps.hotkeyChannel, 'reset')
-    } catch {
-      /* window may already be gone */
+    let ceiling: ReturnType<typeof setTimeout> | null = null
+    resolveQuitFlush = () => {
+      resolveQuitFlush = null
+      if (ceiling) clearTimeout(ceiling)
+      app.quit()
     }
-    setTimeout(() => app.quit(), 2000)
+    try {
+      window.webContents.send(deps.hotkeyChannel, 'quit-flush')
+    } catch {
+      /* window may already be gone: the ceiling still ends the wait */
+    }
+    ceiling = setTimeout(() => resolveQuitFlush?.(), QUIT_FLUSH_CEILING_MS)
   })
 
   let speechShutdownDone = false
@@ -136,4 +146,7 @@ export function installAppQuitLifecycle(
       deps.quitTrace.mark('WILL_QUIT_CLEANUP_EXIT')
     })
   )
+  return {
+    acknowledgeQuitFlush: () => resolveQuitFlush?.()
+  }
 }

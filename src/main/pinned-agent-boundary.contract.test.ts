@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
+import { readModuleSource } from '../test-helpers/module-source'
 
 // Source-contract lock for Tony's 2026-07-15 requirement: the Spotlight Ref button must ALWAYS route to
 // the managed Dust agent and must NEVER be answered by whatever generic provider (e.g. Kimi) happens to be
@@ -12,6 +13,8 @@ import { describe, expect, it } from 'vitest'
 // while leaving the generic follow-up cascade able to fail over — on every version.
 const indexSrc = readFileSync(join(__dirname, 'index.ts'), 'utf8')
 const appSrc = readFileSync(join(__dirname, '..', 'renderer', 'src', 'App.tsx'), 'utf8')
+// The wins lookup moved out of App.tsx (Q02, to keep App.tsx under its architecture baseline); the pin follows it.
+const winsSrc = readModuleSource(__dirname, '../renderer/src/lib/spotlight-wins').text
 
 /** Slice from `marker` up to and including the first `followup.run(...)` / `ask.run(...)` call. */
 function sliceCall(source: string, marker: string, call: string): string {
@@ -29,7 +32,9 @@ describe('pinned Dust-agent requests never fail over to a generic provider', () 
   })
 
   it('pickFailover early-returns null for a pinned (agentOverride) request', () => {
-    const start = indexSrc.indexOf('const pickFailover = (tried: ProviderId[], preferFree = false): ProviderId | null => {')
+    const start = indexSrc.indexOf(
+      'const pickFailover = (tried: ProviderId[], preferFree = false): ProviderId | null => {'
+    )
     expect(start).toBeGreaterThan(-1)
     const body = indexSrc.slice(start, start + 900)
     // The guard must come first — before any tier/candidate work — so BOTH seams that consult pickFailover
@@ -41,7 +46,9 @@ describe('pinned Dust-agent requests never fail over to a generic provider', () 
     // hasFailoverTarget sizes the transient-retry budget from pickFailover; the pre-token failover line
     // does the actual hand-off. Both consult pickFailover, so a pinned request is suppressed at both
     // without the two being able to drift apart.
-    expect(indexSrc).toMatch(/hasFailoverTarget = provider !== 'local' && !!pickFailover\(attempted\.concat\(provider\)\)/)
+    expect(indexSrc).toMatch(
+      /hasFailoverTarget = provider !== 'local' && !!pickFailover\(attempted\.concat\(provider\)\)/
+    )
     // F3 hedge: this call now also forwards the optional race context (undefined outside a hedged ask) —
     // the pin is on the provider/preferFree args pickFailover-vs-failover parity actually depends on.
     expect(indexSrc).toMatch(/provider !== 'local' && failover\(attempted\.concat\(provider\), preferFree, race\)/)
@@ -91,10 +98,13 @@ describe('renderer pins Spotlight Ref to Dust but lets the generic follow-up cas
   })
 
   it('Spotlight Ref is used ONLY to fetch the success stories, on its own pinned ask', () => {
-    const wins = appSrc.slice(
+    const wins = winsSrc
+    // App.tsx only hands the locked agent to that lookup.
+    const caller = appSrc.slice(
       appSrc.indexOf('const fetchSpotlightWins = useCallback'),
       appSrc.indexOf('const generateFollowup = useCallback')
     )
+    expect(caller).toMatch(/fetchSpotlightWinsFrom\(refAgent, topic\)/)
     // The wins lookup is the ONLY place the email flow pins the Spotlight Ref agent.
     expect(wins).toMatch(/agentOverride: refAgent/)
     expect(wins).toMatch(/providerOverride: 'dust'/)

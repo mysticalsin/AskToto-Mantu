@@ -606,6 +606,7 @@ import {
   type CloudSttWindowOwner
 } from './lifecycle/cloud-stt-window-owner'
 import { installAppQuitLifecycle } from './lifecycle/app-quit-lifecycle'
+import { registerQuitIpc } from './ipc/quit-ipc'
 import { QA_IDENTITY_BUILD, installQaFaultHook } from './qa-hooks'
 import { installQaCaptureSource } from './qa-capture-source'
 import { resetDustConversation, prewarmDustConversation, isDustAuthError } from './llm/dust'
@@ -5510,6 +5511,9 @@ function setBootPowerSaveBlock(on: boolean): void {
 // itself, and lets the IPC.windowQuit handler (whose caller, App.tsx's quitApp(), already AWAITS a
 // flush before invoking it) skip the redundant flush-and-wait entirely.
 let quitFlushDone = false
+function markQuitFlushDone(): void {
+  quitFlushDone = true
+}
 function setRecordingPowerSaveBlock(on: boolean): void {
   if (on) {
     if (recordingPowerSaveBlockerId === null || !powerSaveBlocker.isStarted(recordingPowerSaveBlockerId)) {
@@ -9227,24 +9231,15 @@ function registerIpc(): void {
     assertMainWindow(e)
     toggleVisible()
   })
-  ipcMain.handle(IPC.windowQuit, (e) => {
-    assertMainWindow(e)
-    quitTrace.mark('IPC_QUIT_RECEIVED')
-    quitTrace.requestQuit()
-    // App.tsx's quitApp() already `await`s flushLiveMeeting() (a best-effort saveTranscript) before
-    // invoking this — the meeting is already on disk by the time we get here, so the before-quit
-    // handler below must not add its own redundant flush-and-wait on top of an already-safe quit.
-    quitFlushDone = true
-    quitTrace.call('IPC', () => app.quit())
-  })
-  // A fresh Screen Recording grant only takes effect for a NEW launch (macOS applies TCC changes to the
-  // next process, not the already-running one) — this is the one-click recovery for that dead end, wired
-  // to the Restart button the renderer shows once it detects the permission flipped mid-session. Leaves
-  // quitFlushDone unset so the normal before-quit handler still flushes a live meeting first.
-  ipcMain.handle(IPC.windowRelaunch, (e) => {
-    assertMainWindow(e)
-    app.relaunch()
-    app.quit()
+  // Quit, Relaunch and the quit-flush ack (Q02); see quit-ipc.ts.
+  registerQuitIpc({
+    ipcMain,
+    app,
+    quitTrace,
+    assertMainWindow,
+    isMainWindowSender,
+    markQuitFlushDone,
+    acknowledgeQuitFlush: () => quitLifecycle.acknowledgeQuitFlush()
   })
   // --- Auto-update ---
   // Manual check for Settings → About → Updates. Exists alongside electron-updater's silent flow so
@@ -9943,7 +9938,7 @@ if (!app.requestSingleInstanceLock()) {
     })
 }
 
-installAppQuitLifecycle(app, {
+const quitLifecycle = installAppQuitLifecycle(app, {
   speechPackDesktop: () => speechPackDesktop,
   beginInputShutdown: () => {
     inputSessionContextRevision += 1
@@ -9951,9 +9946,7 @@ installAppQuitLifecycle(app, {
   },
   quitTrace,
   isQuitFlushDone: () => quitFlushDone,
-  markQuitFlushDone: () => {
-    quitFlushDone = true
-  },
+  markQuitFlushDone,
   meetingFlushPending: () => !quitFlushDone && recordingPowerSaveBlockerId !== null && !!win && !win.isDestroyed(),
   window: () => win,
   hotkeyChannel: IPC.hotkey,
