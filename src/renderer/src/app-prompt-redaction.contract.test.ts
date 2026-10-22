@@ -7,18 +7,12 @@
  * transcript-derived site that is neither flagged nor routed through the redacting helpers. The expected
  * enclosing-function list is explicit, so a new site fails until a human classifies it.
  */
-import { readFileSync } from 'node:fs'
-import { join } from 'node:path'
 import ts from 'typescript'
 import { describe, expect, it } from 'vitest'
+import { readModuleSource } from '../../test-helpers/module-source'
 
-const file = ts.createSourceFile(
-  'App.tsx',
-  readFileSync(join(__dirname, 'App.tsx'), 'utf8'),
-  ts.ScriptTarget.Latest,
-  true,
-  ts.ScriptKind.TSX
-)
+const appModule = readModuleSource(__dirname, './App')
+const file = ts.createSourceFile(appModule.path, appModule.text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX)
 
 interface Site {
   fn: string
