@@ -45,7 +45,10 @@ function completedRun(result: IntelligenceIndexResult) {
 function completionGate() {
   let resolve!: (result: IntelligenceIndexCompletion) => void
   let reject!: (error: Error) => void
-  const promise = new Promise<IntelligenceIndexCompletion>((yes, no) => { resolve = yes; reject = no })
+  const promise = new Promise<IntelligenceIndexCompletion>((yes, no) => {
+    resolve = yes
+    reject = no
+  })
   return { promise, resolve, reject }
 }
 
@@ -142,18 +145,12 @@ describe('America/Toronto named slots', () => {
 
 describe('classifyIntelligenceClick', () => {
   it('queues work when meetings exist and the brain is empty', () => {
-    expect(
-      classifyIntelligenceClick({ savedMeetings: 3, unextracted: 3, queued: 2, preparing: false })
-    ).toBe('working')
-    expect(
-      classifyIntelligenceClick({ savedMeetings: 3, unextracted: 3, queued: 0, preparing: true })
-    ).toBe('working')
-    expect(
-      classifyIntelligenceClick({ savedMeetings: 3, unextracted: 3, queued: 0, upToDate: true })
-    ).toBe('illegal-empty')
-    expect(
-      classifyIntelligenceClick({ savedMeetings: 3, unextracted: 3, queued: 0 })
-    ).toBe('illegal-empty')
+    expect(classifyIntelligenceClick({ savedMeetings: 3, unextracted: 3, queued: 2, preparing: false })).toBe('working')
+    expect(classifyIntelligenceClick({ savedMeetings: 3, unextracted: 3, queued: 0, preparing: true })).toBe('working')
+    expect(classifyIntelligenceClick({ savedMeetings: 3, unextracted: 3, queued: 0, upToDate: true })).toBe(
+      'illegal-empty'
+    )
+    expect(classifyIntelligenceClick({ savedMeetings: 3, unextracted: 3, queued: 0 })).toBe('illegal-empty')
   })
 
   it('surfaces the no-provider copy and allows a true upToDate when everything is extracted', () => {
@@ -166,14 +163,12 @@ describe('classifyIntelligenceClick', () => {
         error: NO_PROVIDER_INDEX_COPY
       })
     ).toBe('error')
-    expect(
-      classifyIntelligenceClick({ savedMeetings: 2, unextracted: 2, queued: 0, deferred: 'no-provider' })
-    ).toBe('no-provider')
+    expect(classifyIntelligenceClick({ savedMeetings: 2, unextracted: 2, queued: 0, deferred: 'no-provider' })).toBe(
+      'no-provider'
+    )
     expect(NO_PROVIDER_INDEX_COPY).toMatch(/Connect an AI provider/)
     expect(NO_PROVIDER_INDEX_COPY).not.toMatch(/—/)
-    expect(
-      classifyIntelligenceClick({ savedMeetings: 4, unextracted: 0, queued: 0, upToDate: true })
-    ).toBe('upToDate')
+    expect(classifyIntelligenceClick({ savedMeetings: 4, unextracted: 0, queued: 0, upToDate: true })).toBe('upToDate')
     expect(SIGN_IN_INDEX_COPY).toBe('Sign in with your Mantu account first.')
   })
 
@@ -230,12 +225,14 @@ describe('click with meetings and an empty brain queues work', () => {
   it('click with no provider surfaces the no-provider copy', async () => {
     const folder = mkdtempSync(join(tmpdir(), 'intel-idx-'))
     const s = { ...DEFAULT_SETTINGS, meetingsFolder: folder, encryptTranscripts: false }
-    setIntelligenceIndexWork(async () => completedRun({
-      ran: false,
-      queued: 0,
-      deferred: 'no-provider',
-      error: NO_PROVIDER_INDEX_COPY
-    }))
+    setIntelligenceIndexWork(async () =>
+      completedRun({
+        ran: false,
+        queued: 0,
+        deferred: 'no-provider',
+        error: NO_PROVIDER_INDEX_COPY
+      })
+    )
     const r = await runIntelligenceIndex('click', s)
     expect(r.error).toBe(NO_PROVIDER_INDEX_COPY)
     expect(r.deferred).toBe('no-provider')
@@ -247,7 +244,7 @@ describe('click with meetings and an empty brain queues work', () => {
     setIntelligenceIndexWork(async () => completedRun({ ran: false, queued: 0, deferred: 'no-provider' }))
     const result = await runIntelligenceIndex('click', s)
     expect(result.error).toMatch(/local.only.*not ready/i)
-    await vi.waitFor(() => expect(intelligenceIndexStatus(s).running).toBe(false))
+    await vi.waitFor(() => expect(intelligenceIndexStatus(s).running).toBe(false), { timeout: 10_000 })
     resetIntelligenceIndexLockForTests()
     expect(intelligenceIndexStatus(s).lastError).toBe(result.error)
   })
@@ -305,10 +302,13 @@ describe('runIntelligenceIndex coalesce and catch-up', () => {
   it('catch-up no-ops after a failed pass finished after the elapsed slot', async () => {
     const folder = mkdtempSync(join(tmpdir(), 'intel-idx-'))
     const s = { ...DEFAULT_SETTINGS, meetingsFolder: folder, encryptTranscripts: false }
-    await writeIntelligenceIndexState({
-      lastSuccessAt: 0,
-      lastFinishedAt: torontoMs(2026, 8, 31, 12, 5)
-    }, s)
+    await writeIntelligenceIndexState(
+      {
+        lastSuccessAt: 0,
+        lastFinishedAt: torontoMs(2026, 8, 31, 12, 5)
+      },
+      s
+    )
     let calls = 0
     setIntelligenceIndexWork(async () => {
       calls += 1
@@ -326,7 +326,9 @@ describe('runIntelligenceIndex coalesce and catch-up', () => {
     startMaintenanceGate({
       uptimeMs: () => uptime,
       interactiveActive: () => false,
-      schedule: (run: () => void, ms: number) => { scheduled.push({ run, ms }) }
+      schedule: (run: () => void, ms: number) => {
+        scheduled.push({ run, ms })
+      }
     })
     settlePriorExit('clean')
     const folder = mkdtempSync(join(tmpdir(), 'intel-idx-'))
@@ -374,7 +376,11 @@ describe('runIntelligenceIndex coalesce and catch-up', () => {
 
 describe('Intelligence completion, not dispatch, owns success', () => {
   async function settings() {
-    const s = { ...DEFAULT_SETTINGS, meetingsFolder: mkdtempSync(join(tmpdir(), 'intel-completion-')), encryptTranscripts: false }
+    const s = {
+      ...DEFAULT_SETTINGS,
+      meetingsFolder: mkdtempSync(join(tmpdir(), 'intel-completion-')),
+      encryptTranscripts: false
+    }
     await writeIntelligenceIndexState({ lastSuccessAt: 123 }, s)
     return s
   }
@@ -392,7 +398,7 @@ describe('Intelligence completion, not dispatch, owns success', () => {
     expect((await runIntelligenceIndex('import-idle', s)).coalesced).toBe(true)
     expect(work).toHaveBeenCalledTimes(1)
     gate.resolve({ ok: true, recapped: 2 })
-    await vi.waitFor(() => expect(intelligenceIndexStatus(s).running).toBe(false))
+    await vi.waitFor(() => expect(intelligenceIndexStatus(s).running).toBe(false), { timeout: 10_000 })
     expect(readIntelligenceIndexState(s)).toEqual({
       lastSuccessAt: expect.any(Number),
       lastFinishedAt: expect.any(Number)
@@ -407,8 +413,12 @@ describe('Intelligence completion, not dispatch, owns success', () => {
     setIntelligenceIndexWork(async () => ({ result: { ran: true, queued: 1 }, completion: gate.promise }))
     await runIntelligenceIndex('click', s)
     gate.resolve({ ok: false, error: `${stage} could not finish. Retry Update Intelligence.` })
-    await vi.waitFor(() => expect(intelligenceIndexStatus(s).running).toBe(false))
-    expect(readIntelligenceIndexState(s)).toEqual({ lastSuccessAt: 123, lastFinishedAt: expect.any(Number), lastError: `${stage} could not finish. Retry Update Intelligence.` })
+    await vi.waitFor(() => expect(intelligenceIndexStatus(s).running).toBe(false), { timeout: 10_000 })
+    expect(readIntelligenceIndexState(s)).toEqual({
+      lastSuccessAt: 123,
+      lastFinishedAt: expect.any(Number),
+      lastError: `${stage} could not finish. Retry Update Intelligence.`
+    })
   })
 
   it('does not promote a deferred dispatch even if its local subset completes', async () => {
@@ -430,7 +440,9 @@ describe('Intelligence completion, not dispatch, owns success', () => {
     setIntelligenceIndexWork(async () => ({ result: { ran: true, queued: 1 }, completion: gate.promise }))
     await runIntelligenceIndex('click', s)
     gate.reject(new Error('/private/test-profile/api-key-secret could not be read'))
-    await vi.waitFor(() => expect(intelligenceIndexStatus(s).running).toBe(false))
+    // Settle the detached completion deterministically; a fixed 1 s poll flaked on cold Windows runners.
+    await settleIntelligenceIndexForTests()
+    expect(intelligenceIndexStatus(s).running).toBe(false)
     expect(readIntelligenceIndexState(s).lastSuccessAt).toBe(123)
     expect(intelligenceIndexStatus(s).lastError).toMatch(/could not finish.*Retry/i)
     expect(intelligenceIndexStatus(s).lastError).not.toMatch(/private|secret/)
@@ -438,7 +450,10 @@ describe('Intelligence completion, not dispatch, owns success', () => {
 
   it('does not render raw diagnostic errors persisted by older app versions', async () => {
     const s = await settings()
-    await writeIntelligenceIndexState({ lastSuccessAt: 123, lastError: '/private/legacy-profile api-key=synthetic-secret' }, s)
+    await writeIntelligenceIndexState(
+      { lastSuccessAt: 123, lastError: '/private/legacy-profile api-key=synthetic-secret' },
+      s
+    )
     expect(intelligenceIndexStatus(s).lastError).toMatch(/could not finish.*Retry/i)
     expect(intelligenceIndexStatus(s).lastError).not.toMatch(/legacy-profile|synthetic-secret/)
   })
@@ -458,7 +473,7 @@ describe('Intelligence completion, not dispatch, owns success', () => {
     expect(intelligenceIndexStatus(s).running).toBe(true)
     expect(readIntelligenceIndexState(s).lastSuccessAt).toBe(123)
     replacement.resolve({ ok: false, error: 'Retry the incomplete pass.' })
-    await vi.waitFor(() => expect(intelligenceIndexStatus(s).running).toBe(false))
+    await vi.waitFor(() => expect(intelligenceIndexStatus(s).running).toBe(false), { timeout: 10_000 })
     expect(readIntelligenceIndexState(s).lastSuccessAt).toBe(123)
   })
 
@@ -466,7 +481,9 @@ describe('Intelligence completion, not dispatch, owns success', () => {
     const s = await settings()
     const outcome = completionGate()
     let releaseWrite!: () => void
-    const writeGate = new Promise<void>((resolve) => { releaseWrite = resolve })
+    const writeGate = new Promise<void>((resolve) => {
+      releaseWrite = resolve
+    })
     const originalWrite = brainStore.writeJson
     let writing = false
     vi.spyOn(brainStore, 'writeJson').mockImplementation(async (...args) => {
@@ -478,12 +495,12 @@ describe('Intelligence completion, not dispatch, owns success', () => {
     setIntelligenceIndexWork(work)
     await runIntelligenceIndex('click', s)
     outcome.resolve({ ok: true })
-    await vi.waitFor(() => expect(writing).toBe(true))
+    await vi.waitFor(() => expect(writing).toBe(true), { timeout: 10_000 })
     expect(readIntelligenceIndexState(s).lastSuccessAt).toBe(123)
     expect((await runIntelligenceIndex('schedule', s)).coalesced).toBe(true)
     expect(work).toHaveBeenCalledTimes(1)
     releaseWrite()
-    await vi.waitFor(() => expect(intelligenceIndexStatus(s).running).toBe(false))
+    await vi.waitFor(() => expect(intelligenceIndexStatus(s).running).toBe(false), { timeout: 10_000 })
     expect(readIntelligenceIndexState(s).lastSuccessAt).toBeGreaterThan(123)
   })
 })
