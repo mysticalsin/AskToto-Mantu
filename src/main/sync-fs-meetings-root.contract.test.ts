@@ -68,7 +68,7 @@ const BASELINE = {
   'brain/intelligence-work.ts': 0,
   'brain/intelligence-pass.ts': 0,
   'brain/corrections.ts': 10,
-  'brain/store.ts': 63,
+  'brain/store.ts': 59,
   'brain/match-key-cache.ts': 4,
   'recall.ts': 0,
   'history-actions.ts': 0

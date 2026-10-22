@@ -13,6 +13,8 @@ export interface PermissionHelperWindowOptions {
   /** Dev server URL, or null to load the packaged file. */
   devUrl: string | null
   file: string
+  /** Private View: the helper follows the same screen-share protection as every other visible window. */
+  contentProtection: boolean
 }
 
 export function createPermissionHelperWindow(opts: PermissionHelperWindowOptions): BrowserWindow {
@@ -41,6 +43,7 @@ export function createPermissionHelperWindow(opts: PermissionHelperWindowOptions
   })
   // Above System Settings / Settings (a normal window), below system alerts.
   win.setAlwaysOnTop(true, 'floating')
+  win.setContentProtection(opts.contentProtection)
   win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
   win.webContents.on('will-navigate', (event) => event.preventDefault())
   // Never steal focus from the pane the person is about to click in.

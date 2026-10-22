@@ -4,6 +4,7 @@ import { join, relative } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { sourceIndexOf } from '../../scripts/lib/source-layout'
+import { readModuleSource } from '../test-helpers/module-source'
 
 /**
  * MQA-176 — "Hide from screen capture" (settings.contentProtection; the bar's eye button and
@@ -110,13 +111,15 @@ function mainSources(): { file: string; source: string }[] {
 describe('MQA-176 — every window Métis puts on screen is covered by the Private View toggle', () => {
   it('MQA-176 — no visible window is constructed without a setContentProtection decision', () => {
     const audit = auditWindows(mainSources())
-    // The four that exist today: the overlay and the Intelligence dashboard are visible and protected;
-    // the import decoder and the recap-PDF printer are `show: false` and never composited.
+    // The five that exist today: the overlay and the Intelligence dashboard are visible and protected;
+    // the import decoder and the recap-PDF printer are `show: false` and never composited. The guided
+    // permission helper is built hidden but shown inactive once ready, so it sets protection itself.
     expect(audit.windows.sort()).toEqual([
       'index.ts: decoderWin',
       'index.ts: pdfWin',
       'index.ts: win',
-      'intelligence.ts: intelWin'
+      'intelligence.ts: intelWin',
+      'windows/permission-helper-window.ts: win'
     ])
     expect(audit.violations).toEqual([])
   })
@@ -383,5 +386,14 @@ describe('MQA-176 — the Intelligence dashboard is created with the CURRENT Pri
     const intel = await import('./intelligence')
     intel.openIntelligenceWindow()
     expect(built[0].setContentProtection).toHaveBeenCalledWith(true)
+  })
+})
+
+describe('C32 guided permission helper follows Private View', () => {
+  it('sets content protection on its window even though it is constructed with show: false', () => {
+    const window = readModuleSource(__dirname, './windows/permission-helper-window').text
+    expect(window).toMatch(/win\.setContentProtection\(opts\.contentProtection\)/)
+    const ipc = readModuleSource(__dirname, './ipc/permission-helper-ipc').text
+    expect(ipc).toMatch(/contentProtection: !devEnv\('ASKTOTO_DISABLE_CP'\) && getSettings\(\)\.contentProtection/)
   })
 })

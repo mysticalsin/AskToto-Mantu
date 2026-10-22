@@ -15,6 +15,7 @@ import {
 } from '../../src/shared/ipc'
 import { TranscriptLineSchema } from '../../src/shared/transcript-line'
 import { ipcModuleSource } from '../lib/ipc-module-source'
+import { readModuleSource } from '../../src/test-helpers/module-source'
 
 /**
  * Wave 0–6 / QA approval — source contracts that the rebuild's critical seams stay wired.
@@ -339,6 +340,26 @@ function directSaveDurableIndex(handler: ts.ArrowFunction): number {
       )
   )
   const durableIdx = statements.findIndex((statement) => {
+    // Q06 (one file per meeting): `receipt.durablePath ??= await writeMeetingOnce(receipt, saveSettings, m, …)`
+    // rewrites this meeting's earlier file in place or falls through to saveMeeting(settings, meeting); the
+    // save-identity pin below proves that fall-through.
+    if (
+      ts.isExpressionStatement(statement) &&
+      ts.isBinaryExpression(statement.expression) &&
+      statement.expression.operatorToken.kind === ts.SyntaxKind.QuestionQuestionEqualsToken &&
+      isReceiptProperty(statement.expression.left, 'durablePath') &&
+      ts.isAwaitExpression(statement.expression.right)
+    ) {
+      const once = statement.expression.right.expression
+      return (
+        callExpression(once, 'writeMeetingOnce') &&
+        once.arguments.length >= 3 &&
+        ts.isIdentifier(once.arguments[1]) &&
+        once.arguments[1].text === 'saveSettings' &&
+        ts.isIdentifier(once.arguments[2]) &&
+        once.arguments[2].text === 'm'
+      )
+    }
     if (
       !ts.isIfStatement(statement) ||
       statement.elseStatement ||
@@ -673,6 +694,13 @@ describe('QA rebuild contracts — Wave 1 provisional strip', () => {
     expect(parsedMeeting).toBeGreaterThanOrEqual(0)
     expect(stripAssignment).toBeGreaterThan(parsedMeeting)
     expect(saveDurable).toBeGreaterThan(stripAssignment)
+    // writeMeetingOnce writes the same stripped meeting it was given: an in-place rewrite or saveMeeting.
+    const saveIdentity = readModuleSource(
+      join(__dirname, '..', '..', 'src', 'main'),
+      './features/meetings/save-identity'
+    ).text
+    expect(saveIdentity).toMatch(/rewriteSavedMeeting\(prior\.settings, prior\.path, meeting\)/)
+    expect(saveIdentity).toMatch(/return saveMeeting\(settings, meeting\)\n\}/)
 
     const receiptFlow = receiptRun(saveHandler)
     expect(receiptFlow, 'saveTranscript must return the receipt flow').toBeDefined()

@@ -22,6 +22,7 @@ import { devEnv } from '../dev-env'
 import { afterPermissionHelperDelay, startPermissionHelperPoll } from '../infra/scheduler/permission-helper-poll'
 import { createPermissionHelper, type PermissionHelper } from '../permission-helper'
 import { getPlatformPermissions, probeScreenCapture } from '../platform-perms'
+import { getSettings } from '../store'
 import { createPermissionHelperWindow } from '../windows/permission-helper-window'
 
 type AssertMainWindow = (event: Electron.IpcMainInvokeEvent) => void
@@ -85,7 +86,8 @@ export function registerPermissionHelperIpc(deps: {
         bounds: { x: at.x, y: at.y, ...HELPER_SIZE },
         preload: join(__dirname, '../preload/permission-helper.js'),
         devUrl: devServer ? new URL('/permission-helper.html', devServer).toString() : null,
-        file: join(__dirname, '../renderer/permission-helper.html')
+        file: join(__dirname, '../renderer/permission-helper.html'),
+        contentProtection: !devEnv('ASKTOTO_DISABLE_CP') && getSettings().contentProtection
       })
       helperContents = win.webContents
       return {

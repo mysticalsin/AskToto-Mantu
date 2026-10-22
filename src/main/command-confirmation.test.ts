@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
+import type { DesktopActionRequest } from '@shared/desktop-actions'
 import { CommandConfirmation, type CommandPowerMonitor } from './command-confirmation'
+import type { CommandExecutionContext } from './command-control'
 
 type LifecycleEvent = 'suspend' | 'lock-screen'
 type TestState = {
@@ -30,7 +32,13 @@ function createConfirmation() {
     owner: { destroyed: false, visible: true, focused: true },
     onboardingExclusive: false
   }
-  const execute = vi.fn(async () => ({ id: 'desktop.open_notes' as const, ok: true, outcome: 'verified' as const }))
+  // G04 observed-receipt rule: a verified result is evidence only with a receipt bound to this dispatch.
+  const execute = vi.fn(async (_request: DesktopActionRequest, context: CommandExecutionContext) => ({
+    id: 'desktop.open_notes' as const,
+    ok: true,
+    outcome: 'verified' as const,
+    receipt: { idempotencyKey: context.idempotencyKey, argsHash: context.argsHash, observation: 'Notes is frontmost' }
+  }))
   const sendCommandState = vi.fn()
   const getOwner = vi.fn(() => {
     const owner = state.owner

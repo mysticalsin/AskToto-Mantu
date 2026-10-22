@@ -20,10 +20,11 @@ export const DRAFT_SAVE_DEADLINE_MS = 45_000
  */
 export function startDraftAutosave(options: DraftAutosaveOptions): () => void {
   let active = true
-  // True from the moment a snapshot is handed to main until its promise settles. Main serialises draft writes per
-  // path, so a tick that fired while a stalled write was pending would queue another full-transcript payload behind
-  // it, without bound and without the user ever hearing about it.
-  let inFlight = false
+  // The meeting whose snapshot is with main, from hand-off until its promise settles. Main serialises draft writes
+  // per path (one path per meeting), so a tick for that same meeting while its write is stalled would queue another
+  // full-transcript payload behind it, without bound and without the user ever hearing about it. A different
+  // meeting writes a different path, so an old stalled snapshot never blocks the new meeting's autosave.
+  let inFlightStartedAt: number | null = null
   options.failures.current = 0
   options.warn(false)
   const recordFailure = (): void => {
@@ -34,14 +35,14 @@ export function startDraftAutosave(options: DraftAutosaveOptions): () => void {
   const iv = setInterval(() => {
     const lines = options.getLines()
     if (!lines.length) return
-    if (inFlight) {
-      // The previous snapshot has not even settled: this tick cannot start, and that is a failure to save.
+    const startedAt = options.getStartedAt()
+    if (inFlightStartedAt === startedAt) {
+      // This meeting's previous snapshot has not even settled: this tick cannot start, and that is a failure to save.
       recordFailure()
       return
     }
     const title = options.title(lines, options.mode)
-    const startedAt = options.getStartedAt()
-    inFlight = true
+    inFlightStartedAt = startedAt
     let timedOut = false
     const deadline = setTimeout(() => {
       timedOut = true
@@ -68,7 +69,7 @@ export function startDraftAutosave(options: DraftAutosaveOptions): () => void {
       })
       .finally(() => {
         clearTimeout(deadline)
-        inFlight = false
+        if (inFlightStartedAt === startedAt) inFlightStartedAt = null
       })
   }, 60_000)
   return () => {

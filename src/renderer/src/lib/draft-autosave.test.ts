@@ -39,6 +39,27 @@ describe('startDraftAutosave in-flight guard', () => {
     stop()
   })
 
+  it("a stalled snapshot of the previous meeting never blocks the new meeting's autosave", async () => {
+    const save = vi.fn<(m: SaveMeeting) => Promise<SaveDraftTranscriptResult>>(() => new Promise(() => {}))
+    let startedAt = 1000
+    const stop = startDraftAutosave({
+      mode: 'meeting',
+      getLines: () => [line],
+      getStartedAt: () => startedAt,
+      title: () => 'Standup',
+      save,
+      failures: { current: 0 },
+      warn: vi.fn()
+    })
+    await vi.advanceTimersByTimeAsync(60_000)
+    startedAt = 2000 // the same listening effect moved on to another meeting (its own draft path)
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(save.mock.calls.map(([m]) => m.startedAt)).toEqual([1000, 2000])
+    await vi.advanceTimersByTimeAsync(60_000) // the new meeting's own write is now the one in flight
+    expect(save).toHaveBeenCalledTimes(2)
+    stop()
+  })
+
   it('starts a new save once the pending one settles', async () => {
     let finish!: (r: SaveDraftTranscriptResult) => void
     const save = vi
