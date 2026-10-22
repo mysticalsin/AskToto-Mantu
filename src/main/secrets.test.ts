@@ -103,5 +103,38 @@ describe('secrets — AES-256-GCM file keystore', () => {
       prepareFileKeyForWrite()
       expect(readFileSync(keyFile())).toHaveLength(32)
     })
+
+    it.each(['key-openai.bin', 'auth-session.bin'])(
+      'D7-8 a write refuses to mint a new key while %s exists without a key file',
+      (existingFile) => {
+        // Minting here would silently orphan every secret already encrypted under the lost key.
+        writeFileSync(join(userData, existingFile), randomBytes(48))
+        expect(() => encryptSecret('another-secret')).toThrow(KeychainKeyRecoveryError)
+        expect(() => prepareFileKeyForWrite()).toThrow(KeychainKeyRecoveryError)
+        expect(readdirSync(userData)).toEqual([existingFile])
+      }
+    )
+
+    it('D7-8 a plaintext settings.json alone never blocks the first key', () => {
+      writeFileSync(join(userData, 'settings.json'), '{"onboarded":true}')
+      prepareFileKeyForWrite()
+      expect(readFileSync(keyFile())).toHaveLength(32)
+    })
+
+    it('D7-5 a zero-byte key file beside other encrypted profile files fails closed instead of minting', () => {
+      writeFileSync(keyFile(), Buffer.alloc(0))
+      writeFileSync(join(userData, 'key-openai.bin'), randomBytes(48))
+      expect(() => encryptSecret('another-secret')).toThrow(KeychainKeyRecoveryError)
+      expect(readFileSync(keyFile())).toHaveLength(0)
+    })
+
+    it('D7-5 a zero-byte key file on an otherwise empty profile is recreated and replaces the empty file', () => {
+      writeFileSync(keyFile(), Buffer.alloc(0))
+      const envelope = encryptSecret('first-write')
+      expect(readFileSync(keyFile())).toHaveLength(32)
+      expect(readdirSync(userData)).toEqual(['secret-key.bin'])
+      resetSecretKeyCache()
+      expect(decryptSecret(envelope)).toBe('first-write')
+    })
   })
 })

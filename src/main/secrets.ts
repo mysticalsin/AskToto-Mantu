@@ -34,9 +34,10 @@
  */
 
 import { app, safeStorage } from 'electron'
-import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
 import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto'
+import { isEncryptedProfileFileName } from './profile-recovery-files'
 import { ENCRYPTED_PROFILE_RECOVERY_ERROR_PREFIX } from '@shared/encrypted-profile-recovery'
 import type { ProviderId } from '@shared/providers'
 
@@ -169,6 +170,15 @@ function persistKeyFileAtomically(p: string, key: Buffer): void {
   }
 }
 
+/** True when this profile already holds files only the lost or emptied key could open (D7-5, D7-8). */
+function encryptedProfileFilesExist(dir: string): boolean {
+  try {
+    return readdirSync(dir).some(isEncryptedProfileFileName)
+  } catch {
+    return false
+  }
+}
+
 function loadKey({
   createIfMissing,
   allowKeychainMigration = false
@@ -194,10 +204,16 @@ function loadKey({
   // keystore without inheriting a signature-bound credential it cannot unlock.
   const canWrap = app.isPackaged && !localKeystoreForced && keychainAvailable
 
+  // A zero-byte key file (what a crash during first key creation leaves) holds no key. It counts as absent
+  // only while no other encrypted profile file exists; beside one, it fails closed like any unreadable key.
+  let zeroByteKeyFile = false
   if (existsSync(p)) {
     const buf = readFileSync(p)
+    zeroByteKeyFile = buf.length === 0
     if (canWrap) {
-      if (buf.length === 32) {
+      if (zeroByteKeyFile) {
+        // no key: handled below, the same as the unwrapped keystore
+      } else if (buf.length === 32) {
         // Legacy raw key written before KEK support — migrate to wrapped format now. Atomic, because
         // this fires on the boot read path for every upgrading Windows user and the file is the only
         // copy of the KEK (see persistKeyFileAtomically).
@@ -257,21 +273,22 @@ function loadKey({
     if (_key) return _key
   }
 
-  // This profile holds no key: no key file, or a zero-byte one on an unwrapped keystore. Only a
-  // write creates the key. A decrypt fails here instead: a key generated now can never open bytes
-  // written before it, and generating one would leave secret-key.bin behind as a side effect of a
-  // read.
-  if (!createIfMissing) throw new Error('secrets: this profile has no file key to decrypt with')
-
+  // This profile holds no key: no key file, or a zero-byte one. Only a write creates the key. A decrypt
+  // fails here instead: a key generated now can never open bytes written before it, and generating one
+  // would leave secret-key.bin behind as a side effect of a read.
   const dir = app.getPath('userData')
+  const orphaned = encryptedProfileFilesExist(dir)
+  if (orphaned && zeroByteKeyFile) throw new KeychainKeyRecoveryError()
+  if (!createIfMissing) throw new Error('secrets: this profile has no file key to decrypt with')
+  // Minting beside encrypted files would silently orphan every secret already written under the lost key.
+  if (orphaned) throw new KeychainKeyRecoveryError()
+
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
 
-  _key = randomBytes(32)
-  if (canWrap) {
-    writeFileSync(p, safeStorage.encryptString(_key.toString('base64')), { mode: 0o600 })
-  } else {
-    writeFileSync(p, _key, { mode: 0o600 })
-  }
+  // Atomic, and cached only once it is on disk: a key that never reached the file must not encrypt anything.
+  const fresh = randomBytes(32)
+  persistKeyFileAtomically(p, canWrap ? safeStorage.encryptString(fresh.toString('base64')) : fresh)
+  _key = fresh
   return _key
 }
 
@@ -304,7 +321,7 @@ export function fileKeyState(): 'absent' | 'locked' | 'available' {
   } catch {
     return 'locked'
   }
-  if (buf.length === 0) return 'absent'
+  if (buf.length === 0) return encryptedProfileFilesExist(dirname(p)) ? 'locked' : 'absent'
   if (buf.length === 32) return 'available'
   if (process.env.ASKTOTO_LOCAL_KEYSTORE || !isKeychainAvailable()) return 'locked'
   try {
