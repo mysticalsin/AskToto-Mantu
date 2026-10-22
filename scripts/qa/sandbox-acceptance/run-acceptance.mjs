@@ -6,6 +6,8 @@
 // Scenario (explicit PASS / FAIL / NOT_SUPPORTED / SKIPPED per step, each backed by something the run observed):
 //   launch -> renderer ready -> synthetic meeting live -> transcript segments -> stop and save -> meeting file in the sandbox
 //   meetings folder -> review opens it -> clean quit -> relaunch -> saved meeting still listed -> clean quit.
+// --scenario stress (stress.mjs, C31, needs --zip) runs eight real-observation stress cases (start/stop spam, kill -9 mid-meeting and
+// during save, a relaunch loop, many meetings, settings churn, a long meeting's memory, overlay click spam); --cases s1,s3 picks some.
 // --scenario upgrade (upgrade.mjs, needs --previous-zip and --candidate-zip) runs update, single-instance and rollback on one
 // shared profile. --scenario settings-hig swaps it for the Apple HIG Settings scenario (settings-hig.mjs): Command-Comma, instant-apply toggle,
 // confirmation sheet, no mic request, inline endpoint validation, persistence and last pane across a relaunch.
@@ -35,6 +37,8 @@ import {
 import { guardReport, launchApp, planLaunch, prepareProfile } from './session.mjs'
 import { DEFAULT_CANDIDATE_VERSION, runUpgradeScenario, UPGRADE_STEPS } from './upgrade.mjs'
 import { HIG_SEED_SETTINGS, SETTINGS_HIG_STEPS, runSettingsHigScenario } from './settings-hig.mjs'
+import { parseCases, stressSteps } from './stress-lib.mjs'
+import { runStressScenario } from './stress.mjs'
 import {
   observeTranscriptDraft,
   reviewSavedMeeting,
@@ -43,7 +47,7 @@ import {
   verifyMeetingPreserved
 } from './scenario.mjs'
 
-export const SCENARIOS = Object.freeze(['meeting', 'settings-hig', 'upgrade'])
+export const SCENARIOS = Object.freeze(['meeting', 'settings-hig', 'upgrade', 'stress'])
 
 export const CLI_SPEC = Object.freeze({
   scenario: { type: 'string', default: 'meeting' },
@@ -51,6 +55,9 @@ export const CLI_SPEC = Object.freeze({
   'previous-zip': { type: 'string' },
   'candidate-zip': { type: 'string' },
   'candidate-version': { type: 'string', default: DEFAULT_CANDIDATE_VERSION },
+  zip: { type: 'string' },
+  cases: { type: 'string', default: 'all' },
+  'long-minutes': { type: 'number', default: 10, min: 4 },
   'sandbox-root': { type: 'string' },
   'run-id': { type: 'string' },
   out: { type: 'string' },
@@ -86,6 +93,35 @@ export function resolveConfig(argv, env = process.env) {
   if (!/^[A-Za-z0-9-]{1,16}$/.test(runId))
     throw new CliError('--run-id must be 1-16 characters of letters, digits and -')
   const layout = sandboxLayout({ sandboxRoot, runId })
+  if (values.scenario !== 'stress') {
+    for (const flag of ['zip', 'long-minutes'])
+      if (argv.some((token) => token === `--${flag}` || token.startsWith(`--${flag}=`)))
+        throw new CliError(`--${flag} is only valid with --scenario stress`)
+    if (argv.some((token) => token === '--cases' || token.startsWith('--cases=')))
+      throw new CliError('--cases is only valid with --scenario stress')
+  }
+  if (values.scenario === 'stress') {
+    for (const flag of ['previous-zip', 'candidate-zip'])
+      if (values[flag]) throw new CliError(`--${flag} is only valid with --scenario upgrade`)
+    if (values.app) throw new CliError('--app is not used by --scenario stress (it installs from --zip)')
+    if (!values.zip) throw new CliError('--scenario stress needs --zip <Metis-QA-*.zip>')
+    if (!/Metis-QA-.*\.zip$/.test(basename(values.zip)))
+      throw new CliError('--zip must name a Metis-QA-*.zip (the QA-identity artifact)')
+    if (!existsSync(values.zip) || !statSync(values.zip).isFile())
+      throw new CliError(`--zip: no such file ${values.zip}`)
+    let cases
+    try {
+      cases = parseCases(values.cases)
+    } catch (error) {
+      throw new CliError(error.message)
+    }
+    const appsDir = join(sandboxRoot, 'stress', runId, 'Applications')
+    return {
+      values: { ...values, zip: resolve(values.zip), cases },
+      layout: { ...layout, appsDir },
+      appPath: join(appsDir, 'Metis QA.app')
+    }
+  }
   if (values.scenario !== 'upgrade') {
     for (const flag of ['previous-zip', 'candidate-zip'])
       if (values[flag]) throw new CliError(`--${flag} is only valid with --scenario upgrade`)
@@ -151,7 +187,7 @@ export function dryRunPlan(config, env = process.env, { bundleId = undefined, pl
   const { layout, appPath, values } = config
   // The upgrade scenario installs its own bundle, so before the run there is no app to read yet: check everything else.
   const guards =
-    values.scenario === 'upgrade' && !existsSync(appPath)
+    (values.scenario === 'upgrade' || values.scenario === 'stress') && !existsSync(appPath)
       ? upgradeGuardReport({ layout, env, platform })
       : guardReport({ layout, appPath, parentEnv: env, captureFile: layout.captureWav, bundleId, platform })
   return {
@@ -167,23 +203,27 @@ export function dryRunPlan(config, env = process.env, { bundleId = undefined, pl
       meetingSeconds: values['meeting-seconds'],
       ...(values.scenario === 'upgrade'
         ? { previousZip: values['previous-zip'], candidateZip: values['candidate-zip'], appsDir: layout.appsDir }
-        : {}),
+        : values.scenario === 'stress'
+          ? { zip: values.zip, appsDir: layout.appsDir, cases: values.cases, longMinutes: values['long-minutes'] }
+          : {}),
       steps:
-        values.scenario === 'upgrade'
-          ? [...UPGRADE_STEPS]
-          : values.scenario === 'settings-hig'
-            ? [...SETTINGS_HIG_STEPS]
-            : [
-                'launch-and-renderer-ready',
-                'meeting-live',
-                'transcript-observed',
-                'stop-and-save',
-                'review-opens-meeting',
-                'clean-quit',
-                'relaunch',
-                'meeting-preserved-after-relaunch',
-                'final-quit'
-              ],
+        values.scenario === 'stress'
+          ? stressSteps(values.cases)
+          : values.scenario === 'upgrade'
+            ? [...UPGRADE_STEPS]
+            : values.scenario === 'settings-hig'
+              ? [...SETTINGS_HIG_STEPS]
+              : [
+                  'launch-and-renderer-ready',
+                  'meeting-live',
+                  'transcript-observed',
+                  'stop-and-save',
+                  'review-opens-meeting',
+                  'clean-quit',
+                  'relaunch',
+                  'meeting-preserved-after-relaunch',
+                  'final-quit'
+                ],
       childEnvKeys: guards.childEnvKeys
     }
   }
@@ -233,22 +273,30 @@ async function main(argv) {
       runId: layout.runId
     },
     meta: {
-      ...(values.scenario === 'upgrade'
+      ...(values.scenario === 'stress'
         ? {
-            previousZip: { name: basename(values['previous-zip']), sha256: sha256File(values['previous-zip']) },
-            candidateZip: { name: basename(values['candidate-zip']), sha256: sha256File(values['candidate-zip']) },
+            zip: { name: basename(values.zip), sha256: sha256File(values.zip) },
             appsDir: layout.appsDir,
-            userData: layout.userData,
-            note: 'both builds are QA-identity (com.mantu.asktoto.qa) zips; the "previous" one is a branch build labelled 1.9.7, not the shipped public 1.9.7'
+            cases: values.cases,
+            longMinutes: values['long-minutes'],
+            note: 'each case runs on its own throwaway profile acceptance/<run-id>-<case> (s8 reuses s5); the app is installed into stress/<run-id>/Applications'
           }
-        : {
-            bundleId: readBundleId(appPath),
-            appVersion: readBundleVersion(appPath),
-            codesign: (({ adhoc, signature, teamIdentifier }) => ({ adhoc, signature, teamIdentifier }))(
-              readCodesign(appPath)
-            ),
-            mainExecutableSha256: mainExecutableSha256(appPath)
-          }),
+        : values.scenario === 'upgrade'
+          ? {
+              previousZip: { name: basename(values['previous-zip']), sha256: sha256File(values['previous-zip']) },
+              candidateZip: { name: basename(values['candidate-zip']), sha256: sha256File(values['candidate-zip']) },
+              appsDir: layout.appsDir,
+              userData: layout.userData,
+              note: 'both builds are QA-identity (com.mantu.asktoto.qa) zips; the "previous" one is a branch build labelled 1.9.7, not the shipped public 1.9.7'
+            }
+          : {
+              bundleId: readBundleId(appPath),
+              appVersion: readBundleVersion(appPath),
+              codesign: (({ adhoc, signature, teamIdentifier }) => ({ adhoc, signature, teamIdentifier }))(
+                readCodesign(appPath)
+              ),
+              mainExecutableSha256: mainExecutableSha256(appPath)
+            }),
       audio,
       host: { platform: osPlatform(), arch: arch(), osRelease: release(), node: process.version }
     }
@@ -264,12 +312,29 @@ async function main(argv) {
   }
   let session = null
   let savedFile = null
+  const stressSessions = []
   const cleanup = async () => {
     if (session) await session.kill().catch(() => {})
+    for (const owned of stressSessions) await owned.kill().catch(() => {})
   }
   process.once('SIGINT', () => void cleanup().finally(() => process.exit(130)))
   try {
-    if (values.scenario === 'upgrade') {
+    if (values.scenario === 'stress') {
+      await runStressScenario({
+        report,
+        base: layout,
+        zip: values.zip,
+        audioWav: layout.captureWav,
+        cases: values.cases,
+        longMinutes: values['long-minutes'],
+        parentEnv: process.env,
+        readyTimeoutMs: values['ready-timeout-seconds'] * 1000,
+        onSession: (next) => {
+          stressSessions.push(next)
+        },
+        log
+      })
+    } else if (values.scenario === 'upgrade') {
       await runUpgradeScenario({
         report,
         layout,
@@ -394,6 +459,11 @@ async function main(argv) {
   mkdirSync(join(outPath, '..'), { recursive: true })
   writeFileSync(outPath, `${JSON.stringify(final, null, 2)}\n`)
   console.log(formatSteps(final.steps))
+  if (final.meta?.caseTable) {
+    console.log('[acceptance] stress cases:')
+    for (const row of final.meta.caseTable)
+      console.log(`  ${row.case}  ${row.status}  ${row.steps.map((step) => `${step.id}=${step.status}`).join(' ')}`)
+  }
   console.log(`[acceptance] verdict ${final.verdict}; report ${outPath}`)
   return exitCodeForVerdict(final.verdict)
 }

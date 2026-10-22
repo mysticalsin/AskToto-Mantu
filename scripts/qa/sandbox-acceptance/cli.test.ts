@@ -11,6 +11,7 @@ import { CliError, parseWavInfo } from './lib.mjs'
 import { dryRunPlan, resolveConfig } from './run-acceptance.mjs'
 import { assertSyntheticCaptureActive } from './scenario.mjs'
 import { SETTINGS_HIG_STEPS } from './settings-hig.mjs'
+import { stressSteps } from './stress-lib.mjs'
 import { UPGRADE_STEPS } from './upgrade.mjs'
 
 let base: string
@@ -192,6 +193,70 @@ describe('upgrade scenario configuration', () => {
     expect(plan.plan.steps).toEqual([...UPGRADE_STEPS])
     expect(plan.plan.steps).toContain('single-instance')
     expect(plan.plan.steps).toContain('rollback-data-integrity')
+  })
+})
+
+describe('stress scenario configuration', () => {
+  const zip = () => {
+    const path = join(base, 'Metis-QA-2.12.0.zip')
+    writeFileSync(path, 'z')
+    return path
+  }
+
+  it('needs one QA-identity zip, rejects --app and the upgrade flags, and keeps its flags to this scenario', () => {
+    const path = zip()
+    expect(() => resolveConfig(['--scenario', 'stress'], isolatedEnv())).toThrow(/needs --zip/)
+    expect(() => resolveConfig(['--scenario', 'stress', '--zip', join(base, 'x.zip')], isolatedEnv())).toThrow(
+      /Metis-QA/
+    )
+    expect(() => resolveConfig(['--scenario', 'stress', '--zip', join(base, 'Metis-QA-9.zip')], isolatedEnv())).toThrow(
+      /no such file/
+    )
+    expect(() =>
+      resolveConfig(['--scenario', 'stress', '--zip', path, '--app', '/x/Metis QA.app'], isolatedEnv())
+    ).toThrow(/--app is not used/)
+    expect(() => resolveConfig(['--scenario', 'stress', '--zip', path, '--previous-zip', path], isolatedEnv())).toThrow(
+      /only valid with --scenario upgrade/
+    )
+    expect(() => resolveConfig(['--scenario', 'stress', '--zip', path, '--cases', 's9'], isolatedEnv())).toThrow(
+      /unknown stress case s9/
+    )
+    expect(() => resolveConfig(['--zip', path], isolatedEnv())).toThrow(/--zip is only valid with --scenario stress/)
+    expect(() => resolveConfig(['--cases', 's1'], isolatedEnv())).toThrow(
+      /--cases is only valid with --scenario stress/
+    )
+    expect(() => resolveConfig(['--scenario', 'stress', '--zip', path, '--long-minutes', '2'], isolatedEnv())).toThrow(
+      /at least 4/
+    )
+  })
+
+  it('installs into its own per-run Applications dir and keeps speech as the default input', () => {
+    const config = resolveConfig(
+      ['--scenario', 'stress', '--run-id', 'st-1', '--zip', zip(), '--cases', 's3,s1'],
+      isolatedEnv()
+    )
+    expect(config.layout.appsDir).toBe(join(sandboxRoot, 'stress', 'st-1', 'Applications'))
+    expect(config.appPath).toBe(join(config.layout.appsDir, 'Metis QA.app'))
+    expect(config.appPath).not.toBe(join(sandboxRoot, 'Applications', 'Metis QA.app'))
+    expect(config.values).toMatchObject({
+      scenario: 'stress',
+      audio: 'speech',
+      cases: ['s1', 's3'],
+      'long-minutes': 10
+    })
+  })
+
+  it('dry-runs with every guard before any bundle is installed and plans only the selected cases', () => {
+    const env = isolatedEnv()
+    const config = resolveConfig(
+      ['--scenario', 'stress', '--run-id', 'st-1', '--zip', zip(), '--cases', 's2,s6', '--dry-run'],
+      env
+    )
+    const plan = dryRunPlan(config, env, { platform: 'darwin' })
+    expect(plan.ok).toBe(true)
+    expect(plan.plan.steps).toEqual(['install', 's2-kill9-mid-meeting', 's2-journal-tail', 's6-settings-churn'])
+    expect(plan.plan.steps).toEqual(stressSteps(['s2', 's6']))
+    expect(plan.plan).toMatchObject({ scenario: 'stress', cases: ['s2', 's6'], longMinutes: 10 })
   })
 })
 
