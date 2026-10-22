@@ -28,7 +28,8 @@ describe('right-edge placement main-process contract', () => {
     expect(cursorWatch).toMatch(/const restoredFromParkedRail = islandResting/)
     expect(cursorWatch).toMatch(/notifyOverlayCursorHover\(true, restoredFromParkedRail\)/)
     const reanchor = section(index, 'function registerScreenListeners()', 'function toggleVisible')
-    expect(reanchor).toMatch(/resolvedOverlayPlacementForDisplay\(display\) === 'right-edge'/)
+    expect(reanchor).toMatch(/resolvedOverlayPlacementForDisplay\(display\)/)
+    expect(reanchor).toMatch(/placement === 'right-edge'/)
     // M2-0202: the right-edge reanchor places through the geometry authority's one writer.
     expect(reanchor).toMatch(/applyRightEdgeBounds\('open', display\)/)
     expect(reanchor).toMatch(/applyRightEdgeBounds\('rest', display, layout\)/)

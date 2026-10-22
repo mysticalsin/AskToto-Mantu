@@ -30,9 +30,14 @@ describe('index.ts Q12 wiring', () => {
   })
 
   it('reanchor skips a destroyed window and never throws out of a screen listener (D10-12)', () => {
-    const fn = body('const reanchor = (): void => {', 'screen.on(')
+    // G17: the screen listeners moved into the overlay reconciler; the guard and the catch live on that path.
+    const fn = body('function reanchorOverlayWindow(): void {', 'const overlayReconciler')
     expect(fn).toMatch(/if \(!win \|\| win\.isDestroyed\(\)\) return/)
-    expect(fn).toMatch(/try \{[\s\S]*catch \(e\) \{[\s\S]*mainLog\.warn/)
+    const wiring = body('const overlayReconciler = createOverlayReconciler({', '\n})')
+    expect(wiring).toMatch(/window: \(\) => \(win && !win\.isDestroyed\(\) \? win : null\)/)
+    expect(wiring).toMatch(/onError: .*mainLog\.warn/)
+    const reconciler = readModuleSource(__dirname, './features/overlay-state/overlay-reconciler').text
+    expect(reconciler).toMatch(/try \{\s*apply\(win, action\)\s*\} catch \(error\) \{\s*report\(/)
   })
 
   it('prunes crash logs after each persisted crash and throttles renderer reports (D10-13)', () => {

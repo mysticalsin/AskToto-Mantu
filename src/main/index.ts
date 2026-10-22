@@ -271,6 +271,7 @@ import {
   shouldWatchOverlayCursor
 } from './island/cursor-watch'
 import { pinWindowOnAllWorkspaces } from './overlay-workspace-pinning'
+import { createOverlayReconciler } from './features/overlay-state'
 import { getDisplayMetrics, registerDisplayMetricsInvalidation } from './island/metrics'
 import {
   ASK_REVEAL_MIN_HEIGHT_PX,
@@ -3174,6 +3175,7 @@ function createWindow(targetDisplay?: Electron.Display): void {
     }
     if (onboardingLive) applyExclusiveOnboardingStage(win, placementDisplay)
     applyOverlayAlwaysOnTop(win)
+    overlayReconciler.bindWindow(win)
     // FITO-185-Z: show exclusive NOW (ctor show:true + activating show). The no-JS Act1
     // shell (poster CSS + Métis + Next) is in index.html — never hide-for-seconds.
     // FITO-185-T: activating show (not showInactive) so Act 1 is not behind Finder.
@@ -4019,16 +4021,21 @@ function parkOverlayAfterHideSpring(force = false): boolean {
 function applyHideClickThrough(): void {
   if (!win || win.isDestroyed()) return
   try {
-    const clickThrough =
-      !settingsSurfaceOpen &&
-      islandResting &&
-      parkLayoutForDisplay(liveOverlayLayout(), screen.getDisplayMatching(win.getBounds())) === 'hide' &&
-      !isMinimized &&
-      !onboardingExclusiveLive()
-    win.setIgnoreMouseEvents(clickThrough)
+    win.setIgnoreMouseEvents(overlayClickThrough())
   } catch {
     /* headless */
   }
+}
+
+function overlayClickThrough(): boolean {
+  return (
+    !!win &&
+    !settingsSurfaceOpen &&
+    islandResting &&
+    parkLayoutForDisplay(liveOverlayLayout(), screen.getDisplayMatching(win.getBounds())) === 'hide' &&
+    !isMinimized &&
+    !onboardingExclusiveLive()
+  )
 }
 
 /**
@@ -4312,6 +4319,7 @@ const overlayRevealLog = createOverlayRevealLog({
  *  within 2 s with no click or keypress is audited as overlay.flash. */
 function noteOverlay(cause: OverlayTransitionCause): void {
   if (!win || win.isDestroyed()) return
+  overlayReconciler.captureDesired()
   rightEdgeSession.push()
   const b = win.getBounds()
   const c = screen.getCursorScreenPoint()
@@ -5016,80 +5024,65 @@ function moveBy(dx: number, dy: number): void {
 }
 
 /**
- * Keep the overlay reachable across display topology changes (monitor unplugged, lid closed, resolution
- * change). Without this the window stays anchored to a display that no longer exists and is stranded
- * off-screen with no fix but a restart. On any change, if the window no longer intersects the visible work
- * area of its matched display, clamp it back in (same math as moveBy). App-scoped listeners; live for the
- * app's lifetime, so they're never removed.
+ * Keep the overlay reachable across display changes and converge it on its desired state after resume, unlock
+ * and Spaces transitions (G17: bounded passes, features/overlay-state). App-scoped; never removed.
  */
 function registerScreenListeners(): void {
-  // D10-12: `win` stays non-null (but destroyed) between recreateOverlayWindow()'s destroy() and its closed event.
-  const reanchor = (): void => {
-    if (!win || win.isDestroyed()) return
-    try {
-      reanchorOverlay(win)
-    } catch (e) {
-      mainLog.warn('[screen] reanchor failed:', e)
-    }
-  }
-  const reanchorOverlay = (win: BrowserWindow): void => {
-    if (onboardingExclusiveLive()) {
-      applyExclusiveOnboardingStage(win)
-      return
-    }
-    // Hide/island already parked: re-apply the rest rect on the new display.
-    // Do not clampHeight (BAR_MIN_HEIGHT 44) or slide y into workArea (Tony live: 8×44 at Y=39).
-    // Hide at bounds.y is outside a notched workArea; that is the park, not "off-screen".
-    {
-      const display = screen.getDisplayMatching(win.getBounds())
-      const layout = liveOverlayLayout()
-      const placement = resolvedOverlayPlacementForDisplay(display)
-      const park = parkedHoverReanchor(layout, islandResting, getDisplayMetrics(display), ISLAND_TOP_MARGIN, placement)
-      if (park) {
-        overlayCursorWatchHovering = false
-        if (placement === 'right-edge') {
-          // The rest at the stored anchor, from the authority; honors a right edge shared with a new display.
-          applyOverlaySurfaceChrome()
-          applyRightEdgeBounds('rest', display, layout)
-          applyHideClickThrough()
-        } else {
-          parkOverlayAfterHideSpring()
-        }
-        return
-      }
-    }
-    const b = win.getBounds()
-    const display = screen.getDisplayMatching(b)
-    // A sidecar owns its screen edge, so topology changes must recompute both axes from its
-    // persisted anchor before generic reachability logic considers a free-form position.
-    if (!settingsSurfaceOpen && resolvedOverlayPlacementForDisplay(display) === 'right-edge') {
-      applyRightEdgeBounds('open', display)
-      return
-    }
-    const { workArea: wa } = display
-    // Height first, and BEFORE the reachability guard below. A window grown to fit a tall display keeps
-    // that height when the display is unplugged or its resolution shrinks — and in that state it is
-    // normally still partly visible, so the guard would skip exactly the case that leaves the overlay
-    // hanging off the bottom of the remaining screen with resizable:false and no in-app fix.
-    // Hide hairline (2px) must survive this clamp — BAR_MIN_HEIGHT 44 is a sliver (Tony 8×44).
-    const height = clampHeight(b.height, wa.height)
-    const visible = b.x + b.width > wa.x && b.x < wa.x + wa.width && b.y + b.height > wa.y && b.y < wa.y + wa.height
-    if (visible) {
-      // Still (partly) on a real display — leave it where the user put it, sliding up only as far as the
-      // newly clamped height needs to sit inside the work area (same slide resizeTo does).
-      if (height !== b.height) {
-        win.setBounds({ ...b, y: Math.min(b.y, wa.y + wa.height - height - 8), height })
-      }
-      return
-    }
-    const x = clampAxis(b.x, b.width, wa.x, wa.width)
-    const y = clampAxis(b.y, height, wa.y, wa.height)
-    win.setBounds({ ...b, x, y, height })
-  }
-  screen.on('display-removed', reanchor)
-  screen.on('display-added', reanchor)
-  screen.on('display-metrics-changed', reanchor)
+  overlayReconciler.start()
 }
+
+/** What the reconciler leaves to the app: onboarding, a parked rest (its park rect is kept) and the right-edge sidecar. */
+function reanchorOverlayWindow(): void {
+  // D10-12: `win` stays non-null (but destroyed) between recreateOverlayWindow()'s destroy() and its closed event.
+  if (!win || win.isDestroyed()) return
+  if (onboardingExclusiveLive()) {
+    applyExclusiveOnboardingStage(win)
+    return
+  }
+  const display = screen.getDisplayMatching(win.getBounds())
+  const layout = liveOverlayLayout()
+  const placement = resolvedOverlayPlacementForDisplay(display)
+  const park = parkedHoverReanchor(layout, islandResting, getDisplayMetrics(display), ISLAND_TOP_MARGIN, placement)
+  if (!park) {
+    if (!settingsSurfaceOpen && placement === 'right-edge') applyRightEdgeBounds('open', display)
+    return
+  }
+  overlayCursorWatchHovering = false
+  if (placement !== 'right-edge') {
+    parkOverlayAfterHideSpring()
+    return
+  }
+  // The rest at the stored anchor, from the authority; honors a right edge shared with a new display.
+  applyOverlaySurfaceChrome()
+  applyRightEdgeBounds('rest', display, layout)
+  applyHideClickThrough()
+}
+
+const overlayReconciler = createOverlayReconciler({
+  window: () => (win && !win.isDestroyed() ? win : null),
+  displays: () => screen.getAllDisplays(),
+  live: () => ({
+    layout: liveOverlayLayout(),
+    parked: islandResting,
+    contentProtection: contentProtectionOn(),
+    clickThrough: overlayClickThrough(),
+    exclusive: onboardingExclusiveLive(),
+    delegateBounds:
+      !win ||
+      onboardingExclusiveLive() ||
+      (islandResting && overlayUsesHover(liveOverlayLayout())) ||
+      (!settingsSurfaceOpen &&
+        resolvedOverlayPlacementForDisplay(screen.getDisplayMatching(win.getBounds())) === 'right-edge')
+  }),
+  delegateReanchor: reanchorOverlayWindow,
+  assertAlwaysOnTop: () => win && applyOverlayAlwaysOnTop(win),
+  topEdgePosition: (width, height, display) =>
+    overlayPositionForDisplay(width, height, liveOverlayLayout(), display, ISLAND_TOP_MARGIN),
+  barMinHeight: BAR_MIN_HEIGHT,
+  powerMonitor,
+  screen,
+  onError: (where, error) => mainLog.warn(`[overlay-reconcile] ${where}`, error)
+})
 
 /** The show/hide toggle (hotkey, tray, the page's toggle). reveal() logs its reveal; this logs its park or hide. */
 function toggleVisible(reason: Extract<RevealReason, 'hotkey' | 'tray'> = 'hotkey'): void {

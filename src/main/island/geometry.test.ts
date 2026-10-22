@@ -740,7 +740,8 @@ describe('island reveal/collapse wiring (index.ts)', () => {
     )
     expect(reanchor).toMatch(/parkOverlayAfterHideSpring\(\)/)
     expect(reanchor).toMatch(/parkedHoverReanchor/)
-    expect(reanchor.indexOf('parkOverlayAfterHideSpring')).toBeLessThan(reanchor.indexOf('const height = clampHeight'))
+    // A parked rest keeps its park rect: the app's re-anchor never clamps a height or slides into the work area.
+    expect(reanchor).not.toMatch(/clampHeight|clampAxis/)
     const hideTick = index.slice(
       index.indexOf('function tickOverlayCursorWatch'),
       index.indexOf('function notifyOverlayCursorHover')

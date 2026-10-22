@@ -24,6 +24,7 @@ import { pointInRect } from './island/cursor-watch'
 import { revealOverlaySurface } from './island/overlay-surface'
 import { createRightEdgeAnchors } from './island/right-edge-anchor'
 import { crashDetail } from './infra/observability/crash-taxonomy'
+import { createOverlayReconciler } from './features/overlay-state'
 import { overlayUsesHover } from '@shared/overlay-chrome'
 import { overlayDisplayKey } from '@shared/overlay-placement'
 import {
@@ -190,7 +191,7 @@ describe('MQA-197 — the overlay height is re-clamped whenever it changes displ
       on: (evt, fn) => {
         listeners[evt] = fn
       },
-      getAllDisplays: () => displays,
+      getAllDisplays: () => displays.map((d) => ({ ...d, bounds: d.workArea })),
       getDisplayMatching: (r) => {
         let best = displays[0]
         let bestArea = -1
@@ -226,11 +227,17 @@ describe('MQA-197 — the overlay height is re-clamped whenever it changes displ
       sliceBetween('function clampHeight(height: number, areaHeight: number): number {', 'function toggleVisible(')
     )
     const preamble = [
-      'const { screen, start, BAR_MIN_HEIGHT, DRAG_VISIBLE_MARGIN, islandClampHeight, islandIsReachable, islandRefitToDisplay, clampAxis, clampAxisMargin, overlayUsesHover } = stubs',
+      'const { screen, start, BAR_MIN_HEIGHT, DRAG_VISIBLE_MARGIN, islandClampHeight, islandIsReachable, islandRefitToDisplay, clampAxis, clampAxisMargin, overlayUsesHover, createOverlayReconciler } = stubs',
       'let current = { ...start }',
       'let userAnchorY = null',
-      'const win = { isDestroyed: () => false, getBounds: () => ({ ...current }), setBounds: (b) => { current = { ...current, ...b } } }',
-      'const mainLog = { warn() {} }',
+      'const win = { getBounds: () => ({ ...current }), setBounds: (b) => { current = { ...current, ...b } }, isDestroyed: () => false, isVisible: () => true, isAlwaysOnTop: () => true, showInactive: () => {}, setContentProtection: () => {}, setIgnoreMouseEvents: () => {}, on: () => {}, removeListener: () => {} }',
+      'const powerMonitor = { on: () => {}, removeListener: () => {} }',
+      'const mainLog = { warn: () => {} }',
+      'const contentProtectionOn = () => true',
+      'const overlayClickThrough = () => false',
+      'const applyOverlayAlwaysOnTop = () => {}',
+      'const overlayPositionForDisplay = () => ({ x: 0, y: 0 })',
+      'const applyExclusiveOnboardingStage = () => {}',
       'const ensureWindow = () => win',
       'const onboardingExclusiveLive = () => false',
       'const islandResting = false',
@@ -245,7 +252,12 @@ describe('MQA-197 — the overlay height is re-clamped whenever it changes displ
       'function parkOverlayAfterHideSpring() {}',
       ''
     ].join('\n')
-    const driver = ['', 'registerScreenListeners()', 'return { bounds: () => current, moveBy }'].join('\n')
+    const driver = [
+      '',
+      'overlayReconciler.bindWindow(win)',
+      'registerScreenListeners()',
+      'return { bounds: () => current, moveBy }'
+    ].join('\n')
     const run = new Function('stubs', preamble + region + driver) as (stubs: unknown) => {
       bounds: () => Rect
       moveBy: (dx: number, dy: number) => void
@@ -260,7 +272,8 @@ describe('MQA-197 — the overlay height is re-clamped whenever it changes displ
       islandRefitToDisplay,
       clampAxis,
       clampAxisMargin,
-      overlayUsesHover
+      overlayUsesHover,
+      createOverlayReconciler
     })
   }
 
@@ -437,7 +450,11 @@ describe('M2-0202 RE-G10 — right-edge window bounds have one writer', () => {
       getBackgroundColor: () => '#000000',
       setOpacity: () => {},
       getOpacity: () => 1,
-      setIgnoreMouseEvents: () => {}
+      setIgnoreMouseEvents: () => {},
+      isAlwaysOnTop: () => true,
+      setContentProtection: () => {},
+      on: () => {},
+      removeListener: () => {}
     }
     const stubs = {
       win,
@@ -469,6 +486,12 @@ describe('M2-0202 RE-G10 — right-edge window bounds have one writer', () => {
       createRightEdgeAnchors,
       rightEdgeSession: { readerPending: () => readerPending },
       mainLog: { warn: () => {}, info: () => {} },
+      createOverlayReconciler,
+      powerMonitor: { on: () => {}, removeListener: () => {} },
+      contentProtectionOn: () => true,
+      overlayClickThrough: () => false,
+      applyOverlayAlwaysOnTop: () => {},
+      applyExclusiveOnboardingStage: () => {},
       liveOverlayPlacement: () => 'right-edge',
       liveOverlayLayout: () => options.layout ?? 'hide',
       resolvedOverlayPlacementForDisplay: (d: Display) => resolveOverlayPlacement('right-edge', metrics(d)),
@@ -491,6 +514,7 @@ describe('M2-0202 RE-G10 — right-edge window bounds have one writer', () => {
       parkOverlayAfterHideSpring: () => {},
       rememberBarContentHeight: (h: number) => h,
       ISLAND_TOP_MARGIN: 8,
+      BAR_MIN_HEIGHT: 44,
       BAR_IDLE_HEIGHT_PX: 84,
       BAR_HEIGHT: 120,
       OVERLAY_REST_BACKGROUND: '#00000000',
@@ -514,6 +538,7 @@ describe('M2-0202 RE-G10 — right-edge window bounds have one writer', () => {
       lifted,
       'const shippedApply = applyRightEdgeBounds',
       'applyRightEdgeBounds = function (...args) { enterDepth(); try { return shippedApply(...args) } finally { leaveDepth() } }',
+      'overlayReconciler.bindWindow(win)',
       'registerScreenListeners()',
       'return {',
       '  run: { commitParkedOverlayBounds, parkedOverlayBounds, restoreBarWidth, repairOverlayBoundsForReveal, setWindowMode, anchorTopCenter, moveBy, resizeTo, rightEdgeAnchorY: (d) => rightEdgeAnchors.y(d) },',
