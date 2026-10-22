@@ -16,7 +16,8 @@ import type { ContentVersion, StorageGateway } from '../infra/storage/gateway'
 import { canonicalPath, readStableRegularFile } from '../infra/storage/stable-read'
 import { decodeSavedMeetingAsync, resolveMeetingsFolder } from '../transcripts'
 import { mainLog } from '../logger'
-import { brainDir, readIndex, slugify } from './store'
+import { brainDir, brainRelDir } from './brain-root'
+import { readIndex, slugify } from './store'
 
 const MAX_BRAIN_CONTEXT_SOURCE_BYTES = 16 * 1024 * 1024
 
@@ -366,8 +367,8 @@ function isJournalFile(name: string): boolean {
   return name === 'corrections.json' || name.startsWith('corrections.')
 }
 
-async function mergeInputs(gateway: StorageGateway): Promise<string[] | null> {
-  const dirs = ['.brain', ...ENTITY_DIRS.map((dir) => join('.brain', dir))]
+async function mergeInputs(gateway: StorageGateway, root: string): Promise<string[] | null> {
+  const dirs = [root, ...ENTITY_DIRS.map((dir) => join(root, dir))]
   const listings = await Promise.all(dirs.map((dir) => gateway.list(dir)))
   const paths: string[] = []
   for (const [i, listing] of listings.entries()) {
@@ -384,7 +385,8 @@ async function mergeInputs(gateway: StorageGateway): Promise<string[] | null> {
 
 export async function brainInputsLocal(s: Settings, scan?: SourceScan): Promise<boolean> {
   const gateway = storageAt(resolveMeetingsFolder(s))
-  const inputs = await mergeInputs(gateway)
+  const root = brainRelDir()
+  const inputs = await mergeInputs(gateway, root)
   let local =
     inputs !== null &&
     [...(await classifyAll(gateway, inputs)).values()].every(
@@ -394,7 +396,7 @@ export async function brainInputsLocal(s: Settings, scan?: SourceScan): Promise<
     const folders = scan ?? (await scanMeetingSources(s))
     local = folders.every((folder) => folder.status !== 'failed' && folder.sources.every((source) => source.local))
   }
-  notePaused(brainDir(s), !local)
+  notePaused(brainDir(s, root), !local)
   return local
 }
 

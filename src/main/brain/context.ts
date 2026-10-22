@@ -1,5 +1,7 @@
 import { join } from 'node:path'
 import type { Settings } from '@shared/ipc'
+import type { RecallStatus } from '@shared/contracts/memory-partition'
+import { brainRecallStatus } from './recall-status'
 import type {
   MeetingRef,
   PersonEntity,
@@ -288,6 +290,8 @@ export interface BrainContextBuildResult {
   recordFingerprints?: BrainContextRecordFingerprint[]
   /** False when any selected record could not be bounded and fingerprinted consistently. */
   recordFingerprintsComplete?: boolean
+  /** What the read of the owner's partition found (G19). Absent only for an empty question. */
+  recallStatus?: RecallStatus
 }
 
 export type BrainContextRecordKind = BrainEntityKind
@@ -359,6 +363,10 @@ export function areBrainContextSourcesCurrent(
 
 /** Build the same cited context plus a bounded list of the source records represented in it. */
 export async function buildBrainContextWithSources(s: Settings, text: string): Promise<BrainContextBuildResult> {
+  // G19: only the verified owner's partition is ever read. Anything else is a typed refusal, never the last owner's data.
+  const recallStatus = await brainRecallStatus(s)
+  if (recallStatus !== 'ok' && recallStatus !== 'partition-empty')
+    return { block: '', matched: false, sourceReferences: [], sourceReferencesComplete: true, recallStatus }
   const hay = tokenString(text)
   if (!hay) return { block: '', matched: false, sourceReferences: [], sourceReferencesComplete: true }
 
@@ -552,7 +560,8 @@ export async function buildBrainContextWithSources(s: Settings, text: string): P
       sourceReferences: [],
       sourceReferencesComplete,
       recordFingerprints,
-      recordFingerprintsComplete
+      recordFingerprintsComplete,
+      recallStatus
     }
 
   let body = lines.join('\n')
@@ -571,7 +580,8 @@ export async function buildBrainContextWithSources(s: Settings, text: string): P
     sourceReferences,
     sourceReferencesComplete,
     recordFingerprints,
-    recordFingerprintsComplete
+    recordFingerprintsComplete,
+    recallStatus: 'ok'
   }
 }
 

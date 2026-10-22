@@ -4,6 +4,8 @@ import { z } from 'zod'
 import type { Settings } from '@shared/ipc'
 import { classifyAll, storageAt } from '../infra/storage/meetings-storage'
 import { mainLog } from '../logger'
+import { assertMemoryOpen } from '../memory-partition/memory-access'
+import { brainDir, brainRelDir } from './brain-root'
 import { decodeSavedResult, resolveMeetingsFolder, writeSaved } from '../transcripts'
 
 /**
@@ -41,13 +43,13 @@ export const emptyHumanMarks = (): HumanMarks => ({ v: 1, dealOutcomes: {}, comm
 /** Commitment marks are keyed per deal: the same promise text on two deals is two decisions. */
 export const commitmentMarkKey = (dealSlug: string, key: string): string => `${dealSlug}::${key}`
 
-const marksPath = (s: Settings): string => join(resolveMeetingsFolder(s), '.brain', HUMAN_MARKS_FILE)
+const marksPath = (s: Settings): string => join(brainDir(s), HUMAN_MARKS_FILE)
 
 type MarksRead = { status: 'ok'; marks: HumanMarks } | { status: 'unavailable' } | { status: 'invalid' }
 
 async function readMarks(s: Settings): Promise<MarksRead> {
   const gateway = storageAt(resolveMeetingsFolder(s))
-  const rel = join('.brain', HUMAN_MARKS_FILE)
+  const rel = join(brainRelDir(), HUMAN_MARKS_FILE)
   const fileClass = (await classifyAll(gateway, [rel])).get(rel)
   if (!fileClass || fileClass.status === 'missing') return { status: 'ok', marks: emptyHumanMarks() }
   if (!('version' in fileClass) || fileClass.status !== 'ok') return { status: 'unavailable' }
@@ -76,6 +78,7 @@ export async function readHumanMarks(s: Settings): Promise<HumanMarks> {
 }
 
 async function writeMarks(s: Settings, marks: HumanMarks): Promise<void> {
+  assertMemoryOpen() // never create a store for an owner that is not verified and active
   await mkdir(dirname(marksPath(s)), { recursive: true })
   await writeSaved(marksPath(s), JSON.stringify(marks, null, 2), !!s.encryptTranscripts)
 }

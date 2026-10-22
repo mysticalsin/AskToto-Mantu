@@ -1,5 +1,5 @@
 import { existsSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { join, relative } from 'node:path'
 import { z } from 'zod'
 import type { Settings } from '@shared/ipc'
 import {
@@ -102,7 +102,7 @@ export function isJournalCorruptionBlocked(s: Settings): boolean {
 
 /** Gateway-backed status check for frequent IPC pollers; existence is metadata-only. */
 export async function isJournalCorruptionBlockedAsync(s: Settings): Promise<boolean> {
-  const rel = join('.brain', CORRUPTION_LOCK_REL)
+  const rel = relative(resolveMeetingsFolder(s), corruptionLockPath(s))
   const fileClass = (await classifyAll(storageAt(resolveMeetingsFolder(s)), [rel])).get(rel)
   return !!fileClass && fileClass.status !== 'missing' && 'version' in fileClass
 }

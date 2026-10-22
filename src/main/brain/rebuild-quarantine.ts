@@ -2,6 +2,7 @@ import { access, mkdir, readdir, rename } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { Settings } from '@shared/ipc'
 import { resolveMeetingsFolder } from '../transcripts'
+import { brainPreservedRelDir, brainRelDir } from './brain-root'
 
 /**
  * Quarantined evidence a rebuild must not delete (Q04 / D8-3).
@@ -19,7 +20,7 @@ const QUARANTINED = /^(corrections|index|human-marks)\.corrupt-/
 
 export async function preserveQuarantinedBeforeRebuild(s: Settings): Promise<{ moved: number }> {
   const meetings = resolveMeetingsFolder(s)
-  const root = join(meetings, '.brain')
+  const root = join(meetings, brainRelDir())
   let names: string[]
   try {
     names = await readdir(root)
@@ -29,7 +30,7 @@ export async function preserveQuarantinedBeforeRebuild(s: Settings): Promise<{ m
   }
   const targets = names.filter((name) => QUARANTINED.test(name))
   if (targets.length === 0) return { moved: 0 }
-  const dir = join(meetings, '.brain-preserved')
+  const dir = join(meetings, brainPreservedRelDir())
   await mkdir(dir, { recursive: true })
   for (const name of targets) {
     let dest = join(dir, name)

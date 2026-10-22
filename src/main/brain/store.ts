@@ -44,6 +44,16 @@ import { cloneEntity } from './entity-values'
 import { indexUnavailableMessage } from './index-messages'
 import { migrateAccount, migrateDeal, migratePerson } from './entity-migrate'
 import { HUMAN_MARKS_FILE, recordDealOutcomeMark } from './human-marks'
+import { brainDir, brainPreservedRelDir, brainRelDir } from './brain-root'
+import { assertMemoryOpen } from '../memory-partition/memory-access'
+export {
+  MAX_BRAIN_ENTITY_SNAPSHOT_BYTES,
+  readBrainEntityFingerprint,
+  readBrainEntitySnapshot,
+  type BrainEntityByKind,
+  type BrainEntityKind,
+  type BrainEntitySnapshot
+} from './entity-snapshot'
 
 export { cloneEntity }
 export {
@@ -58,13 +68,11 @@ export {
 } from './entity-values'
 export type { SupersededEntry } from './entity-values'
 
-/** Brain store — JSON under `<meetings folder>/.brain/`, beside transcripts and the same encryption policy. */
-
-export function brainDir(settings: Settings): string {
-  return join(resolveMeetingsFolder(settings), '.brain')
-}
+/** Brain store — JSON under the partition root (`.brain/` for the adopting owner) in the meetings folder, same encryption policy. */
+export { brainDir }
 
 function ensureDirs(settings: Settings): string {
+  assertMemoryOpen() // no store is created for an owner that is not verified and active
   const root = brainDir(settings)
   for (const d of [
     root,
@@ -132,9 +140,10 @@ export async function loadJson<T>(
   rel: string,
   parse: (v: unknown) => T
 ): Promise<BrainFileLoad<T>> {
-  const p = join(brainDir(settings), rel)
+  const root = brainRelDir()
+  const p = join(brainDir(settings, root), rel)
   const gateway = storageAt(resolveMeetingsFolder(settings))
-  const path = join('.brain', rel)
+  const path = join(root, rel)
   const fileClass = (await classifyAll(gateway, [path])).get(path)
   if (!fileClass || fileClass.status === 'missing') {
     jsonCache.delete(p)
@@ -165,7 +174,7 @@ export async function loadJson<T>(
 }
 
 async function listBrainNames(settings: Settings, relDir: string): Promise<string[] | null> {
-  const listing = await storageAt(resolveMeetingsFolder(settings)).list(join('.brain', relDir))
+  const listing = await storageAt(resolveMeetingsFolder(settings)).list(join(brainRelDir(), relDir))
   if (listing.status === 'ok') return listing.names
   return listing.status === 'missing' ? [] : null
 }
@@ -201,86 +210,6 @@ export function withEntityLock<T>(fn: () => Promise<T>): Promise<T> {
     () => undefined
   )
   return run
-}
-
-export type BrainEntityKind = 'person' | 'account' | 'deal'
-
-export type BrainEntityByKind = {
-  person: PersonEntity
-  account: AccountEntity
-  deal: DealEntity
-}
-
-export interface BrainEntitySnapshot<K extends BrainEntityKind> {
-  kind: K
-  slug: string
-  value: BrainEntityByKind[K]
-  /** Digest and size of the exact on-disk bytes decoded and parsed into `value`. */
-  digest: string
-  size: number
-}
-
-export const MAX_BRAIN_ENTITY_SNAPSHOT_BYTES = 256 * 1024
-
-/**
- * Uncached entity read for answer-context assembly. Decoding, parsing, migration, and digesting all use
- * the same bounded byte buffer, so a stale JSON cache entry can never be paired with a newer digest.
- */
-export async function readBrainEntitySnapshot<K extends BrainEntityKind>(
-  settings: Settings,
-  kind: K,
-  slug: string
-): Promise<BrainEntitySnapshot<K> | null> {
-  if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug)) return null
-  const rootPath = brainDir(settings)
-  const bytes = await readStableSnapshotBytes(
-    rootPath,
-    join(rootPath, 'entities', kind, `${slug}.json`),
-    MAX_BRAIN_ENTITY_SNAPSHOT_BYTES
-  )
-  if (!bytes) return null
-  const decoded = decodeSavedResult(bytes)
-  if (!decoded.ok) return null
-  try {
-    const raw: unknown = JSON.parse(decoded.text)
-    let value: PersonEntity | AccountEntity | DealEntity
-    switch (kind) {
-      case 'person':
-        value = migratePerson(PersonEntitySchema.parse(raw), slug)
-        break
-      case 'account':
-        value = migrateAccount(AccountEntitySchema.parse(raw), slug)
-        break
-      case 'deal':
-        value = migrateDeal(DealEntitySchema.parse(raw), slug)
-        break
-    }
-    return {
-      kind,
-      slug,
-      value: value as BrainEntityByKind[K],
-      digest: createHash('sha256').update(bytes).digest('hex'),
-      size: bytes.length
-    }
-  } catch {
-    return null
-  }
-}
-
-/** Stable raw-byte digest for dispatch-time revalidation; no JSON cache or parse is involved. */
-export async function readBrainEntityFingerprint(
-  settings: Settings,
-  kind: BrainEntityKind,
-  slug: string
-): Promise<{ digest: string; size: number } | null> {
-  if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug)) return null
-  const rootPath = brainDir(settings)
-  const bytes = await readStableSnapshotBytes(
-    rootPath,
-    join(rootPath, 'entities', kind, `${slug}.json`),
-    MAX_BRAIN_ENTITY_SNAPSHOT_BYTES
-  )
-  return bytes ? { digest: createHash('sha256').update(bytes).digest('hex'), size: bytes.length } : null
 }
 
 // ── One-time backup before the first v2 write into a brain that still has v1 files ──────────────────
@@ -523,8 +452,12 @@ function setAsideCorruptIndex(p: string): ResolvedIndex {
   return { kind: 'absent' }
 }
 
-async function indexVersionChanged(gateway: ReturnType<typeof storageAt>, seen: { mtimeMs: number; size: number }) {
-  const rel = join('.brain', INDEX_REL)
+async function indexVersionChanged(
+  gateway: ReturnType<typeof storageAt>,
+  root: string,
+  seen: { mtimeMs: number; size: number }
+) {
+  const rel = join(root, INDEX_REL)
   const now = (await classifyAll(gateway, [rel])).get(rel)
   return !now || !('version' in now) || now.version.mtimeMs !== seen.mtimeMs || now.version.size !== seen.size
 }
@@ -575,10 +508,12 @@ function loadIndex(s: Settings): ResolvedIndex {
 }
 
 async function loadIndexAsync(s: Settings): Promise<ResolvedIndex> {
-  const p = join(brainDir(s), INDEX_REL)
+  const root = brainRelDir() // one partition for the whole read: the cache key and the file read can never disagree
+  const indexRel = join(root, INDEX_REL)
+  const p = join(brainDir(s, root), INDEX_REL)
   const hit = indexCache.get(p)
   const gateway = storageAt(resolveMeetingsFolder(s))
-  const fileClass = (await classifyAll(gateway, [join('.brain', INDEX_REL)])).get(join('.brain', INDEX_REL))
+  const fileClass = (await classifyAll(gateway, [indexRel])).get(indexRel)
   if (!fileClass || fileClass.status === 'missing') {
     indexCache.delete(p)
     return { kind: 'absent' }
@@ -591,7 +526,7 @@ async function loadIndexAsync(s: Settings): Promise<ResolvedIndex> {
   if (fileClass.status !== 'ok') {
     return recordUnavailable(p, hit, mtimeMs, size, { kind: 'unavailable', cause: 'io', detail: fileClass.status })
   }
-  const read = await gateway.read(join('.brain', INDEX_REL))
+  const read = await gateway.read(indexRel)
   if (read.status === 'missing') {
     indexCache.delete(p)
     return { kind: 'absent' }
@@ -602,7 +537,7 @@ async function loadIndexAsync(s: Settings): Promise<ResolvedIndex> {
   const classified = classifyIndexBytes(read.bytes)
   // D8-9: quarantine only the bytes that were classified. If the file changed since (another device synced a
   // valid index), leave it alone and report io, uncached, so the next poll reads the new file.
-  if (classified.kind === 'corrupt' && (await indexVersionChanged(gateway, read.version))) {
+  if (classified.kind === 'corrupt' && (await indexVersionChanged(gateway, root, read.version))) {
     indexCache.delete(p)
     return { kind: 'unavailable', cause: 'io', detail: 'changed' }
   }
@@ -862,7 +797,7 @@ function fsyncDirectoryIfSupported(p: string): void {
 }
 
 function preservedIndexDir(settings: Settings): string {
-  return join(resolveMeetingsFolder(settings), '.brain-preserved')
+  return join(resolveMeetingsFolder(settings), brainPreservedRelDir())
 }
 
 function preservedIndexPath(settings: Settings, id: string): string {
