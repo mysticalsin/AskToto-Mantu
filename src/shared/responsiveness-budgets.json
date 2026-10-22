@@ -1,0 +1,33 @@
+{
+  "schema": 1,
+  "status": "PROPOSED",
+  "source": "Metis 2.12 Rebuild spec section 6, 'Proposed responsiveness targets' (initial engineering targets, not measured results). Opus sets the final numbers in G90 after packaged measurements.",
+  "minSamples": 20,
+  "budgets": {
+    "first_partial_ms": {
+      "p95Ms": 1000,
+      "label": "PROPOSED",
+      "basis": "Spec: first visible partial transcript, p95 <= 1 s under the benchmark network. This build measures from the first PCM chunk sent to the live STT session to the first partial handed to the renderer, which includes any leading silence and excludes UI paint."
+    },
+    "useful_suggestion_ms": {
+      "p95Ms": 2500,
+      "label": "PROPOSED",
+      "basis": "Spec: committed question end to first usable card, p95 <= 2.5 s for the selected fast provider. This build measures from the suggest request reaching main to the first visible token sent to the renderer."
+    },
+    "display_receipt_ms": {
+      "p95Ms": null,
+      "label": "UNSET",
+      "basis": "The spec gives no value for how long a shown card may wait for its display receipt. Left unset until G90 measures it on the packaged QA build."
+    },
+    "ask_cancel_release_ms": {
+      "p95Ms": null,
+      "label": "UNSET",
+      "basis": "The spec asks for a bounded, tested release deadline on stop but names no number for an ask cancel. Left unset until G90 measures it on the packaged QA build."
+    },
+    "queue_wait_ms": {
+      "p95Ms": null,
+      "label": "UNSET",
+      "basis": "The ask and suggest queue does not exist yet (G14 wires SessionQueue). No target is proposed before there is a queue to measure."
+    }
+  }
+}
