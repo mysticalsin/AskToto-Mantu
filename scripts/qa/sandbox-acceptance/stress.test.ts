@@ -53,7 +53,7 @@ describe('case selection', () => {
 
   it('plans install first, then each selected case, and every case has a step', () => {
     expect(stressSteps(['s1'])).toEqual(['install', 's1-start-stop-spam'])
-    for (const id of STRESS_CASES) expect(CASE_STEPS[id].length).toBeGreaterThan(0)
+    for (const id of STRESS_CASES) expect((CASE_STEPS as Record<string, string[]>)[id].length).toBeGreaterThan(0)
     expect(stressSteps().filter((id) => id !== 'install')).toHaveLength(Object.values(CASE_STEPS).flat().length)
   })
 })
@@ -111,7 +111,7 @@ describe('audit classification', () => {
     const result = classifyAudit(records)
     expect(result.fatal).toEqual({ 'app.crash': 1 })
     expect(result.notable).toEqual({ 'app.stall': 2 })
-    expect(result.counts['transcript.saved']).toBe(1)
+    expect((result.counts as Record<string, number>)['transcript.saved']).toBe(1)
   })
 
   it('measures boot time from the two audit timestamps, or null when one is missing', () => {

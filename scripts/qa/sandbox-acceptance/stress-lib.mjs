@@ -320,8 +320,13 @@ export function startupStats(cycles) {
 // ---------------------------------------------------------------------------------------------------------------
 // S6 settings churn
 
-/** The click order: `rounds` passes over `count` switches, then one extra click on each index in `extra`. */
+/**
+ * The click order: `rounds` passes over `count` switches, then one extra click on each index in `extra`.
+ * @param {{ count: number, rounds: number, extra?: number[] }} options
+ * @returns {number[]}
+ */
 export function churnSequence({ count, rounds, extra = [] }) {
+  /** @type {number[]} */
   const sequence = []
   for (let round = 0; round < rounds; round += 1) for (let index = 0; index < count; index += 1) sequence.push(index)
   return [...sequence, ...extra]
