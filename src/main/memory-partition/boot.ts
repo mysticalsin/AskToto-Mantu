@@ -13,6 +13,8 @@ export interface MemoryPartitionBootDeps {
     currentTenantKey(): string | null
   }
   authGeneration(): number
+  /** Lets a restored session whose tenant is not known yet become verifiable (see auth-session-tenant.ts). */
+  settleIdentity?(): Promise<void>
   signedIn(): boolean
   /** True when no sign-in is required on this installation (authentication is not configured). */
   unsignedAllowed(): boolean
@@ -65,7 +67,7 @@ export function memoryIdentitySource(
 /** Creates the partitions, makes them the process-wide memory authority and wires the reset of what they scope. */
 export function bootMemoryPartitions(deps: MemoryPartitionBootDeps): MemoryPartitions {
   const partitions = createMemoryPartitions({
-    source: { identity: memoryIdentitySource(deps) },
+    source: { identity: memoryIdentitySource(deps), settle: deps.settleIdentity },
     ledger: deps.ledger,
     legacyOwnerHint: deps.legacyOwnerHint,
     audit: deps.audit

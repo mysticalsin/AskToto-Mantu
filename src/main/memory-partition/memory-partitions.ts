@@ -31,7 +31,11 @@ export interface MemoryPartitionChange {
 }
 
 export interface MemoryPartitionsDeps {
-  source: { identity(): MemoryIdentity }
+  source: {
+    identity(): MemoryIdentity
+    /** Lets an identity that is not provable yet (a restored session's tenant) become provable. Best effort. */
+    settle?(): Promise<void>
+  }
   ledger: LedgerIo
   /** The owner key an earlier build remembered for the unclaimed data; read once, when the ledger first loads. */
   legacyOwnerHint?(): Promise<string | null>
@@ -143,15 +147,23 @@ export function createMemoryPartitions(deps: MemoryPartitionsDeps): MemoryPartit
     return accessOf(ref)
   }
 
-  const activate = (): Promise<MemoryAccess> => {
-    const identity = deps.source.identity()
+  const activate = async (): Promise<MemoryAccess> => {
+    let identity = deps.source.identity()
+    if (identity.kind === 'unverified' && deps.source.settle) {
+      try {
+        await deps.source.settle()
+      } catch {
+        // an identity that cannot be settled stays unverified
+      }
+      identity = deps.source.identity()
+    }
     const refused = immediate(identity)
     if (refused) {
       setActive(null)
-      return Promise.resolve(refused)
+      return refused
     }
     const key = identityKey(identity)
-    if (active?.key === key) return Promise.resolve(accessOf(active.ref))
+    if (active?.key === key) return accessOf(active.ref)
     const inflight = pending.get(key)
     if (inflight) return inflight
     const run = queue

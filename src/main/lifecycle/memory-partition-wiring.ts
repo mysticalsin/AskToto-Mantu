@@ -1,5 +1,5 @@
 import { app } from 'electron'
-import { authSessionGeneration, authStatus, requireAuth } from '../auth'
+import { authSessionGeneration, authStatus, requireAuth, sessionTenant } from '../auth'
 import { ownerRecordStore } from '../credential-account-switch'
 import { clearHistoryReadCache } from '../history-read'
 import { resetDustConversation } from '../llm/dust'
@@ -15,6 +15,7 @@ export function bootMainMemoryPartitions(ownerSession: MemoryPartitionBootDeps['
   const partitions = bootMemoryPartitions({
     ownerSession,
     authGeneration: authSessionGeneration,
+    settleIdentity: () => sessionTenant.settle(),
     signedIn: () => authStatus().signedIn,
     unsignedAllowed: () => requireAuth(),
     ledger: fileLedgerIo(userData),

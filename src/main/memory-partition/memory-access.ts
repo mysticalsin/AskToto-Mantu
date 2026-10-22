@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from 'node:async_hooks'
 import type { MemoryAccess, MemoryPartitionChange, MemoryPartitions } from './memory-partitions'
 
 /**
@@ -57,10 +58,29 @@ export class MemoryClosedError extends Error {
   }
 }
 
-/** Writes never create or touch a store for an owner that is not verified and active. */
+/** The partition a job started under: its writes (and the awaits they run through) are refused once another is in force. */
+const pinnedPartition = new AsyncLocalStorage<string>()
+
+/** The partition in force, or null while none is open. */
+export function currentPartitionId(): string | null {
+  const access = memoryAccess()
+  return access.status === 'ok' ? access.partitionId : null
+}
+
+/** Runs `fn` pinned to `partitionId`: every store write inside it must still find that partition in force. */
+export function runInPartition<T>(partitionId: string, fn: () => T): T {
+  return pinnedPartition.run(partitionId, fn)
+}
+
+/**
+ * Writes never create or touch a store for an owner that is not verified and active, and a write from work that
+ * started under another owner's partition is refused (`stale`), so a job cannot land in a partition it did not start in.
+ */
 export function assertMemoryOpen(): void {
   const access = memoryAccess()
   if (access.status !== 'ok') throw new MemoryClosedError(access.status)
+  const pinned = pinnedPartition.getStore()
+  if (pinned !== undefined && pinned !== access.partitionId) throw new MemoryClosedError('stale')
 }
 
 let followUpPartition: string | null = null

@@ -42,6 +42,7 @@ describe('G19 memory partition seams', () => {
     expect(wiring).toMatch(/activeOwnerSession = ownerSession\n\s*bootMainMemoryPartitions\(ownerSession\)/)
     const boot = source('../lifecycle/memory-partition-wiring')
     expect(boot).toContain('bootMemoryPartitions(')
+    expect(boot).toContain('sessionTenant.settle()')
     expect(boot).toContain('resetDustConversation()')
     expect(boot).toContain('clearHistoryReadCache()')
   })

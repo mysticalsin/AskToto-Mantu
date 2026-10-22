@@ -11,11 +11,7 @@ import type { LedgerIo } from '../memory-partition/partition-ledger'
 import { settleBrainWritesForTests } from '../test-helpers/settle-brain-writes'
 import { buildBrainContextWithSources, resetMatchKeyCacheForTests } from './context'
 import { createBrainContextOwner } from './context-owner'
-import {
-  brainContextForProvider,
-  createBrainContextEnvelope,
-  isBrainContextEnvelopeCurrent
-} from './context-envelope'
+import { brainContextForProvider, createBrainContextEnvelope, isBrainContextEnvelopeCurrent } from './context-envelope'
 import { brainRecallStatus } from './recall-status'
 import {
   brainDir,
@@ -69,7 +65,10 @@ describe('G19: the knowledge store is partitioned by verified tenant and user', 
     const index = readIndex(s)
     await writeIndex(s, {
       ...index,
-      ingested: { ...index.ingested, [MEETING.file]: { at: 1, ok: true, sourceRootId: ROOT, sourceDigest: digestOf(MEETING.file) } }
+      ingested: {
+        ...index.ingested,
+        [MEETING.file]: { at: 1, ok: true, sourceRootId: ROOT, sourceDigest: digestOf(MEETING.file) }
+      }
     })
   }
 
@@ -157,7 +156,9 @@ describe('G19: the knowledge store is partitioned by verified tenant and user', 
   })
 
   it('a write while nobody is verified is refused and creates no store', async () => {
-    await expect(writePerson(s, 'maria-silva', PersonEntitySchema.parse({ id: 'maria-silva', name: 'Maria Silva' }))).rejects.toMatchObject({
+    await expect(
+      writePerson(s, 'maria-silva', PersonEntitySchema.parse({ id: 'maria-silva', name: 'Maria Silva' }))
+    ).rejects.toMatchObject({
       name: 'MemoryClosedError',
       status: 'signed-out'
     })
@@ -190,7 +191,10 @@ describe('G19: the knowledge store is partitioned by verified tenant and user', 
       ct: randomBytes(64).toString('base64'),
       kLocal: 'F:' + randomBytes(72).toString('base64')
     }
-    writeFileSync(join(root, 'index.json'), Buffer.concat([Buffer.from('ATKENC2\n'), Buffer.from(JSON.stringify(envelope))]))
+    writeFileSync(
+      join(root, 'index.json'),
+      Buffer.concat([Buffer.from('ATKENC2\n'), Buffer.from(JSON.stringify(envelope))])
+    )
     expect(await brainRecallStatus(s)).toBe('locked')
     const asked = await buildBrainContextWithSources(s, 'what did Maria Silva say')
     expect(asked).toMatchObject({ matched: false, recallStatus: 'locked' })

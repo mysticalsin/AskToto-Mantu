@@ -86,7 +86,7 @@ import { applyCorrections, readAliasMap, replayCorrections, readCorrectionsJourn
 import { mergeExtraction } from './merge-extraction'
 import { applyHumanMarks } from './human-marks-apply'
 import { lintBrain } from './lint'
-import { isJobAdmissionOpen, settleJobCallbacks } from './ingest-job-hooks'
+import { enqueueJobs, isJobAdmissionOpen, runJobInPartition, settleJobCallbacks } from './ingest-job-hooks'
 import { preserveQuarantinedBeforeRebuild } from './rebuild-quarantine'
 import { publishForExtraction, publishIndexes, publishAll } from './publish'
 import { refuseIfDemoTagged } from '@shared/demo-guard'
@@ -1535,7 +1535,7 @@ function pump(): void {
       extracting.delete(job)
       endMaintenance?.()
       pump() // a slot just freed — start the next eligible extraction now, without waiting on this job's ingest
-      void withEntityLock(() => finishJob(result))
+      void withEntityLock(() => runJobInPartition(result.job, () => finishJob(result)))
         // Defensive: finishJob catches its own extraction/ingest errors internally and should never
         // reject, but if it somehow did, letting the rejection propagate unhandled would permanently wedge
         // the lane — every later caller's `.then()` chained onto a rejected promise skips straight to
@@ -1693,7 +1693,7 @@ export async function enqueueIngest(
   }
   if (assertAdmission) job.admissionChecks = [assertAdmission]
   if (onSettled) job.settledCallbacks = [settle]
-  queue.push(job)
+  enqueueJobs(queue, [job])
   pump()
 }
 
@@ -2542,7 +2542,7 @@ async function startBackfillAsync(
       if (backfillObserver) backfillObserver.published = false
     }
     backfillTotal += candidates.length
-    queue.push(...candidates)
+    enqueueJobs(queue, candidates)
     pump()
     // There is nothing to resume when every historical meeting was already indexed, or when the only
     // matching meeting is currently being handled by automatic live ingestion. The request flag was set

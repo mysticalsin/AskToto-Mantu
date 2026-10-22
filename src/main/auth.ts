@@ -25,6 +25,7 @@ import {
   tenantMatches,
   type AuthSession
 } from './auth-session-policy'
+import { createSessionTenantResolver } from './auth-session-tenant'
 import { readSpeechAuthBoundary as readVerifiedSpeechAuthBoundary } from './auth-speech-boundary'
 import { isAdminManagedEnforced } from './auth-admin-policy'
 import {
@@ -288,7 +289,6 @@ export async function getGraphToken(scopes: string[]): Promise<string | null> {
   try {
     const pca = await makePca(cfg)
     const accounts = await pca.getTokenCache().getAllAccounts()
-    if (!accounts.length) return null
     // Bind to the validated, signed-in session account — NOT just accounts[0] — so a stray/extra cached
     // account can never be used to read another user's calendar.
     loadSession()
@@ -437,8 +437,7 @@ async function probeRefreshToken(): Promise<'valid' | 'revoked' | 'unknown'> {
   if (!cfg) return 'unknown'
   try {
     const pca = await makePca(cfg)
-    const accounts = await pca.getTokenCache().getAllAccounts()
-    if (!accounts.length) return 'unknown' // nothing cached to probe — not a revocation
+    const accounts = await pca.getTokenCache().getAllAccounts() // nothing cached to probe → no account → 'unknown', not a revocation
     loadSession()
     const want = (session?.email || '').toLowerCase()
     const account = accounts.find((a) => (a.username || '').toLowerCase() === want) ?? null
@@ -662,13 +661,10 @@ function authEnforced(): boolean {
     /* malformed admin content */
   }
   try {
-    if (JSON.parse(readFileSync(join(app.getPath('userData'), 'managed-config.json'), 'utf8'))?.requireAuth === true) {
-      return true
-    }
+    return JSON.parse(readFileSync(join(app.getPath('userData'), 'managed-config.json'), 'utf8'))?.requireAuth === true
   } catch {
-    /* not present */
+    return false // not present
   }
-  return false
 }
 
 /** Main-process trust gate; sticky configuration survives Settings edits and clears only on sign-out. */
@@ -680,8 +676,12 @@ export function requireAuth(): boolean {
 }
 /** Main-owned auth identity generation. It advances whenever the authenticated session is saved or cleared. */
 export const authSessionGeneration = (): number => speechAuthSessionEpoch
-/** The signed-in session's Entra tenant id, lowercased, or null. Call after `authStatus()` so expiry has run. */
-export const authTenantId = (): string | null => session?.tid?.trim().toLowerCase() || null
+export const sessionTenant = createSessionTenantResolver({
+  session: () => session,
+  config: readConfig,
+  accounts: async (cfg) => (await makePca(cfg)).getTokenCache().getAllAccounts()
+})
+export const authTenantId = (): string | null => sessionTenant.tenantId()
 export const captureAuthSessionBoundary = () => speechAuthLeaseController.captureSessionBoundary(requireAuth)
 speechAuthLeaseController = new SpeechAuthLeaseController({
   prepareSession: loadSession,
