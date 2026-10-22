@@ -23,6 +23,8 @@ export interface OwnerSessionAuthority {
   current(frame: FrameLike): OwnerSessionRef | null
   /** Read-only: the signed-in owner's key right now, or null while signed out or before the salt has loaded. */
   currentOwnerKey(): string | null
+  /** Read-only: the verified tenant's key right now, or null while signed out, before the salt has loaded, or when the tenant is unknown. */
+  currentTenantKey(): string | null
   revokeAll(reason: OwnerSessionRevokeReason): void
   revokeFrame(webContentsId: number, reason: OwnerSessionRevokeReason): void
   onRevoked(cb: (ref: OwnerSessionRef, reason: OwnerSessionRevokeReason) => void): () => void
@@ -146,6 +148,7 @@ export function createOwnerSessionAuthority(deps: OwnerSessionAuthorityDeps): Ow
 
   return {
     currentOwnerKey,
+    currentTenantKey,
     mint(frame, contextRevision) {
       const ownerKey = currentOwnerKey()
       if (!ownerKey) return null

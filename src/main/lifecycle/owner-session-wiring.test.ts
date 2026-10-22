@@ -13,6 +13,7 @@ vi.mock('electron', () => ({
   webFrameMain: { fromId: vi.fn(() => null) }
 }))
 vi.mock('../auth', () => ({ authStatus: vi.fn(() => ({ signedIn: false })), authSessionGeneration: vi.fn(() => 1) }))
+vi.mock('./memory-partition-wiring', () => ({ bootMainMemoryPartitions: vi.fn() }))
 vi.mock('../logger', () => ({ auditLog: vi.fn(), mainLog: { error: vi.fn(), warn: vi.fn(), info: vi.fn() } }))
 vi.mock('../infra/storage/draft-transcript-write-state', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../infra/storage/draft-transcript-write-state')>()),
@@ -32,6 +33,7 @@ import { InputSessionLifecycleController } from './input-session-lifecycle-contr
 import { installAppQuitLifecycle } from './app-quit-lifecycle'
 import { createQuitTrace } from './quit-trace'
 import { createOwnerSessionAuthority } from './owner-session-authority'
+import { bootMainMemoryPartitions } from './memory-partition-wiring'
 import {
   configureMeetingSpeechLimits,
   getMeetingSpeechLimits,
@@ -67,6 +69,23 @@ describe('owner session wiring', () => {
       SESSION_CONTEXT_IPC.appendLine,
       IPC.appendMeetingJournal
     ])
+  })
+
+  it('boots the local memory partitions with the authority it exposes, before it registers any handler (G19)', () => {
+    const bootedWith: unknown[] = []
+    vi.mocked(bootMainMemoryPartitions).mockImplementationOnce((ownerSession) => {
+      bootedWith.push(ownerSession)
+      return undefined as never
+    })
+    const ipcMain = { handle: vi.fn(() => expect(bootedWith).toHaveLength(1)) }
+    const wiring = createOwnerSessionWiring({
+      ipcMain,
+      assertMainWindow: vi.fn(),
+      currentInputSessionContext: () => ({ authSessionGeneration: 1, contextRevision: 3 }),
+      privateView: () => false
+    })
+    expect(bootedWith).toEqual([wiring.ownerSession])
+    expect(ipcMain.handle).toHaveBeenCalled()
   })
 
   it('installs the trusted meeting speech policy before it registers any handler', () => {

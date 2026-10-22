@@ -17,6 +17,7 @@ import type { SpeechDesktopHooks } from '../speech-desktop-boundary'
 import type { RendererResetSource } from '../features/meetings/session-closure'
 import { bootstrapLiveMeetingJournal } from './live-meeting-journal-wiring'
 import { bindMeetingSpeechInvalidation, bootstrapMeetingSpeech } from './meeting-speech-persistence-wiring'
+import { bootMainMemoryPartitions } from './memory-partition-wiring'
 import { createMainOwnerSessionAuthority, type OwnerSessionAuthority } from './owner-session-authority'
 
 export interface OwnerSessionWiringDeps {
@@ -65,6 +66,7 @@ export function createOwnerSessionWiring(deps: OwnerSessionWiringDeps): OwnerSes
   })
   const ownerSession = createMainOwnerSessionAuthority(() => currentInputSessionContext().contextRevision)
   activeOwnerSession = ownerSession
+  bootMainMemoryPartitions(ownerSession) // G19: local memory is partitioned by the verified tenant and user
   const authorizeSender = registerOwnerSessionIpc({
     ipcMain,
     assertMainWindow,

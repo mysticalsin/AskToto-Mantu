@@ -255,6 +255,18 @@ describe('owner-session authority', () => {
     expect(authority.currentOwnerKey()).toBeNull()
   })
 
+  it('currentTenantKey is the derived key for the verified tenant, and null when the tenant is unknown, signed out or unsalted', () => {
+    const { state, authority } = setup()
+    expect(authority.currentTenantKey()).toBe(deriveTenantKey(state.salt!, 'tenant-a'))
+    expect(authority.currentTenantKey()).toBe(mustMint(authority).tenantKey)
+    expect(authority.currentTenantKey()).not.toBe(authority.currentOwnerKey())
+    state.tenant = null
+    expect(authority.currentTenantKey()).toBeNull()
+    state.tenant = 'tenant-a'
+    state.salt = null
+    expect(authority.currentTenantKey()).toBeNull()
+  })
+
   it('validate reports revoked after revokeAll and notifies listeners', () => {
     const { authority } = setup()
     const ref = mustMint(authority)

@@ -38,6 +38,12 @@ export class ByteBudgetCache<V> {
     return entry.value
   }
 
+  /** Drops every entry: the decrypted text of one owner's session must not stay resident for the next. */
+  clear(): void {
+    this.entries.clear()
+    this.total = 0
+  }
+
   delete(key: string): void {
     const entry = this.entries.get(key)
     if (!entry) return

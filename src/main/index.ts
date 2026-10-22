@@ -627,20 +627,19 @@ import { isJournalCorruptionBlocked } from './brain/corrections'
 import { publishAll, publishMeetingCard, removeWiki } from './brain/publish'
 import { closeIntelligenceWindow, isIntelligenceSender, syncIntelContentProtection } from './intelligence'
 import {
-  readIndex as readBrainIndex,
   writeIndex as writeBrainIndex,
-  indexUnavailable,
   writeGraph as writeBrainGraph,
   readPerson as readBrainPerson,
   writePerson as writeBrainPerson,
   readAccount as readBrainAccount,
   writeAccount as writeBrainAccount,
   writeDeal as writeBrainDeal,
-  listEntities as listBrainEntities,
-  brainDir as brainStoreDir
+  listEntities as listBrainEntities
 } from './brain/store'
 import { areBrainContextSourcesCurrent, buildBrainContextWithSources } from './brain/context'
 import { createBrainContextDispatch } from './brain/context-dispatch'
+import { createBrainContextOwner } from './brain/context-owner'
+import { followUpMemoryContinues, reconcileMemoryAccess } from './memory-partition/memory-access'
 import {
   createBrainContextEnvelope,
   unavailableBrainContextEnvelope,
@@ -1391,17 +1390,7 @@ function currentInputSessionContext(): { authSessionGeneration: number; contextR
   }
   return { authSessionGeneration: authSessionGeneration(), contextRevision: inputSessionContextRevision }
 }
-function currentBrainContextOwner(settings: Settings = getSettings()): BrainContextOwner {
-  const unavailable = indexUnavailable(settings)
-  if (unavailable) throw new Error(`Brain context index is unavailable: ${unavailable}`)
-  return {
-    ...currentInputSessionContext(),
-    brainRevision: readBrainIndex(settings).revision,
-    // The selected meetings folder is a profile boundary for local brain data. Keep only its digest in the
-    // envelope so a raw on-device path can never become prompt or renderer data.
-    profileKey: createHash('sha256').update(brainStoreDir(settings)).digest('hex')
-  }
-}
+const currentBrainContextOwner = createBrainContextOwner({ inputContext: currentInputSessionContext })
 const micGate = createCommandMicAvailability({ requireAuth, getSettings, modelReady: parakeetModelReady })
 const { availability: commandMicAvailability, refreshPresence } = micGate
 function commandLeaseCurrentAndAllowed(sessionId: string): boolean {
@@ -4855,6 +4844,7 @@ function revokePrivilegedSurface(): void {
   invalidateCloudSttOwner() // closes authenticated live-speech sockets and invalidates their callbacks
   closeIntelligenceWindow() // account-scoped state belongs to the session being cleared or replaced
   abortAllAskStreams(streams) // askCancel is auth-gated, so a running answer would outlive the sign-out
+  reconcileMemoryAccess() // G19: the owner's memory partition ends with the session
   credentialLifecycle.onSessionCleared() // G20: the inventory's sign-out cleanup, on every way a session ends
 }
 setSessionClearedHandler(commandControl.wrapLifecycleListener('auth_session_cleared', revokePrivilegedSurface))
@@ -7549,7 +7539,7 @@ function registerIpc(): void {
         !req.providerOverride &&
         !listeningActive
       ) {
-        if (!s.askFollowUpMemory || Date.now() - lastPlainAskAt > ASK_MEMORY_IDLE_MS) {
+        if (!followUpMemoryContinues() || !s.askFollowUpMemory || Date.now() - lastPlainAskAt > ASK_MEMORY_IDLE_MS) {
           req.history = []
           resetDustConversation()
         }

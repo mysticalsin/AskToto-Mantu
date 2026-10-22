@@ -167,6 +167,7 @@ export type AuditEvent =
   | 'credential.read.denied'
   | 'credential.cleanup'
   | 'credential.account_switch'
+  | 'memory.partition_adopted'
   | 'capture.screen'
   | 'capture.display_mismatch'
   | 'capture.blocked'

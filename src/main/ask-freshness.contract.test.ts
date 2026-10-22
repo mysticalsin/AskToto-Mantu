@@ -46,7 +46,7 @@ describe('fresh-question boundary at the askStart choke point', () => {
   it('the gate clears BOTH carriers together — renderer history and the server-side Dust conversation', () => {
     const start = sourceIndexOf(
       indexSrc,
-      'if (!s.askFollowUpMemory || Date.now() - lastPlainAskAt > ASK_MEMORY_IDLE_MS) {'
+      'if (!followUpMemoryContinues() || !s.askFollowUpMemory || Date.now() - lastPlainAskAt > ASK_MEMORY_IDLE_MS) {'
     )
     expect(start).toBeGreaterThan(-1)
     const body = indexSrc.slice(start, start + 200)

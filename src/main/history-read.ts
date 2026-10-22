@@ -120,6 +120,11 @@ export function compareMeetingRowsNewestFirst(a: Pick<HistoryRow, 'date'>, b: Pi
   return newestFirstDateCollator.compare(b.date || '', a.date || '')
 }
 
+/** An account switch or a sign-out ends the session the decrypted text was cached for (G19). */
+export function clearHistoryReadCache(): void {
+  readCache.clear()
+}
+
 function cachedRead(path: string): CacheEntry | undefined {
   return readCache.get(path)
 }

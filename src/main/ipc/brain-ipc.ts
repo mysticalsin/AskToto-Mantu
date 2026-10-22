@@ -35,6 +35,7 @@ import {
   startRebuild
 } from '../brain/ingest'
 import { startIntelligencePass } from '../brain/intelligence-pass'
+import { brainRecallStatus } from '../brain/recall-status'
 import {
   renameEntity,
   mergeEntities,
@@ -142,6 +143,7 @@ export function registerBrainIpc(deps: BrainIpcDependencies): void {
         edges: 0,
         warnings: 0,
         revision: 0,
+        recallStatus: 'signed-out' as const,
         error: 'Sign in with your Mantu account first.'
       }
     }
@@ -187,6 +189,7 @@ export function registerBrainIpc(deps: BrainIpcDependencies): void {
       // deferred source refresh runs (it needs a usable provider). Surfaced so the UI can say the
       // cleanup is pending instead of silently claiming the delete was complete.
       cleanupPending: idx.sourceRefreshRequested === true,
+      recallStatus: await brainRecallStatus(s), // G19: ok, partition-empty (a new or switched account), locked, ...
       lastIndexedAt: await lastIndexedAtAsync(s),
       intelligenceIndex: await intelligenceIndexStatusAsync(s),
       // M2-0003: surfaces the degraded read-only state instead of silently reporting an empty brain.

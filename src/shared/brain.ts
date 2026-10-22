@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import type { RecallStatus } from './contracts/memory-partition'
 
 /**
  * Mantu Intelligence "Brain" — the LLM-maintained knowledge store built from meeting transcripts.
@@ -667,6 +668,8 @@ export interface BrainStatus {
   /** Set while index.json exists but cannot be used on this device (M2-0003). Indexing is paused and
    *  nothing was changed. */
   indexUnavailable?: IndexUnavailableCause
+  /** What a read of the verified owner's partition found (G19): signed-out, locked, partition-empty, ... */
+  recallStatus?: RecallStatus
 }
 
 /**
