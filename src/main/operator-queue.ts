@@ -20,6 +20,10 @@ export const OPERATOR_QUEUE_MAX_ITEMS = 500
 /** Never queue these: heartbeats are periodic on their own, and /v1/use is a live proxy call. */
 export const OPERATOR_QUEUE_BLOCKED_PATHS: ReadonlySet<string> = new Set(['/v1/heartbeat', '/v1/use', '/v1/ask'])
 
+/** Zero-config reporting: events recorded before the device is enrolled wait here for a credential. */
+export const OPERATOR_PREENROL_MAX_ITEMS = 200
+export const OPERATOR_PREENROL_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000
+
 const BACKOFF_SCHEDULE_MS = [60_000, 5 * 60_000, 15 * 60_000] as const
 const BACKOFF_CAP_MS = 60 * 60_000
 
@@ -31,6 +35,9 @@ export interface QueueItem {
   enqueuedAt: number
   attempts: number
   nextAttemptAt: number
+  /** Recorded before enrolment: waits for a credential with no backoff and no attempts spent. The flag is
+   *  cleared on the first real send attempt, so it only ever describes the waiting phase. */
+  preEnrol?: true
 }
 
 export interface QueueState {
@@ -76,6 +83,35 @@ export function addItem(
   return { items, droppedSinceReport }
 }
 
+/** Pre-enrolment events are bounded harder than the retry queue: at most 200 and at most 7 days old. The
+ *  oldest go first and are counted so the first heartbeat after enrolment reports the loss. Retry items are
+ *  never evicted to make room for them. The 500-item total cap still applies. */
+export function addPreEnrolItem(
+  state: QueueState,
+  item: Pick<QueueItem, 'id' | 'path' | 'body' | 'enqueuedAt'>,
+  now: number
+): QueueState {
+  const next = addItem(state, item, now)
+  const items = next.items.map((i) => (i.id === item.id ? { ...i, preEnrol: true as const, nextAttemptAt: now } : i))
+  return prunePreEnrolItems({ items, droppedSinceReport: next.droppedSinceReport }, now)
+}
+
+/** Apply the 7 day and 200 item bounds to the waiting items only. */
+export function prunePreEnrolItems(state: QueueState, now: number): QueueState {
+  let dropped = state.droppedSinceReport
+  const cutoff = now - OPERATOR_PREENROL_MAX_AGE_MS
+  let waiting = state.items.filter((i) => i.preEnrol === true && i.enqueuedAt >= cutoff).length
+  const items = state.items.filter((i) => {
+    if (i.preEnrol !== true) return true
+    const drop = i.enqueuedAt < cutoff || waiting > OPERATOR_PREENROL_MAX_ITEMS
+    if (!drop) return true
+    if (i.enqueuedAt >= cutoff) waiting -= 1
+    dropped += 1
+    return false
+  })
+  return dropped === state.droppedSinceReport ? state : { items, droppedSinceReport: dropped }
+}
+
 export function dueItems(state: QueueState, now: number): QueueItem[] {
   return state.items.filter((i) => i.nextAttemptAt <= now)
 }
@@ -97,7 +133,8 @@ export function markFailed(
     items: state.items.map((i) => {
       if (i.id !== itemId) return i
       const attempts = i.attempts + 1
-      return { ...i, attempts, nextAttemptAt: now + (opts?.retryAfterMs ?? backoffForAttempt(attempts)) }
+      const { preEnrol: _waiting, ...rest } = i
+      return { ...rest, attempts, nextAttemptAt: now + (opts?.retryAfterMs ?? backoffForAttempt(attempts)) }
     })
   }
 }
@@ -114,7 +151,8 @@ const QueueItemSchema = z.object({
   body: z.record(z.unknown()),
   enqueuedAt: z.number(),
   attempts: z.number().int().nonnegative(),
-  nextAttemptAt: z.number()
+  nextAttemptAt: z.number(),
+  preEnrol: z.literal(true).optional()
 })
 const QueueStateSchema = z.object({
   items: z.array(QueueItemSchema),
@@ -175,6 +213,25 @@ export function enqueueOperatorItem(
   saveQueueState(userDataDir, next)
 }
 
+/** Queue one event before the device is enrolled. Same path rules as enqueueOperatorItem. */
+export function enqueuePreEnrolItem(
+  userDataDir: string,
+  item: { path: string; body: Record<string, unknown> },
+  now: number = Date.now()
+): void {
+  if (OPERATOR_QUEUE_BLOCKED_PATHS.has(item.path)) return
+  const state = loadQueueState(userDataDir)
+  saveQueueState(
+    userDataDir,
+    addPreEnrolItem(state, { id: randomUUID(), path: item.path, body: item.body, enqueuedAt: now }, now)
+  )
+}
+
+/** Drop everything: the kill switch, a revoked seat and an admin licence clear all end reporting. */
+export function purgeOperatorQueue(userDataDir: string): void {
+  saveQueueState(userDataDir, emptyQueueState())
+}
+
 /** Send every due item in enqueue order via `send`, update backoff/removal per outcome, persist, and
  *  report the resulting queue depth plus items dropped for cap overflow since the last report. */
 export async function drainOperatorQueue(
@@ -182,7 +239,7 @@ export async function drainOperatorQueue(
   now: number,
   send: QueueSender
 ): Promise<QueueDrainReport> {
-  let state = loadQueueState(userDataDir)
+  let state = prunePreEnrolItems(loadQueueState(userDataDir), now)
   const due = dueItems(state, now).sort((a, b) => a.enqueuedAt - b.enqueuedAt)
   for (const item of due) {
     let result: QueueSendResult

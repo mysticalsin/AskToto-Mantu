@@ -9,11 +9,16 @@ import {
   drainOperatorQueue,
   dueItems,
   emptyQueueState,
+  addPreEnrolItem,
   enqueueOperatorItem,
+  enqueuePreEnrolItem,
   loadQueueState,
   markFailed,
   markSucceeded,
+  OPERATOR_PREENROL_MAX_AGE_MS,
+  OPERATOR_PREENROL_MAX_ITEMS,
   OPERATOR_QUEUE_MAX_ITEMS,
+  purgeOperatorQueue,
   queueFilePath,
   saveQueueState,
   type QueueState
@@ -185,5 +190,96 @@ describe('file I/O: atomic write + corrupt-file recovery (real temp dir)', () =>
       throw new Error('ECONNRESET')
     })
     expect(report.queued).toBe(1)
+  })
+})
+
+describe('pre-enrolment items (O09)', () => {
+  const DAY = 24 * 60 * 60 * 1000
+  const item = (id: string, at: number) => ({ id, path: '/v1/ingest', body: { id, ts: at }, enqueuedAt: at })
+
+  it('keeps the documented bounds: 200 items, 7 days', () => {
+    expect(OPERATOR_PREENROL_MAX_ITEMS).toBe(200)
+    expect(OPERATOR_PREENROL_MAX_AGE_MS).toBe(7 * DAY)
+  })
+
+  it('waits for a credential without a backoff and without spending attempts', () => {
+    const now = 5_000_000
+    const state = addPreEnrolItem(emptyQueueState(), item('a', now), now)
+    expect(state.items[0]).toMatchObject({ preEnrol: true, attempts: 0, nextAttemptAt: now })
+    expect(dueItems(state, now)).toHaveLength(1)
+  })
+
+  it('drops the oldest pre-enrolment items beyond 200 and counts them', () => {
+    const now = 9_000_000
+    let state = emptyQueueState()
+    for (let i = 0; i < 205; i += 1) state = addPreEnrolItem(state, item(`p${i}`, now + i), now + i)
+    const pre = state.items.filter((i) => i.preEnrol)
+    expect(pre).toHaveLength(200)
+    expect(pre[0].id).toBe('p5')
+    expect(state.droppedSinceReport).toBe(5)
+  })
+
+  it('drops pre-enrolment items older than 7 days and counts them', () => {
+    const t0 = 1_000_000_000
+    let state = addPreEnrolItem(emptyQueueState(), item('old', t0), t0)
+    state = addPreEnrolItem(state, item('fresh', t0 + 7 * DAY + 1), t0 + 7 * DAY + 1)
+    expect(state.items.map((i) => i.id)).toEqual(['fresh'])
+    expect(state.droppedSinceReport).toBe(1)
+  })
+
+  it('does not evict ordinary retry items when the pre-enrolment bound is hit', () => {
+    const now = 1_000_000
+    let state = addItem(emptyQueueState(), item('retry', now), now)
+    for (let i = 0; i < 201; i += 1) state = addPreEnrolItem(state, item(`p${i}`, now + i), now + i)
+    expect(state.items.some((i) => i.id === 'retry')).toBe(true)
+    expect(state.items.filter((i) => i.preEnrol)).toHaveLength(200)
+  })
+
+  it('still honours the 500 item total cap', () => {
+    const now = 1_000_000
+    let state = emptyQueueState()
+    for (let i = 0; i < OPERATOR_QUEUE_MAX_ITEMS; i += 1) state = addItem(state, item(`r${i}`, now), now)
+    state = addPreEnrolItem(state, item('p', now), now)
+    expect(state.items).toHaveLength(OPERATOR_QUEUE_MAX_ITEMS)
+    expect(state.items.at(-1)?.id).toBe('p')
+  })
+
+  describe('on disk', () => {
+    let dir: string
+    beforeEach(() => {
+      dir = mkdtempSync(join(tmpdir(), 'operator-queue-preenrol-'))
+    })
+    afterEach(() => rmSync(dir, { recursive: true, force: true }))
+
+    it('enqueues without a credential and refuses heartbeat, use and ask paths', () => {
+      enqueuePreEnrolItem(dir, { path: '/v1/ingest', body: { id: 'x' } }, 1_000)
+      enqueuePreEnrolItem(dir, { path: '/v1/heartbeat', body: {} }, 1_000)
+      enqueuePreEnrolItem(dir, { path: '/v1/ask', body: {} }, 1_000)
+      const items = loadQueueState(dir).items
+      expect(items).toHaveLength(1)
+      expect(items[0].preEnrol).toBe(true)
+    })
+
+    it('purge empties the queue and the dropped counter', () => {
+      enqueuePreEnrolItem(dir, { path: '/v1/ingest', body: { id: 'x' } }, 1_000)
+      purgeOperatorQueue(dir)
+      expect(loadQueueState(dir)).toEqual({ items: [], droppedSinceReport: 0 })
+    })
+
+    it('a drain sends pre-enrolment items once a credential exists and clears the flag on failure', async () => {
+      const now = 2_000_000
+      enqueuePreEnrolItem(dir, { path: '/v1/ingest', body: { id: 'ok' } }, now)
+      enqueuePreEnrolItem(dir, { path: '/v1/ingest', body: { id: 'bad' } }, now)
+      const sent: string[] = []
+      const report = await drainOperatorQueue(dir, now, async (_p, body) => {
+        sent.push(String(body.id))
+        return { ok: body.id === 'ok', status: 500 }
+      })
+      expect(sent.sort()).toEqual(['bad', 'ok'])
+      expect(report.queued).toBe(1)
+      const left = loadQueueState(dir).items[0]
+      expect(left.preEnrol).toBeUndefined()
+      expect(left.attempts).toBe(1)
+    })
   })
 })
