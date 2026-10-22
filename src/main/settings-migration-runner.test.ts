@@ -11,7 +11,7 @@ import {
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { SETTINGS_VERSION_KEY } from '@shared/settings-migrations'
+import { SETTINGS_VERSION_KEY, type SettingsMigration } from '@shared/settings-migrations'
 import { migrateSettingsFile, type SettingsFileCodec } from './settings-migration-runner'
 
 // A transparent stand-in codec: "ENC\n" + JSON is encrypted, bare JSON is legacy plaintext, anything else is unreadable.
@@ -31,12 +31,20 @@ const codec: SettingsFileCodec = {
 const enc = (raw: Record<string, unknown>): Buffer => codec.encode(raw)
 const dec = (buf: Buffer): Record<string, unknown> => codec.decode(buf)?.raw ?? {}
 
+// The shipped chain is stamp-only, so tests that exercise backup and rewrite inject a step that changes data.
+const DATA_STEP: SettingsMigration = {
+  id: 'synthetic-add-key',
+  from: 0,
+  to: 1,
+  up: (raw) => ({ ...raw, addedByMigration: true })
+}
+
 describe('migrateSettingsFile', () => {
   let dir: string
   let path: string
   const log = { warn: vi.fn(), info: vi.fn() }
   const run = (overrides: Partial<Parameters<typeof migrateSettingsFile>[0]> = {}) =>
-    migrateSettingsFile({ path, ...codec, log, ...overrides })
+    migrateSettingsFile({ path, ...codec, log, plan: { migrations: [DATA_STEP], current: 1 }, ...overrides })
   const files = (): string[] => readdirSync(dir).sort()
 
   beforeEach(() => {
@@ -57,10 +65,47 @@ describe('migrateSettingsFile', () => {
     expect(dec(readFileSync(path))).toEqual({
       temperature: 0.7,
       retiredLegacyKey: { keep: 'me' },
+      addedByMigration: true,
       [SETTINGS_VERSION_KEY]: 1
     })
     expect(files()).toEqual(['settings.json', 'settings.json.pre-v0.bak'])
     if (process.platform !== 'win32') expect(statSync(path).mode & 0o777).toBe(0o600)
+  })
+
+  it('does not back up or rewrite for a stamp-only step: the version waits for the next ordinary save', async () => {
+    const original = enc({ temperature: 0.7, retiredLegacyKey: 1 })
+    writeFileSync(path, original)
+    expect(await run({ plan: undefined })).toEqual({ status: 'deferred' })
+    expect(readFileSync(path).equals(original)).toBe(true)
+    expect(files()).toEqual(['settings.json'])
+  })
+
+  it('commits nothing once the time bound has passed and leaves the original alone', async () => {
+    const original = enc({ a: 1 })
+    writeFileSync(path, original)
+    const result = await run({
+      timeoutMs: 1,
+      encode: (raw) => {
+        const until = Date.now() + 25
+        while (Date.now() < until) {
+          /* hold the thread past the bound, as a stalled disk would hold the write */
+        }
+        return codec.encode(raw)
+      }
+    })
+    expect(result).toMatchObject({ status: 'failed' })
+    expect(readFileSync(path).equals(original)).toBe(true)
+    expect(files().filter((n) => n.endsWith('.tmp'))).toEqual([])
+  })
+
+  it('never rejects, even when the codec throws', async () => {
+    writeFileSync(path, enc({ a: 1 }))
+    const result = await run({
+      decode: () => {
+        throw new Error('keychain exploded')
+      }
+    })
+    expect(result).toMatchObject({ status: 'failed' })
   })
 
   it('is idempotent: a second run changes nothing and makes no new backup', async () => {

@@ -7,6 +7,7 @@ import {
   migrateLegacyBidstackConnection,
   planSettingsMigration,
   settingsFileVersion,
+  stampSettingsVersion,
   type SettingsMigration
 } from './settings-migrations'
 
@@ -33,6 +34,7 @@ describe('planSettingsMigration', () => {
     expect(plan.to).toBe(CURRENT_SETTINGS_SCHEMA_VERSION)
     expect(plan.raw).toEqual({ ...raw, [SETTINGS_VERSION_KEY]: CURRENT_SETTINGS_SCHEMA_VERSION })
     expect(plan.unknownKeys).toEqual(['someFutureOrRetiredKey'])
+    expect(plan.changesData).toBe(false) // the shipped step only stamps the version
     expect(plan.applied).toEqual(SETTINGS_MIGRATIONS.map((m) => m.id))
   })
 
@@ -60,6 +62,13 @@ describe('planSettingsMigration', () => {
     to: from + 1,
     up,
     removes
+  })
+
+  it('reports changesData only when a step changes something besides the version', () => {
+    const migrations = [step(0, (r) => ({ ...r, added: 1 }))]
+    expect(planSettingsMigration({ keep: 1 }, { migrations, current: 1 })).toMatchObject({ changesData: true })
+    const noop = [step(0, (r) => ({ ...r }))]
+    expect(planSettingsMigration({ keep: 1 }, { migrations: noop, current: 1 })).toMatchObject({ changesData: false })
   })
 
   it('runs a multi-step chain in order and reports what ran', () => {
@@ -124,5 +133,22 @@ describe('migrateLegacyBidstackConnection (moved from main/store.ts, behaviour u
     const cleared: Record<string, unknown> = { bidstackEndpointUrl: 'https://example.invalid/mcp', mcpConnections: [] }
     migrateLegacyBidstackConnection(cleared)
     expect(cleared.mcpConnections).toEqual([])
+  })
+})
+
+describe('stampSettingsVersion (ordinary saves write the version)', () => {
+  it('stamps a save over a legacy or empty profile whose pending steps are stamp-only', () => {
+    expect(stampSettingsVersion({}, { a: 1 })).toEqual({
+      a: 1,
+      [SETTINGS_VERSION_KEY]: CURRENT_SETTINGS_SCHEMA_VERSION
+    })
+    expect(stampSettingsVersion({ old: 1 }, { old: 1, a: 1 })).toMatchObject({
+      [SETTINGS_VERSION_KEY]: CURRENT_SETTINGS_SCHEMA_VERSION
+    })
+  })
+
+  it('leaves a current profile as it is and does not mutate its input', () => {
+    const next = Object.freeze({ [SETTINGS_VERSION_KEY]: CURRENT_SETTINGS_SCHEMA_VERSION, a: 1 })
+    expect(stampSettingsVersion({ [SETTINGS_VERSION_KEY]: CURRENT_SETTINGS_SCHEMA_VERSION }, next)).toEqual(next)
   })
 })

@@ -65,7 +65,7 @@ import Anthropic from '@anthropic-ai/sdk'
 import OpenAI from 'openai'
 import { stripProxyFaultMarker } from './llm/retry'
 import { migrateOverlayLayout } from '@shared/overlay-chrome'
-import { migrateLegacyBidstackConnection } from '@shared/settings-migrations'
+import { migrateLegacyBidstackConnection, stampSettingsVersion } from '@shared/settings-migrations'
 import { migrateSettingsFile, rejectUnsupportedSettingsVersion, settingsCodec } from './settings-migration-runner'
 import { preferredFreshAsrEngine, type FreshAsrEngine } from '@shared/asr-hardware-preference'
 import type { LocalSpeechPackPolicy } from '@shared/model-policy'
@@ -440,15 +440,14 @@ function serializeUserRaw(obj: Record<string, unknown>): Buffer {
   throw new Error('Encryption unavailable — refusing to write settings as plaintext')
 }
 
-/** Boot step (index.ts, after first show): versioned migration of settings.json with a backup. Async fs only. */
-export const migrateSettingsFileOnBoot = () =>
+/** Boot step: index.ts awaits this first thing in whenReady, before any window or IPC handler can save. */
+export const migrateSettingsFileOnBoot = (tuning?: Partial<Parameters<typeof migrateSettingsFile>[0]>) =>
   migrateSettingsFile({
     path: settingsPath(),
     ...settingsCodec(tryParseSettingsBuffer, [ENC_MARKER_V1, ENC_MARKER_V2], serializeUserRaw),
     log: mainLog,
-    onWritten: () => {
-      _settingsCache = null
-    }
+    onWritten: () => (_settingsCache = null),
+    ...tuning
   })
 
 // ─── Settings memoisation ────────────────────────────────────────────────────────
@@ -763,7 +762,7 @@ export function setSettings(patch: Partial<Settings>): Settings {
     )
   }
   if (Object.hasOwn(prev, 'brokerSpeech')) prev.brokerSpeech = BrokerSpeechSettingsLoadSchema.parse(prev.brokerSpeech)
-  const next = { ...prev, ...allowed }
+  const next = stampSettingsVersion(prev, { ...prev, ...allowed })
   const managed = validatedManaged()
   freshLeanSpeechAuthority.preserveProjectedRoute(
     next,

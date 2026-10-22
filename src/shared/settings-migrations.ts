@@ -34,7 +34,7 @@ export interface SettingsMigration {
 
 export const SETTINGS_MIGRATIONS: readonly SettingsMigration[] = [
   // Version 0 is any file written before versioning existed. Reading it needed no change, so this step only
-  // stamps the version; the backup it triggers is the safety net for the steps that follow.
+  // stamps the version, and the stamp is written by the next ordinary save, never by a boot rewrite.
   { id: 'stamp-schema-version', from: 0, to: 1, up: (raw) => ({ ...raw }) }
 ]
 
@@ -51,6 +51,8 @@ export type SettingsMigrationPlan =
       applied: string[]
       /** Keys the current schema does not know. They are kept as they are. */
       unknownKeys: string[]
+      /** False when the steps changed nothing but the version stamp. Such a file is not rewritten at boot. */
+      changesData: boolean
     }
 
 /** The file's version: 0 when absent, null when present but not a non-negative integer. */
@@ -58,6 +60,11 @@ export function settingsFileVersion(raw: Readonly<Record<string, unknown>>): num
   if (!Object.hasOwn(raw, SETTINGS_VERSION_KEY)) return 0
   const version = raw[SETTINGS_VERSION_KEY]
   return typeof version === 'number' && Number.isInteger(version) && version >= 0 ? version : null
+}
+
+function withoutVersion(raw: Readonly<Record<string, unknown>>): Record<string, unknown> {
+  const { [SETTINGS_VERSION_KEY]: _version, ...rest } = raw
+  return rest
 }
 
 export function planSettingsMigration(
@@ -90,9 +97,23 @@ export function planSettingsMigration(
     version = step.to
     applied.push(step.id)
   }
+  const changesData = JSON.stringify(withoutVersion(working)) !== JSON.stringify(withoutVersion(raw))
   working[SETTINGS_VERSION_KEY] = current
   const unknownKeys = Object.keys(working).filter((key) => key !== SETTINGS_VERSION_KEY && !isRegisteredSettingKey(key))
-  return { status: 'migrate', from, to: current, raw: working, applied, unknownKeys }
+  return { status: 'migrate', from, to: current, raw: working, applied, unknownKeys, changesData }
+}
+
+/**
+ * For an ordinary save: stamp the version when the pending steps are stamp-only, so the file gets its version
+ * without a boot-time rewrite. If a step would change data, the stamp is withheld and the boot migration (which
+ * backs the file up first) owns that upgrade.
+ */
+export function stampSettingsVersion(
+  prev: Readonly<Record<string, unknown>>,
+  next: Record<string, unknown>
+): Record<string, unknown> {
+  const plan = planSettingsMigration(prev)
+  return plan.status === 'migrate' && !plan.changesData ? { ...next, [SETTINGS_VERSION_KEY]: plan.to } : next
 }
 
 /**

@@ -23,6 +23,20 @@ vi.mock('electron')
 
 const ENC_V2 = Buffer.from('ATKENC2\n')
 const NOTE = 'synthetic-private-note-for-encryption-check'
+// The shipped chain is stamp-only (no boot rewrite), so tests of backup and rewrite inject a step that changes data.
+const DATA = {
+  plan: {
+    migrations: [
+      {
+        id: 'synthetic-add-key',
+        from: 0,
+        to: 1,
+        up: (raw: Readonly<Record<string, unknown>>) => ({ ...raw, addedByMigration: true })
+      }
+    ],
+    current: 1
+  }
+}
 
 describe('settings file migration through the real store', () => {
   let userData: string
@@ -53,7 +67,7 @@ describe('settings file migration through the real store', () => {
     const original = writeEncrypted({ temperature: 0.37, contextDocs: [NOTE], retiredLegacyKey: { keep: 'me' } })
     const before = getSettings()
 
-    const result = await migrateSettingsFileOnBoot()
+    const result = await migrateSettingsFileOnBoot(DATA)
 
     expect(result).toMatchObject({ status: 'migrated', from: 0, to: CURRENT_SETTINGS_SCHEMA_VERSION })
     const backup = `${settingsFile()}.pre-v0.bak`
@@ -71,7 +85,7 @@ describe('settings file migration through the real store', () => {
 
   it('never writes the profile as plaintext, even when the legacy file was plaintext', async () => {
     writeFileSync(settingsFile(), JSON.stringify({ contextDocs: [NOTE] }))
-    expect(await migrateSettingsFileOnBoot()).toMatchObject({ status: 'migrated' })
+    expect(await migrateSettingsFileOnBoot(DATA)).toMatchObject({ status: 'migrated' })
     for (const name of readdirSync(userData)) {
       if (name === 'secret-key.bin') continue
       expect(readFileSync(join(userData, name)).includes(NOTE), name).toBe(false)
@@ -87,12 +101,14 @@ describe('settings file migration through the real store', () => {
     writeEncrypted({ temperature: 0.9, contextDocs: [NOTE] })
     expect(getSettings().temperature).toBe(0.11)
 
-    await migrateSettingsFileOnBoot()
+    await migrateSettingsFileOnBoot(DATA)
 
     expect(getSettings().temperature).toBe(0.11)
     const persisted = readEncrypted(settingsFile())
     expect(persisted.temperature).toBe(0.9) // the user layer is untouched; policy is applied on read
-    expect(Object.keys(persisted).sort()).toEqual(['contextDocs', SETTINGS_VERSION_KEY, 'temperature'].sort())
+    expect(Object.keys(persisted).sort()).toEqual(
+      ['addedByMigration', 'contextDocs', SETTINGS_VERSION_KEY, 'temperature'].sort()
+    )
     setSettings({ temperature: 0.5 }) // a locked write is still dropped
     expect(getSettings().temperature).toBe(0.11)
   })
@@ -128,7 +144,7 @@ describe('settings file migration through the real store', () => {
     const original = writeEncrypted({ temperature: 0.37, retiredLegacyKey: 1 })
     const oldReaderBefore = SettingsSchema.parse({ ...DEFAULT_SETTINGS, ...readEncrypted(settingsFile()) })
 
-    await migrateSettingsFileOnBoot()
+    await migrateSettingsFileOnBoot(DATA)
 
     // The pre-G09 reader is `SettingsSchema.safeParse({ ...DEFAULT_SETTINGS, ...raw })`; the schema is unchanged.
     const migrated = readEncrypted(settingsFile())
@@ -140,20 +156,65 @@ describe('settings file migration through the real store', () => {
     expect(readFileSync(settingsFile()).equals(original)).toBe(true)
   })
 
-  it('a later settings save keeps the version stamp and every unknown key', async () => {
-    writeEncrypted({ temperature: 0.37, retiredLegacyKey: { keep: 'me' } })
-    await migrateSettingsFileOnBoot()
+  it('a stamp-only upgrade rewrites nothing at boot; the next ordinary save writes the version and keeps unknown keys', async () => {
+    const original = writeEncrypted({ temperature: 0.37, retiredLegacyKey: { keep: 'me' } })
+    expect(await migrateSettingsFileOnBoot()).toEqual({ status: 'deferred' })
+    expect(readFileSync(settingsFile()).equals(original)).toBe(true)
+    expect(existsSync(`${settingsFile()}.pre-v0.bak`)).toBe(false)
+
     setSettings({ temperature: 0.6 })
     expect(readEncrypted(settingsFile())).toMatchObject({
       temperature: 0.6,
       retiredLegacyKey: { keep: 'me' },
       [SETTINGS_VERSION_KEY]: CURRENT_SETTINGS_SCHEMA_VERSION
     })
+    expect(await migrateSettingsFileOnBoot()).toEqual({ status: 'current' })
   })
 
-  it('does nothing on a fresh profile', async () => {
+  it('a later save after a data migration keeps the stamp and every unknown key', async () => {
+    writeEncrypted({ temperature: 0.37, retiredLegacyKey: { keep: 'me' } })
+    await migrateSettingsFileOnBoot(DATA)
+    setSettings({ temperature: 0.6 })
+    expect(readEncrypted(settingsFile())).toMatchObject({
+      temperature: 0.6,
+      retiredLegacyKey: { keep: 'me' },
+      addedByMigration: true,
+      [SETTINGS_VERSION_KEY]: CURRENT_SETTINGS_SCHEMA_VERSION
+    })
+  })
+
+  it('a save that lands while the migration is running survives and is never overwritten', async () => {
+    writeEncrypted({ temperature: 0.37, retiredLegacyKey: 1 })
+    let saved = false
+    const racing = {
+      plan: {
+        current: 1,
+        migrations: [
+          {
+            ...DATA.plan.migrations[0],
+            up: (raw: Readonly<Record<string, unknown>>) => {
+              if (!saved) {
+                saved = true
+                setSettings({ temperature: 0.66 }) // the user's save lands after the migration read the file
+              }
+              return { ...raw, addedByMigration: true }
+            }
+          }
+        ]
+      }
+    }
+    expect(await migrateSettingsFileOnBoot(racing)).toEqual({ status: 'changed' })
+    expect(readEncrypted(settingsFile())).toMatchObject({ temperature: 0.66, retiredLegacyKey: 1 })
+    expect(readEncrypted(settingsFile()).addedByMigration).toBeUndefined()
+    expect(getSettings().temperature).toBe(0.66)
+    expect(existsSync(`${settingsFile()}.pre-v0.bak`)).toBe(false) // the aborted attempt leaves no stale backup
+  })
+
+  it('does nothing on a fresh profile, and the first save creates it with the version stamp', async () => {
     mkdirSync(userData, { recursive: true })
     expect(await migrateSettingsFileOnBoot()).toEqual({ status: 'missing' })
     expect(existsSync(settingsFile())).toBe(false)
+    setSettings({ temperature: 0.5 })
+    expect(readEncrypted(settingsFile())[SETTINGS_VERSION_KEY]).toBe(CURRENT_SETTINGS_SCHEMA_VERSION)
   })
 })

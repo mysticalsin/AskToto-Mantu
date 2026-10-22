@@ -4,20 +4,21 @@
  * Async fs only (FF-05a). Order of operations, and what each failure leaves behind:
  *   1. read + decode the file. Missing, unreadable or undecodable: do nothing; the original stays as it is
  *      (store.ts already serves safe defaults and refuses writes for an unreadable profile);
- *   2. plan. Current: do nothing. Newer than this build or a malformed version: do nothing, never rewrite;
+ *   2. plan. Current, or stamp-only (the version is written by the next save): do nothing. Newer than this build or a malformed version: do nothing, never rewrite;
  *   3. back the original up to `settings.json.pre-v<from>.bak` (exclusive create, so an older backup is never
  *      overwritten). A backup of a legacy plaintext file is written encrypted, so no plaintext copy appears.
  *      No backup, no rewrite;
  *   4. write the migrated profile (encrypted by the injected encoder) to a temp file, check the live file is
  *      still the bytes we read (a settings save that landed meanwhile wins, and the next boot retries), then
- *      rename it over the original.
+ *      rename it over the original. The caller awaits this before any settings writer exists.
  * The managed-policy layer is never read or merged here, so locks keep their meaning.
  */
 import { readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
 import {
   CURRENT_SETTINGS_SCHEMA_VERSION,
   planSettingsMigration,
-  settingsFileVersion
+  settingsFileVersion,
+  type SettingsMigration
 } from '@shared/settings-migrations'
 
 export interface SettingsFileCodec {
@@ -33,25 +34,48 @@ export interface SettingsMigrationLog {
 }
 
 export type SettingsMigrationResult =
-  | { status: 'missing' | 'unreadable' | 'current' | 'changed' }
+  | { status: 'missing' | 'unreadable' | 'current' | 'deferred' | 'changed' }
   | { status: 'future'; version: number }
-  | { status: 'failed'; reason: 'INVALID_VERSION' | 'PLAN_FAILED' | 'BACKUP_FAILED' | 'WRITE_FAILED' }
+  | { status: 'failed'; reason: 'INVALID_VERSION' | 'PLAN_FAILED' | 'BACKUP_FAILED' | 'WRITE_FAILED' | 'TIMEOUT' }
   | { status: 'migrated'; from: number; to: number; backupPath: string; unknownKeys: number }
 
-export async function migrateSettingsFile(
-  options: SettingsFileCodec & { path: string; log: SettingsMigrationLog; onWritten?: () => void }
-): Promise<SettingsMigrationResult> {
+export interface SettingsMigrationOptions extends SettingsFileCodec {
+  path: string
+  log: SettingsMigrationLog
+  onWritten?: () => void
+  /** Override the shipped chain (tests, future steps). */
+  plan?: { migrations?: readonly SettingsMigration[]; current?: number }
+  /** Bound on the file I/O. Past it nothing is committed and the original stays. */
+  timeoutMs?: number
+}
+
+/**
+ * Never rejects. Meant to be awaited at boot before the first window and before any IPC handler that can write
+ * settings exists, so nothing can save while it runs; the compare-before-rename below is the second guard.
+ */
+export async function migrateSettingsFile(options: SettingsMigrationOptions): Promise<SettingsMigrationResult> {
+  try {
+    return await run(options)
+  } catch {
+    options.log.warn('[settings] settings migration failed unexpectedly; settings.json is untouched')
+    return { status: 'failed', reason: 'WRITE_FAILED' }
+  }
+}
+
+async function run(options: SettingsMigrationOptions): Promise<SettingsMigrationResult> {
   const { path, log } = options
+  const signal = AbortSignal.timeout(options.timeoutMs ?? 5_000)
   let original: Buffer
   try {
-    original = await readFile(path)
+    original = await readFile(path, { signal })
   } catch (error) {
+    if (signal.aborted) return { status: 'failed', reason: 'TIMEOUT' }
     return (error as NodeJS.ErrnoException).code === 'ENOENT' ? { status: 'missing' } : { status: 'unreadable' }
   }
   const decoded = options.decode(original)
   if (!decoded) return { status: 'unreadable' }
 
-  const plan = planSettingsMigration(decoded.raw)
+  const plan = planSettingsMigration(decoded.raw, options.plan)
   if (plan.status === 'current') return { status: 'current' }
   if (plan.status === 'future') {
     log.warn(`[settings] settings.json is version ${plan.version}, newer than this build; leaving it untouched`)
@@ -65,13 +89,15 @@ export async function migrateSettingsFile(
     log.warn(`[settings] migration ${plan.migration ?? ''} refused (${plan.reason}); leaving settings.json untouched`)
     return { status: 'failed', reason: 'PLAN_FAILED' }
   }
+  // Stamp-only: nothing to back up or rewrite. The next ordinary save writes the version (stampSettingsVersion).
+  if (!plan.changesData) return { status: 'deferred' }
 
   const backupPath = `${path}.pre-v${plan.from}.bak`
   let createdBackup = false
   try {
     const backupBytes = decoded.encrypted ? original : options.encode(decoded.raw)
     try {
-      await writeFile(backupPath, backupBytes, { flag: 'wx', mode: 0o600 })
+      await writeFile(backupPath, backupBytes, { flag: 'wx', mode: 0o600, signal })
       createdBackup = true
     } catch (error) {
       // An earlier attempt already backed this version up: keep it, but only if it really is a file.
@@ -84,7 +110,8 @@ export async function migrateSettingsFile(
 
   const tmp = `${path}.tmp`
   try {
-    await writeFile(tmp, options.encode(plan.raw), { mode: 0o600 })
+    await writeFile(tmp, options.encode(plan.raw), { mode: 0o600, signal })
+    if (signal.aborted) throw new Error('timeout')
     if (!(await readFile(path)).equals(original)) {
       await rm(tmp, { force: true })
       if (createdBackup) await rm(backupPath, { force: true })
@@ -94,7 +121,7 @@ export async function migrateSettingsFile(
   } catch {
     await rm(tmp, { force: true }).catch(() => undefined)
     log.warn('[settings] could not write the migrated settings.json; the original is untouched')
-    return { status: 'failed', reason: 'WRITE_FAILED' }
+    return { status: 'failed', reason: signal.aborted ? 'TIMEOUT' : 'WRITE_FAILED' }
   }
   options.onWritten?.()
   log.info?.(

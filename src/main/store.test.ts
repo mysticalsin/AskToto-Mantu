@@ -72,7 +72,13 @@ vi.mock('openai', () => {
 // safeStorage (prod), V2 = AES-GCM file backend (dev / unpackaged — what these tests run under).
 const ENC_V1 = Buffer.from('ATKENC1\n')
 const ENC_V2 = Buffer.from('ATKENC2\n')
+// The version stamp (settingsSchemaVersion) rides along on every save; these suites pin the settings keys, and
+// settings-migration.store.test.ts pins the stamp itself.
 function readPersisted(path: string): Record<string, unknown> {
+  const { settingsSchemaVersion: _stamp, ...settings } = readPersistedRaw(path)
+  return settings
+}
+function readPersistedRaw(path: string): Record<string, unknown> {
   const buf = readFileSync(path)
   if (buf.subarray(0, ENC_V2.length).equals(ENC_V2)) {
     return JSON.parse(decryptSecret(buf.subarray(ENC_V2.length)))

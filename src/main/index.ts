@@ -9318,6 +9318,7 @@ if (!app.requestSingleInstanceLock()) {
   app
     .whenReady()
     .then(async () => {
+      await migrateSettingsFileOnBoot() // G09: bounded, never rejects; runs before any window or IPC handler can save settings
       const resourcesRoot = app.isPackaged ? process.resourcesPath : join(__dirname, '..', '..', 'resources')
       const { packageRuntimeContract, verifiedPackageContract } = await prepareSpeechPackRuntime(
         resourcesRoot,
@@ -9328,7 +9329,6 @@ if (!app.requestSingleInstanceLock()) {
       installInputPowerLifecycleHooks()
       const bootWork = createBootWork() // M2-0031: non-first-paint fs work starts after the first show, under the pool cap
       bootWorkGate = bootWork
-      bootWork.run('migrateSettingsFile', migrateSettingsFileOnBoot) // G09: versioned settings migration, backup first
       configureSidecarRegistry(createSidecarRegistry(app.getPath('userData')))
       // M2-0518: child processes first paint does not need; the reaper spares this launch's own sidecars, the memory gate reads freemem() meanwhile.
       bootWork.run('runBootSidecarReaper', () => runBootSidecarReaper(app.getPath('userData')))
