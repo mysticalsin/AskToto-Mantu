@@ -282,7 +282,11 @@ export function registerRecallIpc(deps: RecallIpcDependencies): void {
     if (!requireAuth()) return { ok: false, error: 'Sign in with your Mantu account first.' }
     const parsed = SetPushMarkerPayloadSchema.safeParse(raw)
     if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message || 'Invalid request.' }
-    return setMeetingPushMarker(getSettings(), parsed.data.file, parsed.data.field, parsed.data.key)
+    const s = getSettings()
+    const result = await setMeetingPushMarker(s, parsed.data.file, parsed.data.field, parsed.data.key)
+    // A marker is a metadata-only write: acknowledge it like the CRM flag, never rebuild the brain (Q04b).
+    if (result.ok) await acknowledgeEdit(s, parsed.data.file)
+    return result
   })
 
   // Speaker Intelligence: manual (re)trigger of the Teams-transcript speaker-name backfill for a past

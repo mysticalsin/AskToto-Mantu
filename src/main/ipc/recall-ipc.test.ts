@@ -322,5 +322,9 @@ describe('recall IPC — honest flags and bounded debriefs (Q07)', () => {
     expect(mocks.setMeetingPushMarker).not.toHaveBeenCalled()
     expect(await marker(event, { file: 'a.md', field: 'clickup_pushed', key: 'k1' })).toEqual({ ok: true })
     expect(mocks.setMeetingPushMarker).toHaveBeenCalledWith(settings, 'a.md', 'clickup_pushed', 'k1')
+    // Metadata-only write (Q04b): acknowledged, never an ingest or a whole-brain refresh.
+    expect(mocks.acknowledgeMetadataEdit).toHaveBeenCalledWith(settings, join('/meetings', 'a.md'))
+    expect(mocks.enqueueIngest).not.toHaveBeenCalled()
+    expect(mocks.requestSourceRefresh).not.toHaveBeenCalled()
   })
 })

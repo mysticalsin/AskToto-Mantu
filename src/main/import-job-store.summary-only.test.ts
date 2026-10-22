@@ -390,5 +390,6 @@ describe('summary-only import checkpoint holds', () => {
       JSON.stringify({ version: 1, state: 'overflow', reason: 'policy' })
     )
     await expect(store.list()).resolves.toEqual([])
-  })
+    // 1,025 real files: a cold hosted Windows runner (Defender scanning each write) needs more than 30 s.
+  }, 120_000)
 })
