@@ -1,4 +1,5 @@
 import { hmacHex, timingSafeEqualHex } from './hmac'
+import { createJwksCache, findRsaKey, parseJwt, rs256Kid, verifyRs256Signature } from './jwt-rs256'
 export const SESSION_COOKIE = 'metis_operator_session'
 
 export const CONSOLE_PATHS = [
@@ -49,6 +50,7 @@ export const ACCESS_BYPASS_PATHS = [
   '/v1/skills/manifest',
   '/v1/integrations',
   '/v1/model-policy',
+  '/v1/enroll',
   '/v1/speech/sessions',
   '/v1/speech/sessions/*',
   '/assets/*'
@@ -338,30 +340,14 @@ export async function resolveAdminIdentity(
 
 /** Cloudflare Access certs, cached per isolate so an admin click does not re-fetch the JWKS every time. */
 const JWKS_TTL_MS = 5 * 60 * 1000
-type Jwk = { kid?: string; kty?: string; crv?: string; x?: string; y?: string; n?: string; e?: string }
-const jwksCache = new Map<string, { at: number; keys: Jwk[] }>()
-
-function b64urlToString(s: string): string {
-  return atob(s.replace(/-/g, '+').replace(/_/g, '/'))
-}
-
-async function fetchJwks(teamDomain: string, now: number): Promise<Jwk[] | null> {
-  const base = teamDomain.replace(/\/$/, '')
-  const cached = jwksCache.get(base)
-  if (cached && now - cached.at < JWKS_TTL_MS) return cached.keys
-  const res = await fetch(`${base}/cdn-cgi/access/certs`, { signal: AbortSignal.timeout(5000) })
-  if (!res.ok) return null
-  const jwks = (await res.json()) as { keys?: Jwk[] }
-  const keys = Array.isArray(jwks.keys) ? jwks.keys : []
-  jwksCache.set(base, { at: now, keys })
-  return keys
-}
+const accessJwks = createJwksCache({ ttlMs: JWKS_TTL_MS })
 
 /**
  * Verify a Cloudflare Access application token: RS256 signature against the team JWKS, then the claims
  * Access itself documents as mandatory. `exp` is required and must be in the future, `nbf` (when present)
  * in the past, and `iss` must be the team domain. Any claim failing closes the door; this fallback exists
  * for the JWT header/cookie path only and is never weaker than the `ctx.access` binding check.
+ * The RS256 core (alg allowlist, kid selection, signature) is the shared `jwt-rs256.ts`.
  */
 export async function verifyAccessJwt(
   token: string,
@@ -370,26 +356,16 @@ export async function verifyAccessJwt(
   now = Date.now()
 ): Promise<string | null> {
   try {
-    const keys = await fetchJwks(teamDomain, now)
+    const jwksUrl = `${teamDomain.replace(/\/$/, '')}/cdn-cgi/access/certs`
+    const keys = await accessJwks.keys(jwksUrl, now)
     if (!keys) return null
-    const parts = token.split('.')
-    if (parts.length !== 3) return null
-    const header = JSON.parse(b64urlToString(parts[0])) as { kid?: string; alg?: string }
-    if (header.alg !== 'RS256') return null
-    const key = keys.find((k) => k.kid === header.kid)
-    if (!key) return null
-    const cryptoKey = await crypto.subtle.importKey(
-      'jwk',
-      key as JsonWebKey,
-      { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' },
-      false,
-      ['verify']
-    )
-    const data = new TextEncoder().encode(`${parts[0]}.${parts[1]}`)
-    const sig = Uint8Array.from(b64urlToString(parts[2]), (c) => c.charCodeAt(0))
-    const ok = await crypto.subtle.verify('RSASSA-PKCS1-v1_5', cryptoKey, sig, data)
-    if (!ok) return null
-    const payload = JSON.parse(b64urlToString(parts[1])) as {
+    const parsed = parseJwt(token)
+    if (!parsed) return null
+    const kid = rs256Kid(parsed.header)
+    if (!kid) return null
+    const key = findRsaKey(keys, kid)
+    if (!key || !(await verifyRs256Signature(parsed, key))) return null
+    const payload = parsed.payload as {
       aud?: string | string[]
       email?: string
       identity?: { email?: string }
