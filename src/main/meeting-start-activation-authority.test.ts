@@ -84,4 +84,25 @@ describe('MeetingStartActivationAuthority', () => {
     authority.revokeAll()
     expect(authority.hasPending(frame)).toBe(false)
   })
+
+  it('names why a mint is refused, in the order the checks run, without changing what mint does', () => {
+    const { authority, current, frame } = make()
+    const denial = (override: Partial<MeetingStartActivationState>, f = frame) => {
+      const probe = new MeetingStartActivationAuthority({ state: () => ({ ...current, ...override }) })
+      const reason = probe.mintDenial(f, MEETING_START_ACTION)
+      expect(probe.mint(f, MEETING_START_ACTION)).toBe(reason === null)
+      return reason
+    }
+    expect(authority.mintDenial(frame, MEETING_START_ACTION)).toBeNull()
+    expect(authority.mintDenial(frame, 'other' as MeetingStartAction)).toBe('wrong-action')
+    expect(denial({})).toBeNull()
+    expect(denial({ isWindowVisible: false })).toBe('window-not-visible')
+    expect(denial({ isAuthenticated: false })).toBe('not-authenticated')
+    expect(denial({ isStartAllowed: false })).toBe('start-not-allowed')
+    expect(denial({ mainWebContentsId: 9 })).toBe('frame-not-current')
+    expect(denial({ currentUrl: 'app://metis/other.html' })).toBe('frame-not-current')
+    expect(denial({}, { ...frame, isTopFrame: false })).toBe('frame-not-current')
+    // A hidden window is reported as hidden only for the current frame: a stale frame is the more basic fault.
+    expect(denial({ isWindowVisible: false, mainFrameId: '9:9' })).toBe('frame-not-current')
+  })
 })

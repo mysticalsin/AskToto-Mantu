@@ -169,6 +169,8 @@ export type AuditEvent =
   | 'capture.failed'
   | 'capture.check'
   | 'transcript.saved'
+  // Q14: the main-side Start path (activation, readiness, transition) as stage/outcome/reason codes only.
+  | 'meeting.start'
   | 'writeup.span'
   | 'transcript.deleted'
   | 'transcript.renamed'

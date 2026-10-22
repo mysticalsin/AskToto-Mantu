@@ -92,6 +92,7 @@ import type { CloudSpeechConsentAcknowledgement } from './lib/cloud-speech-liste
 import { useCloudSpeechConsent } from './lib/cloud-speech-consent'
 import { freshMeetingPauseClock, setMeetingPaused } from './lib/meeting-clock'
 import { listenOperatorGateNotice, resolveListenEngine } from './lib/listen-startup-policy'
+import { runListenToggle, useStartWatchdog } from './lib/listen-toggle'
 import { transcriptToText, recapPersistAction, type RecapPersistTarget } from './lib/transcript'
 import { WriteupSpans } from './lib/writeup-spans'
 import {
@@ -975,19 +976,13 @@ export function App(): JSX.Element {
   const onReviewDirtyChange = useCallback((dirty: boolean, save?: () => Promise<boolean>): void => {
     reviewDirtyRef.current = { dirty, save }
   }, [])
-  // Mirrors `view` for guardReviewNav below via a ref (rather than closing over the `view` state value
-  // directly), so the helper keeps a STABLE identity across renders — required because several callers
-  // (onBarHistory, onBarSettings, and the memoized Bar callbacks) are themselves memoized with empty/near-
-  // empty dep arrays for React.memo(Bar); a guard fn whose identity changed on every view switch would
-  // force those deps to include it and defeat that memoization (see "Stabilized Bar callbacks" below).
+  // Mirrors `view` for guardReviewNav via a ref so the helper keeps a STABLE identity: several callers are
+  // memoized with near-empty deps for React.memo(Bar) (see "Stabilized Bar callbacks" below).
   const viewRef = useRef(view)
   viewRef.current = view
 
-  // Shared guard for every view-switch path that could otherwise silently discard an in-progress, unsaved
-  // recap edit on Review (see reviewDirtyRef above and its two existing call sites: onBarMinimize,
-  // onTogglePanel). Only fires the confirm when Review is actually open AND dirty; every other view-switch
-  // (History, Settings, and the hotkey dispatch below) used to skip this check entirely and navigate away
-  // ungated, silently dropping the edit.
+  // Shared guard for every view-switch path that could silently discard an unsaved recap edit on Review
+  // (see reviewDirtyRef). Only asks when Review is open AND dirty.
   // `startsMeeting`: the choice leads straight into a new meeting, so the sheet's Save and Discard buttons
   // mint the meeting-start activation (the click on the Bar's record button may be older than its 5 s grant).
   const confirmReviewNavigation = useCallback(
@@ -1019,11 +1014,8 @@ export function App(): JSX.Element {
   // True for the current live-session Review when the recap was intentionally skipped because no AI
   // provider is configured (rather than fired and left to fail with a red error) — see maybeFireRecap.
   const [recapSkipped, setRecapSkipped] = useState(false)
-  // Ephemeral, per-meeting live-transcript visibility — deliberately NOT settings.showLiveTranscript.
-  // That Settings field is a persistent default ("On shows the rolling transcript... off shows replies
-  // only"); this is the in-meeting "Transcript" pill's session-only state, initialized from the default
-  // at each meeting start (see startListen) and never written back to disk, so toggling it live no longer
-  // clobbers the user's saved preference for every future meeting.
+  // Ephemeral per-meeting live-transcript visibility, deliberately NOT settings.showLiveTranscript (the saved
+  // default): seeded from it at each meeting start (see startListen) and never written back to disk.
   const [transcriptShown, setTranscriptShown] = useState(false)
 
   // Drives the overlay's glass-background alpha (Settings → Personalize → Appearance). A single CSS
@@ -2142,10 +2134,9 @@ export function App(): JSX.Element {
     settings?.providerModels
   ])
 
-  // Cold Calling Mode — "Book meetings": drafts the actual outreach for everyone named in the coaching
-  // notes' "People to invite or send to" section. Manual, user-confirmed click (Review's Book meetings /
-  // Redo chip) — this can route to a real calendar/scheduling tool through Dust, so it never fires itself.
-  // Same base-Dust-agent routing as generateFollowup: Métis's own conversation plumbing, no special agent.
+  // Cold Calling Mode "Book meetings": drafts outreach for everyone in the coaching notes' "People to invite or
+  // send to". Manual click only (Review's Book meetings / Redo chip): it can reach a real scheduling tool via
+  // Dust. Same base-Dust-agent routing as generateFollowup.
   const generateBookMeetings = useCallback(() => {
     const notes = coaching.answer?.text ?? ''
     if (!notes.trim()) return
@@ -2167,8 +2158,7 @@ export function App(): JSX.Element {
     if (ok) setInput('')
   }, [askScreen, input])
 
-  // Changing the spoken language in Settings applies to the RUNNING session — listen.setLanguage is a
-  // no-op when the value didn't change or nothing is live, so this never restarts capture.
+  // A Settings language change applies to the RUNNING session; listen.setLanguage is a no-op when unchanged.
   useEffect(() => {
     if (!listen.listening) return
     void listen.setLanguage(settings?.asrLanguage ?? 'auto')
@@ -2176,11 +2166,8 @@ export function App(): JSX.Element {
 
   const startListen = useCallback(
     (rescueExisting = true, acceptedCloudConsent?: CloudSpeechConsentAcknowledgement) => {
-      // PLAN.md P2.2b #2: Listen is Operator-gated. Checked synchronously against the already-synced
-      // `settings` object (never a fresh IPC round trip) so a refusal costs zero latency on the same-turn
-      // capture path below (MQA-285) — an allowed seat pays nothing extra, a refused one never touches the
-      // mic. Only gated when Operator is actually configured; an unconfigured seat behaves exactly as
-      // before this feature existed.
+      // PLAN.md P2.2b #2: Listen is Operator-gated, checked synchronously against the synced `settings` (no IPC
+      // round trip, MQA-285): a refused seat never touches the mic; an unconfigured Operator is not gated.
       const refusal = listenOperatorGateNotice(settings ?? {})
       if (refusal) {
         setOperatorGateNotice(refusal)
@@ -2190,14 +2177,12 @@ export function App(): JSX.Element {
       if (!cloudConsentFlow.authorizeSettingsStart(settings, rescueExisting, acceptedCloudConsent)) return
       stoppingRef.current = false // a fresh session can be stopped again — clear any latch left by the last one
       writeupSpansRef.current.reset() // spans belong to the Stop of the session being left, never the next one
-      // A rapid Stop -> New meeting can start a fresh session while the previous endReview's recap is still
-      // waiting on that old session's drain (pendingRecapRef) — drop it so it can't fire into (or read the
-      // transcript of) the session that's about to start.
+      // A rapid Stop -> New meeting can start while the previous recap still waits on the old drain
+      // (pendingRecapRef): drop it so it cannot fire into, or read, the session about to start.
       pendingRecapRef.current = false
       setRecapSkipped(false)
-      // A previous session's transcript can still be sitting unsaved in listen state (ASR crash tore the
-      // session down; a failed recap was abandoned). listen.clear() below would wipe it — rescue first.
-      // Idempotent via savedRef, so normally-saved meetings never double-save. Ref-indirected because
+      // A previous session's transcript can still sit unsaved in listen state (ASR crash, abandoned recap) and
+      // listen.clear() below would wipe it: rescue first. Idempotent via savedRef; ref-indirected because
       // saveMeetingNow is defined later in this component.
       if (rescueExisting && !listen.listening && listen.lines.length) {
         cancelledRef.current = true
@@ -2399,11 +2384,8 @@ export function App(): JSX.Element {
   }, [maybeFireRecap])
 
   const endReview = useCallback(() => {
-    // Idempotence latch: listen.listening stays true while stop()'s progress-aware terminal drain runs in
-    // the background (listen.ts), so toggleListen() can still read "listening"
-    // and re-enter endReview() from a second Stop click landing inside that window. Without this guard the
-    // re-entrant call re-arms pendingRecapRef and could cancel/restart an already-fired recap stream
-    // indefinitely instead of ever letting it land.
+    // Idempotence latch: listen.listening stays true while stop()'s drain runs (listen.ts), so a second Stop
+    // would re-arm pendingRecapRef and restart a fired recap. runListenToggle answers that click on screen.
     if (stoppingRef.current) return
     stoppingRef.current = true
     // MQA-285: recap/write must not block the Stop click. Warm the on-device sidecar in the background
@@ -2420,10 +2402,28 @@ export function App(): JSX.Element {
     maybeFireRecap() // covers the rare case where listen.listening is already false (no drain pending)
   }, [listen.stop, listen.text, maybeFireRecap])
 
-  const toggleListen = useCallback(() => {
-    if (listen.listening) void endReview()
-    else guardReviewNav(startListen, true) // a new meeting unmounts Review: ask before dropping an unsaved recap edit
-  }, [listen.listening, endReview, startListen, guardReviewNav])
+  const startWatchdog = useStartWatchdog(
+    listen.listening,
+    !!(operatorGateNotice || listen.error || cloudConsentFlow.request || navigationGuardRequest),
+    setOperatorGateNotice
+  )
+  const toggleListen = useCallback(
+    () =>
+      runListenToggle(
+        { listening: listen.listening, stopInProgress: stoppingRef.current },
+        {
+          startListen: (onStarted) =>
+            guardReviewNav(() => {
+              startListen()
+              onStarted()
+            }, true),
+          endReview,
+          notify: setOperatorGateNotice,
+          watchdog: startWatchdog
+        }
+      ),
+    [listen.listening, endReview, startListen, guardReviewNav, startWatchdog]
+  )
 
   // Persist a meeting's transcript immediately (used when a session is abandoned without a recap — e.g.
   // "New meeting" or reset — so a started meeting is never lost). Idempotent per meeting via savedRef.

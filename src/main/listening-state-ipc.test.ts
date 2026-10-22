@@ -16,6 +16,7 @@ function harness(
     setTrayRecording: vi.fn(),
     setRecordingPowerSaveBlock: vi.fn(),
     onMeetingStart: vi.fn(),
+    startAudit: vi.fn(),
     releaseParakeet: vi.fn(releaseParakeet),
     releaseSpeakerEmbedding: vi.fn(releaseSpeakerEmbedding)
   }
@@ -168,5 +169,52 @@ describe('registered listening-state native lifecycle', () => {
     expect(accepted).toBe(true)
     expect(deps.consumeMeetingStartActivation).toHaveBeenCalledTimes(2)
     expect(deps.setListeningActive).toHaveBeenCalledExactlyOnceWith(true)
+  })
+})
+
+describe('listening-state Start audit (Q14)', () => {
+  it('records an accepted start, once, and no stop', async () => {
+    const { handler, deps } = harness(async () => undefined)
+    await handler({}, { on: true, startedAt: 5 })
+    await handler({}, { on: false, startedAt: 5 })
+    expect(deps.startAudit.mock.calls).toEqual([['transition', 'accepted']])
+  })
+
+  it('says the activation grant was missing when the owner asked for one and got none', async () => {
+    const { handler, deps } = harness(async () => undefined)
+    deps.consumeMeetingStartActivation.mockReturnValue(false)
+    expect(await handler({}, { on: true, startedAt: 5 })).toBe(false)
+    expect(deps.startAudit).toHaveBeenCalledExactlyOnceWith('transition', 'denied', 'no-activation-grant')
+  })
+
+  it('separates a rejection before the grant was even asked for from one after it was consumed', async () => {
+    const before = harness(async () => undefined)
+    before.deps.acceptTransition.mockReturnValue(false)
+    await before.handler({}, { on: true, startedAt: 5 })
+    expect(before.deps.startAudit).toHaveBeenCalledExactlyOnceWith('transition', 'denied', 'rejected-before-grant')
+
+    const after = harness(async () => undefined)
+    after.deps.acceptTransition.mockImplementation((_change, authorizeStart) => {
+      authorizeStart()
+      return false
+    })
+    await after.handler({}, { on: true, startedAt: 5 })
+    expect(after.deps.startAudit).toHaveBeenCalledExactlyOnceWith('transition', 'denied', 'rejected-after-grant')
+  })
+
+  it('records a signed-out start and a malformed start request, and nothing for a refused stop', async () => {
+    const signedOut = harness(async () => undefined)
+    signedOut.deps.requireAuth.mockReturnValue(false)
+    await signedOut.handler({}, { on: true, startedAt: 5 })
+    expect(signedOut.deps.startAudit).toHaveBeenCalledExactlyOnceWith('transition', 'denied', 'not-authenticated')
+
+    const malformed = harness(async () => undefined)
+    await malformed.handler({}, { on: true, startedAt: 'x' })
+    expect(malformed.deps.startAudit).toHaveBeenCalledExactlyOnceWith('transition', 'denied', 'invalid-request')
+
+    const stop = harness(async () => undefined)
+    stop.deps.acceptTransition.mockReturnValue(false)
+    await stop.handler({}, { on: false, startedAt: 5 })
+    expect(stop.deps.startAudit).not.toHaveBeenCalled()
   })
 })

@@ -35,6 +35,7 @@ function setup(overrides: Partial<MeetingMicIpcDependencies> = {}) {
     isInputClosing: () => false,
     isCaptureLifecycleReady: () => true,
     isMainWindowVisible: () => true,
+    startAudit: vi.fn(),
     activationFrameFromEvent: vi.fn(() => activationFrame),
     activation: {
       mint: vi.fn(() => {
@@ -185,5 +186,57 @@ describe('meeting-start activation IPC', () => {
     const noFrame = setup({ activationFrameFromEvent: () => null })
     expect(noFrame.handler(IPC.meetingStartActivationCancel)(invokeEvent())).toBe(false)
     expect(noFrame.deps.activation.revokeAll).not.toHaveBeenCalled()
+  })
+})
+
+describe('meeting-start activation audit (Q14)', () => {
+  it('records a granted activation without any content', () => {
+    const { deps, handler } = setup()
+    handler(IPC.meetingStartActivationObserved)(invokeEvent())
+    expect(deps.startAudit).toHaveBeenCalledExactlyOnceWith('activation', 'granted')
+  })
+
+  it.each([
+    ['not-authenticated', { requireAuth: () => false }],
+    ['input-closing', { isInputClosing: () => true }],
+    ['window-not-visible', { isMainWindowVisible: () => false }]
+  ] as const)('records why a hidden, closing or signed-out activation was refused: %s', (reason, overrides) => {
+    const { deps, handler } = setup(overrides)
+    expect(handler(IPC.meetingStartActivationObserved)(invokeEvent())).toBe(false)
+    expect(deps.startAudit).toHaveBeenCalledExactlyOnceWith('activation', 'denied', reason)
+  })
+
+  it('records a missing sender frame', () => {
+    const { deps, handler } = setup({ activationFrameFromEvent: () => null })
+    handler(IPC.meetingStartActivationObserved)(invokeEvent())
+    expect(deps.startAudit).toHaveBeenCalledExactlyOnceWith('activation', 'denied', 'no-frame')
+  })
+
+  it("records the authority's own reason when the mint is refused after the window gate", () => {
+    const { deps, handler } = setup()
+    deps.activation.mint = vi.fn(() => false)
+    deps.activation.mintDenial = vi.fn(() => 'frame-not-current' as const)
+    handler(IPC.meetingStartActivationObserved)(invokeEvent())
+    expect(deps.startAudit).toHaveBeenCalledExactlyOnceWith('activation', 'denied', 'frame-not-current')
+  })
+
+  it('records a generic refusal when the authority gives no reason', () => {
+    const { deps, handler } = setup()
+    deps.activation.mint = vi.fn(() => false)
+    handler(IPC.meetingStartActivationObserved)(invokeEvent())
+    expect(deps.startAudit).toHaveBeenCalledExactlyOnceWith('activation', 'denied', 'refused')
+  })
+
+  it('records a refused readiness fallback, and nothing for a ready one', () => {
+    const ready = setup()
+    expect(ready.handler(IPC.meetingStartActivationReady)(invokeEvent())).toBe(true)
+    expect(ready.deps.startAudit).not.toHaveBeenCalled()
+    const pending = setup()
+    vi.mocked(pending.deps.activation.hasPending).mockReturnValue(false)
+    expect(pending.handler(IPC.meetingStartActivationReady)(invokeEvent())).toBe(false)
+    expect(pending.deps.startAudit).toHaveBeenCalledExactlyOnceWith('activation-ready', 'denied', 'no-pending-grant')
+    const hidden = setup({ isMainWindowVisible: () => false })
+    hidden.handler(IPC.meetingStartActivationReady)(invokeEvent())
+    expect(hidden.deps.startAudit).toHaveBeenCalledExactlyOnceWith('activation-ready', 'denied', 'window-not-visible')
   })
 })

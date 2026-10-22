@@ -796,6 +796,21 @@ async function startWithDiagnosis(session) {
       .audit()
       .slice(-8)
       .map((record) => record.event)
+    // Q14: the app's own Start diagnostics (stage, outcome, reason code: never content) and whether it told the user why.
+    const startAudit = session
+      .audit()
+      .filter((record) => record.event === 'meeting.start')
+      .slice(-6)
+      .map((record) => `${record.stage}:${record.outcome}${record.reason ? `:${record.reason}` : ''}`)
+    const notices = await page
+      .evaluate(() => {
+        const text = document.body?.innerText ?? ''
+        return {
+          couldntStart: text.includes("couldn't start listening"),
+          stillFinishing: text.includes('Still finishing your last meeting')
+        }
+      })
+      .catch(() => null)
     let retry
     try {
       const live = await startSyntheticMeeting(session, { timeoutMs: 20_000 })
@@ -815,6 +830,8 @@ async function startWithDiagnosis(session) {
         page: page_,
         controls: facts && { live: facts.live, canStart: facts.canStart, modals: facts.modals },
         recentAudit,
+        startAudit,
+        notices,
         retry
       }
     }

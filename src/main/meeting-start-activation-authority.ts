@@ -5,6 +5,15 @@ import { MEETING_START_GRANT_TTL_MS } from '@shared/meeting-start-grant'
 export const MEETING_START_ACTION = 'meeting.start' as const
 export type MeetingStartAction = typeof MEETING_START_ACTION
 
+/** Content-free reason codes for a refused mint; they go to the audit log so a swallowed Start can be explained. */
+export type MeetingStartMintDenial =
+  | 'wrong-action'
+  | 'frame-not-current'
+  | 'window-not-visible'
+  | 'not-authenticated'
+  | 'start-not-allowed'
+  | 'clock-invalid'
+
 export interface MeetingStartActivationFrame {
   readonly webContentsId: number
   readonly frameId: string
@@ -45,18 +54,22 @@ export class MeetingStartActivationAuthority {
     this.#ttlMs = options.ttlMs ?? MEETING_START_GRANT_TTL_MS
   }
 
+  /** Why a mint would be refused right now, or null when it would be granted. First failing check wins. */
+  mintDenial(frame: MeetingStartActivationFrame, action: MeetingStartAction): MeetingStartMintDenial | null {
+    const state = this.#state()
+    if (action !== MEETING_START_ACTION) return 'wrong-action'
+    if (!this.#frameIsCurrent(frame, state)) return 'frame-not-current'
+    if (!state.isWindowVisible) return 'window-not-visible'
+    if (!state.isAuthenticated) return 'not-authenticated'
+    if (!state.isStartAllowed) return 'start-not-allowed'
+    if (!Number.isFinite(this.#now())) return 'clock-invalid'
+    return null
+  }
+
   /** Mints from a trusted main/preload event. The grant ID never leaves this object. */
   mint(frame: MeetingStartActivationFrame, action: MeetingStartAction): boolean {
     const state = this.#state()
-    if (
-      action !== MEETING_START_ACTION ||
-      !this.#frameIsCurrent(frame, state) ||
-      !state.isWindowVisible ||
-      !state.isAuthenticated ||
-      !state.isStartAllowed ||
-      !Number.isFinite(this.#now())
-    )
-      return false
+    if (this.mintDenial(frame, action) !== null) return false
     this.#discardInvalid()
     const existing = [...this.#grants.values()].some((grant) => this.#matches(grant, frame, action, state))
     if (existing) return true

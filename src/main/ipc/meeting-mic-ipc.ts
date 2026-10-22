@@ -8,6 +8,7 @@ import {
   type MeetingStartActivationAuthority,
   type MeetingStartActivationFrame
 } from '../meeting-start-activation-authority'
+import { type MeetingStartAudit, type MeetingStartReason, recordMeetingStart } from '../meeting-start-audit'
 
 export interface MeetingMicIpcDependencies {
   ipcMain: Pick<IpcMain, 'handle'>
@@ -20,7 +21,10 @@ export interface MeetingMicIpcDependencies {
   /** True when the main window exists, is not destroyed, and is visible. */
   isMainWindowVisible: () => boolean
   activationFrameFromEvent: (event: IpcMainInvokeEvent) => MeetingStartActivationFrame | null
-  activation: Pick<MeetingStartActivationAuthority, 'mint' | 'hasPending' | 'revokeAll'>
+  activation: Pick<MeetingStartActivationAuthority, 'mint' | 'hasPending' | 'revokeAll'> &
+    Partial<Pick<MeetingStartActivationAuthority, 'mintDenial'>>
+  /** Content-free Start diagnostics (stage, outcome, reason code). Defaults to the audit-log recorder. */
+  startAudit?: MeetingStartAudit
   capture: Pick<MeetingMicCaptureAuthority, 'admit' | 'confirm' | 'release'>
 }
 
@@ -36,7 +40,14 @@ function captureFrameFromEvent(event: IpcMainInvokeEvent): MeetingMicCaptureFram
 
 /** Main-window meeting microphone admission and meeting-start activation handlers. */
 export function registerMeetingMicIpc(deps: MeetingMicIpcDependencies): void {
-  const activationAllowed = (): boolean => deps.requireAuth() && !deps.isInputClosing() && deps.isMainWindowVisible()
+  const startAudit = deps.startAudit ?? recordMeetingStart
+  /** The first failing gate, in the order the gates run (auth is checked before closing or visibility state). */
+  const activationBlock = (): MeetingStartReason | null => {
+    if (!deps.requireAuth()) return 'not-authenticated'
+    if (deps.isInputClosing()) return 'input-closing'
+    if (!deps.isMainWindowVisible()) return 'window-not-visible'
+    return null
+  }
 
   deps.ipcMain.handle(IPC.meetingMicAdmission, (event, raw: unknown): MeetingMicCaptureGrant | null => {
     deps.assertMainWindow(event)
@@ -48,15 +59,29 @@ export function registerMeetingMicIpc(deps: MeetingMicIpcDependencies): void {
   })
   deps.ipcMain.handle(IPC.meetingStartActivationObserved, (event): boolean => {
     deps.assertMainWindow(event)
-    if (!activationAllowed()) return false
+    const blocked = activationBlock()
+    if (blocked) {
+      startAudit('activation', 'denied', blocked)
+      return false
+    }
     const frame = deps.activationFrameFromEvent(event)
-    return frame ? deps.activation.mint(frame, MEETING_START_ACTION) : false
+    if (!frame) {
+      startAudit('activation', 'denied', 'no-frame')
+      return false
+    }
+    const minted = deps.activation.mint(frame, MEETING_START_ACTION)
+    if (minted) startAudit('activation', 'granted')
+    else startAudit('activation', 'denied', deps.activation.mintDenial?.(frame, MEETING_START_ACTION) ?? 'refused')
+    return minted
   })
   deps.ipcMain.handle(IPC.meetingStartActivationReady, (event): boolean => {
     deps.assertMainWindow(event)
-    if (!activationAllowed()) return false
-    const frame = deps.activationFrameFromEvent(event)
-    return frame ? deps.activation.hasPending(frame) : false
+    const blocked = activationBlock()
+    const frame = blocked ? null : deps.activationFrameFromEvent(event)
+    const ready = frame ? deps.activation.hasPending(frame) : false
+    // Only the denied fallback is worth a record: the common path never calls this handler at all.
+    if (!ready) startAudit('activation-ready', 'denied', blocked ?? (frame ? 'no-pending-grant' : 'no-frame'))
+    return ready
   })
   deps.ipcMain.handle(IPC.meetingStartActivationCancel, (event): boolean => {
     deps.assertMainWindow(event)
