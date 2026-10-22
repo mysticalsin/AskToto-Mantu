@@ -8,13 +8,7 @@ vi.mock('electron', () => ({
 }))
 vi.mock('../logger', () => ({ mainLog: { info: vi.fn(), warn: vi.fn() }, auditLog: vi.fn() }))
 
-import {
-  VOICE_ACTIONS_RELEASE_DEFAULT,
-  createVoiceChordWiring,
-  resolveVoiceActionsEnabled,
-  winKeywatchSpawnSpec,
-  type VoiceChordWiringDeps
-} from './chord-wiring'
+import { createVoiceChordWiring, winKeywatchSpawnSpec, type VoiceChordWiringDeps } from './chord-wiring'
 import type { LineHelperHandlers } from '../infra/process/line-helper-host'
 
 type PowerEvent = 'lock-screen' | 'unlock-screen' | 'suspend' | 'resume'
@@ -27,7 +21,7 @@ function build(overrides: Partial<VoiceChordWiringDeps> = {}) {
   const state = { signedIn: true, meeting: false, onboarding: false }
   const wiring = createVoiceChordWiring({
     platform: 'darwin',
-    qaIdentityBuild: true,
+    enabled: () => true,
     requireAuth: () => state.signedIn,
     meetingReserved: () => state.meeting,
     onboardingExclusive: () => state.onboarding,
@@ -51,23 +45,9 @@ function build(overrides: Partial<VoiceChordWiringDeps> = {}) {
   return { wiring, spawned, power, audits, chordEvents, state }
 }
 
-describe('resolveVoiceActionsEnabled: Preview, off by default in release builds', () => {
-  it('release builds stay off until the owner flips the default or the person opts in', () => {
-    expect(VOICE_ACTIONS_RELEASE_DEFAULT).toBe(false)
-    expect(resolveVoiceActionsEnabled({ qaIdentityBuild: false, userEnabled: undefined })).toBe(false)
-    expect(resolveVoiceActionsEnabled({ qaIdentityBuild: false, userEnabled: true })).toBe(true)
-    expect(resolveVoiceActionsEnabled({ qaIdentityBuild: false, userEnabled: false })).toBe(false)
-  })
-
-  it('QA builds are on unless the person turned it off', () => {
-    expect(resolveVoiceActionsEnabled({ qaIdentityBuild: true, userEnabled: undefined })).toBe(true)
-    expect(resolveVoiceActionsEnabled({ qaIdentityBuild: true, userEnabled: false })).toBe(false)
-  })
-})
-
 describe('createVoiceChordWiring', () => {
   it('a release build with no opt-in never spawns a helper, at boot or on any refresh', () => {
-    const t = build({ qaIdentityBuild: false })
+    const t = build({ enabled: () => false })
     t.wiring.start()
     t.wiring.refresh()
     expect(t.spawned).toHaveLength(0)
@@ -84,8 +64,8 @@ describe('createVoiceChordWiring', () => {
   })
 
   it('an explicit opt-in turns a release build on, and the same wiring turns it off again', () => {
-    let optIn: boolean | undefined = true
-    const t = build({ qaIdentityBuild: false, userEnabled: () => optIn })
+    let optIn = true
+    const t = build({ enabled: () => optIn })
     t.wiring.start()
     expect(t.spawned).toHaveLength(1)
     optIn = false

@@ -11,6 +11,7 @@
  */
 import { z } from 'zod'
 import { defineSettingsFeature } from './settings-feature-module'
+import { MODIFIER_BITS } from './voice/modifier-mask'
 
 /**
  * THE release flag. Flip this to `true` (one line) once the owner's physical checklist passes (the chord in
@@ -19,28 +20,21 @@ import { defineSettingsFeature } from './settings-feature-module'
 export const VOICE_ACTIONS_RELEASE_DEFAULT_ON = false
 
 /**
- * Modifier tokens the hold watcher understands. Modifier-only: a hold of letter keys would need key
- * identities, which the watcher protocol deliberately never carries. `l`/`r` prefixes name one physical side.
+ * Chord tokens are the hold watcher's own modifier names (`MODIFIER_BITS` in voice/modifier-mask.ts): one
+ * vocabulary for the setting, the recognizer and the helpers. Modifier-only: a hold of letter keys would need key
+ * identities, which the helper protocol deliberately never carries. `unsided` is a protocol value, never a chord.
  */
 export const VOICE_CHORD_TOKENS = [
-  'control',
-  'option',
-  'command',
-  'shift',
-  'fn',
-  'lcontrol',
-  'rcontrol',
-  'loption',
-  'roption',
-  'lcommand',
-  'rcommand',
-  'lshift',
-  'rshift',
-  'lalt',
-  'ralt',
-  'lwin',
-  'rwin'
-] as const
+  'leftControl',
+  'rightControl',
+  'leftAlt',
+  'rightAlt',
+  'leftCommand',
+  'rightCommand',
+  'leftShift',
+  'rightShift',
+  'fn'
+] as const satisfies ReadonlyArray<Exclude<keyof typeof MODIFIER_BITS, 'unsided'>>
 export type VoiceChordToken = (typeof VOICE_CHORD_TOKENS)[number]
 
 const ChordSchema = z.array(z.enum(VOICE_CHORD_TOKENS)).min(1).max(4)
@@ -49,10 +43,14 @@ export const VoiceActionsSettingsSchema = z.object({
   /** `null` follows the build default (QA on, release per VOICE_ACTIONS_RELEASE_DEFAULT_ON). */
   enabled: z.boolean().nullable().default(null),
   /** Hold-to-talk chord per platform. Default: Right Command (macOS) and Right Control (Windows). */
-  holdChord: z.object({ mac: ChordSchema.default(['rcommand']), win: ChordSchema.default(['rcontrol']) }).default({
-    mac: ['rcommand'],
-    win: ['rcontrol']
-  }),
+  holdChord: z
+    .object({ mac: ChordSchema.default(['rightCommand']), win: ChordSchema.default(['rightControl']) })
+    .default({ mac: ['rightCommand'], win: ['rightControl'] }),
+  /**
+   * Hands-free listening by a quick double press of the chord. OFF by default: a double press of Right Command is
+   * the macOS Dictation shortcut for many people. The option stays for those who can't hold a key.
+   */
+  doublePressLatch: z.boolean().default(false),
   /** Optional "Hey Métis" listening. Off by default; gated by the wake measurement in V07. */
   wakeWord: z.boolean().default(false),
   /** How many times the first-use hint has been shown (V05). */
@@ -62,7 +60,8 @@ export type VoiceActionsSettings = z.infer<typeof VoiceActionsSettingsSchema>
 
 export const DEFAULT_VOICE_ACTIONS_SETTINGS: VoiceActionsSettings = {
   enabled: null,
-  holdChord: { mac: ['rcommand'], win: ['rcontrol'] },
+  holdChord: { mac: ['rightCommand'], win: ['rightControl'] },
+  doublePressLatch: false,
   wakeWord: false,
   firstUseHintsShown: 0
 }
@@ -88,4 +87,9 @@ export function resolveVoiceActionsChord(
 ): readonly VoiceChordToken[] {
   const chord = stored?.holdChord ?? DEFAULT_VOICE_ACTIONS_SETTINGS.holdChord
   return platform === 'darwin' ? chord.mac : platform === 'win32' ? chord.win : []
+}
+
+/** The chord as the watcher's modifier mask (the tokens or-ed together); 0 when the platform has no chord. */
+export function voiceChordMask(chord: readonly VoiceChordToken[]): number {
+  return chord.reduce((mask, token) => mask | MODIFIER_BITS[token], 0)
 }

@@ -17,7 +17,7 @@ interface FakeHelper {
   killed: boolean
 }
 
-function setup(initial: { enabled?: boolean; spec?: typeof SPEC | null; chordMask?: number } = {}) {
+function setup(initial: { enabled?: boolean; spec?: typeof SPEC | null; chordMask?: number; latch?: boolean } = {}) {
   const world = {
     enabled: initial.enabled ?? true,
     signedIn: true,
@@ -52,6 +52,7 @@ function setup(initial: { enabled?: boolean; spec?: typeof SPEC | null; chordMas
     signedIn: () => world.signedIn,
     gate: () => world.gate,
     chordMask: () => world.chordMask,
+    latchEnabled: initial.latch === undefined ? undefined : () => initial.latch === true,
     assistiveTechnologyActive: () => world.assistive,
     now: () => world.clock,
     timers: {
@@ -415,5 +416,35 @@ describe('supervised child: bounded restarts', () => {
     expect(t.helpers).toHaveLength(1)
     t.watcher.lifecycle('unlock')
     expect(t.helpers).toHaveLength(2)
+  })
+})
+
+describe('double-press latch is off unless the setting turns it on', () => {
+  const doublePress = (t: ReturnType<typeof setup>): void => {
+    t.watcher.refresh()
+    t.send(0)
+    t.send(RCMD)
+    t.advance(100)
+    t.send(0)
+    t.advance(100)
+    t.send(RCMD)
+  }
+
+  it('by default a quick second press never latches hands-free listening', () => {
+    const t = setup()
+    doublePress(t)
+    expect(t.events.some((e) => e.type === 'latched')).toBe(false)
+  })
+
+  it('an explicit latchEnabled false behaves the same', () => {
+    const t = setup({ latch: false })
+    doublePress(t)
+    expect(t.events.some((e) => e.type === 'latched')).toBe(false)
+  })
+
+  it('latchEnabled true restores the double-press latch', () => {
+    const t = setup({ latch: true })
+    doublePress(t)
+    expect(t.events.some((e) => e.type === 'latched')).toBe(true)
   })
 })

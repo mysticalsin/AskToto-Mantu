@@ -65,6 +65,8 @@ export interface ChordWatcherDeps {
   /** Non-null blocks opening a turn: a meeting is reserved, onboarding is exclusive, the chord recorder is open. */
   gate(): ChordGateBlock | null
   chordMask(): number
+  /** Hands-free double-press latch. Off unless this says so (it collides with macOS Dictation on Right Command). */
+  latchEnabled?(): boolean
   assistiveTechnologyActive(): boolean
   /** Monotonic milliseconds. */
   now(): number
@@ -86,7 +88,10 @@ export interface ChordWatcher {
 }
 
 export function createChordWatcher(deps: ChordWatcherDeps): ChordWatcher {
-  const recognizer = createHoldChordRecognizer({ chordMask: deps.chordMask() })
+  const recognizer = createHoldChordRecognizer({
+    chordMask: deps.chordMask(),
+    latchEnabled: deps.latchEnabled?.() ?? false
+  })
   let stopped = false
   let locked = false
   let suspended = false
@@ -269,7 +274,11 @@ export function createChordWatcher(deps: ChordWatcherDeps): ChordWatcher {
       return
     }
     const configEvents = recognizer.configure(
-      { chordMask: deps.chordMask(), assistiveTechnologyActive: deps.assistiveTechnologyActive() },
+      {
+        chordMask: deps.chordMask(),
+        latchEnabled: deps.latchEnabled?.() ?? false,
+        assistiveTechnologyActive: deps.assistiveTechnologyActive()
+      },
       deps.now()
     )
     for (const event of configEvents) handleRecognizerEvent(event)

@@ -6,8 +6,8 @@
  * defaulted here: the per-platform helper, the power events, accessibility, the audit sink.
  *
  * Preview rule (owner decision, NEEDS_TONY 2026-10-21 19:30): hardware-dependent features ship ON only after Tony's
- * physical checklist passes. Until then voice actions are on in QA builds only and "Preview, off by default" in
- * release builds, so with no opt-in a release build spawns no helper and monitors no keys at all.
+ * physical checklist passes. `enabled()` carries that rule (VOICE_ACTIONS_RELEASE_DEFAULT_ON in
+ * voice-actions-settings.ts is the one flag), so with no opt-in a release build spawns no helper and monitors no keys.
  *
  * No permission prompt is raised here or anywhere on this path. Path A of the design (a polling helper) needs none.
  * If the owner spike shows it does need Input Monitoring, that is requested only when the person turns the feature
@@ -33,20 +33,6 @@ import {
   type ChordWatcherStatus
 } from './chord-watcher'
 
-/**
- * What release builds do with no explicit opt-in. false = Preview, off by default. Flip to true only after the
- * hardware checklist passes (owner rule); no other code changes.
- */
-export const VOICE_ACTIONS_RELEASE_DEFAULT: boolean = false
-
-export function resolveVoiceActionsEnabled(input: {
-  qaIdentityBuild: boolean
-  /** The person's saved choice, when one exists. */
-  userEnabled: boolean | undefined
-}): boolean {
-  return input.userEnabled ?? (input.qaIdentityBuild ? true : VOICE_ACTIONS_RELEASE_DEFAULT)
-}
-
 const WIN_KEYWATCH_INTERVAL_MS = 40
 
 /**
@@ -70,16 +56,22 @@ export function winKeywatchSpawnSpec(input: {
 type PowerEvent = 'lock-screen' | 'unlock-screen' | 'suspend' | 'resume'
 
 export interface VoiceChordWiringDeps {
-  qaIdentityBuild: boolean
+  /**
+   * The effective voice actions setting (QA default, release Preview default and the person's or the organization's
+   * choice, resolved once in voice-actions-settings.ts). There is no second default here.
+   */
+  enabled(): boolean
   requireAuth(): boolean
   meetingReserved(): boolean
   onboardingExclusive(): boolean
   platform?: NodeJS.Platform
-  /** The person's saved choice (V02's setting). Undefined until they have made one. */
-  userEnabled?(): boolean | undefined
   chordRecorderActive?(): boolean
-  /** The rebound chord (V06). Defaults to the platform default. */
+  /** The configured chord as a modifier mask. Defaults to the platform default. */
   chordMask?(): number
+  /** The double-press latch option. Off unless the setting says so. */
+  latchEnabled?(): boolean
+  /** Watcher status changes (running, paused, restarting, failed, inert, stopped). */
+  onStatus?(status: ChordWatcherStatus): void
   isAccessibilitySupportEnabled?(): boolean
   power?: { on(event: PowerEvent, callback: () => void): unknown }
   helperSpec?(): LineHelperSpec | null
@@ -124,11 +116,11 @@ export function createVoiceChordWiring(deps: VoiceChordWiringDeps): VoiceChordWi
   const watcher = createChordWatcher({
     helperSpec,
     spawnHelper: deps.spawnHelper ?? ((spec, handlers) => spawnLineHelper(spec, handlers)),
-    enabled: () =>
-      resolveVoiceActionsEnabled({ qaIdentityBuild: deps.qaIdentityBuild, userEnabled: deps.userEnabled?.() }),
+    enabled: deps.enabled,
     signedIn: deps.requireAuth,
     gate,
     chordMask: () => deps.chordMask?.() ?? defaultMask,
+    latchEnabled: deps.latchEnabled,
     assistiveTechnologyActive: () =>
       (deps.isAccessibilitySupportEnabled ?? (() => app.isAccessibilitySupportEnabled()))(),
     now: () => performance.now(),
@@ -137,7 +129,10 @@ export function createVoiceChordWiring(deps: VoiceChordWiringDeps): VoiceChordWi
       clear: (handle) => clearTimeout(handle as NodeJS.Timeout)
     },
     onEvent: (event) => deps.onChordEvent?.(event),
-    onStatus: (status) => (deps.log ?? ((message) => mainLog.info(message)))(`[voice-chord] ${status}`),
+    onStatus: (status) => {
+      ;(deps.log ?? ((message) => mainLog.info(message)))(`[voice-chord] ${status}`)
+      deps.onStatus?.(status)
+    },
     audit: deps.audit ?? ((event, data) => auditLog(event, data))
   })
 

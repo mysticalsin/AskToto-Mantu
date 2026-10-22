@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { CHORD_PLATFORM_DEFAULTS, MODIFIER_BITS } from './voice/modifier-mask'
 import { BaseSettingsSchema, DEFAULT_SETTINGS } from './ipc'
 import { findSetting, SETTINGS_FEATURE_MODULES } from './settings-registry'
 import {
@@ -6,7 +7,9 @@ import {
   VOICE_ACTIONS_FEATURE,
   VOICE_ACTIONS_RELEASE_DEFAULT_ON,
   VoiceActionsSettingsSchema,
+  VOICE_CHORD_TOKENS,
   resolveVoiceActionsChord,
+  voiceChordMask,
   resolveVoiceActionsEnabled
 } from './voice-actions-settings'
 
@@ -30,19 +33,20 @@ describe('voiceActions settings feature module', () => {
   })
 
   it('defaults to holding Right Command on macOS and Right Control on Windows', () => {
-    expect(DEFAULT_VOICE_ACTIONS_SETTINGS.holdChord).toEqual({ mac: ['rcommand'], win: ['rcontrol'] })
-    expect(resolveVoiceActionsChord(DEFAULT_VOICE_ACTIONS_SETTINGS, 'darwin')).toEqual(['rcommand'])
-    expect(resolveVoiceActionsChord(DEFAULT_VOICE_ACTIONS_SETTINGS, 'win32')).toEqual(['rcontrol'])
+    expect(DEFAULT_VOICE_ACTIONS_SETTINGS.holdChord).toEqual({ mac: ['rightCommand'], win: ['rightControl'] })
+    expect(resolveVoiceActionsChord(DEFAULT_VOICE_ACTIONS_SETTINGS, 'darwin')).toEqual(['rightCommand'])
+    expect(resolveVoiceActionsChord(DEFAULT_VOICE_ACTIONS_SETTINGS, 'win32')).toEqual(['rightControl'])
     expect(resolveVoiceActionsChord(DEFAULT_VOICE_ACTIONS_SETTINGS, 'linux')).toEqual([])
   })
 
   it('rejects a chord token the watcher does not know and an empty chord', () => {
-    expect(VoiceActionsSettingsSchema.safeParse({ holdChord: { mac: ['capslock'], win: ['rcontrol'] } }).success).toBe(
-      false
-    )
-    expect(VoiceActionsSettingsSchema.safeParse({ holdChord: { mac: [], win: ['rcontrol'] } }).success).toBe(false)
     expect(
-      VoiceActionsSettingsSchema.safeParse({ holdChord: { mac: ['control', 'option'], win: ['lcontrol'] } }).success
+      VoiceActionsSettingsSchema.safeParse({ holdChord: { mac: ['capslock'], win: ['rightControl'] } }).success
+    ).toBe(false)
+    expect(VoiceActionsSettingsSchema.safeParse({ holdChord: { mac: [], win: ['rightControl'] } }).success).toBe(false)
+    expect(
+      VoiceActionsSettingsSchema.safeParse({ holdChord: { mac: ['leftControl', 'leftAlt'], win: ['leftControl'] } })
+        .success
     ).toBe(true)
   })
 
@@ -83,5 +87,31 @@ describe('effective default: ON in QA builds, OFF (Preview) in release builds un
   it('a missing or malformed stored value resolves like a fresh profile', () => {
     expect(resolveVoiceActionsEnabled(undefined, { qaIdentity: true })).toBe(true)
     expect(resolveVoiceActionsEnabled({} as never, { qaIdentity: false, releaseDefaultOn: false })).toBe(false)
+  })
+})
+
+describe('one chord vocabulary shared with the hold watcher', () => {
+  it('the setting tokens are exactly the watcher modifier names, minus the protocol-only unsided bit', () => {
+    expect([...VOICE_CHORD_TOKENS].sort()).toEqual(
+      Object.keys(MODIFIER_BITS)
+        .filter((k) => k !== 'unsided')
+        .sort()
+    )
+  })
+
+  it('the default chords produce exactly the watcher platform default masks', () => {
+    expect(voiceChordMask(resolveVoiceActionsChord(DEFAULT_VOICE_ACTIONS_SETTINGS, 'darwin'))).toBe(
+      CHORD_PLATFORM_DEFAULTS.darwin
+    )
+    expect(voiceChordMask(resolveVoiceActionsChord(DEFAULT_VOICE_ACTIONS_SETTINGS, 'win32'))).toBe(
+      CHORD_PLATFORM_DEFAULTS.win32
+    )
+    expect(voiceChordMask([])).toBe(0)
+    expect(voiceChordMask(['leftControl', 'leftAlt'])).toBe(MODIFIER_BITS.leftControl | MODIFIER_BITS.leftAlt)
+  })
+
+  it('the double-press latch is off by default and can be turned on', () => {
+    expect(DEFAULT_VOICE_ACTIONS_SETTINGS.doublePressLatch).toBe(false)
+    expect(VoiceActionsSettingsSchema.parse({ doublePressLatch: true }).doublePressLatch).toBe(true)
   })
 })

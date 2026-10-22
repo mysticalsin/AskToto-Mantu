@@ -4,7 +4,7 @@ import type { TrustedInputOwner } from '@shared/input-session'
 import { CommandMicActivationAuthority } from '../command-mic-activation-authority'
 import { CommandSpeechCapture } from '../command-speech-capture'
 import { InputSessionAuthority } from '../input-session-authority'
-import type { VoiceChordEvent } from './chord-watcher-port'
+import type { ChordWatcherEvent } from './chord-watcher'
 import { createVoiceActionsRuntime } from './voice-actions-runtime'
 
 vi.mock('../logger', () => ({ auditLog: vi.fn() }))
@@ -15,7 +15,6 @@ const ptt = { source: 'push-to-talk', purpose: 'command', activation: 'explicit'
 
 /** Real authority, activation authority and speech capture wired the way index.ts wires them. */
 function rig() {
-  const listeners = new Set<(event: VoiceChordEvent) => void>()
   const pushed: Array<{ channel: string; payload: unknown }> = []
   let capture: CommandSpeechCapture
   let meetingActive = false
@@ -64,14 +63,15 @@ function rig() {
     availability: () => ({ ok: true }),
     parakeet: { refreshPresence: async () => true, ensure: async () => {}, release: async () => {} },
     speechBusy: () => false,
-    createWatcher: () => ({
+    chord: {
       start: () => {},
+      refresh: () => {},
+      onSignedIn: () => {},
+      onInputSessionStop: () => {},
       stop: () => {},
-      onEvent: (listener) => {
-        listeners.add(listener)
-        return () => void listeners.delete(listener)
-      }
-    }),
+      status: () => 'running',
+      suspendedReason: () => null
+    },
     audit: () => {}
   })
   runtime.refresh()
@@ -84,7 +84,16 @@ function rig() {
     transcribed,
     release: (text: string) => release(text),
     setEnabled: (enabled: boolean) => void (stored = { ...DEFAULT_VOICE_ACTIONS_SETTINGS, enabled }),
-    emit: (event: VoiceChordEvent) => listeners.forEach((l) => l(event)),
+    emit: (event: 'armed' | 'released' | 'aborted' | ChordWatcherEvent) =>
+      runtime.onChordEvent(
+        event === 'released'
+          ? { type: 'released', reason: 'release' }
+          : event === 'aborted'
+            ? { type: 'aborted', reason: 'other-input' }
+            : typeof event === 'string'
+              ? { type: event }
+              : event
+      ),
     meeting: (on: boolean) => {
       meetingActive = on
       if (on) authority.reserveMeeting(500)

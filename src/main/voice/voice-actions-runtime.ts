@@ -13,13 +13,15 @@ import type { InputSessionLease, InputSessionStopReason } from '@shared/input-se
 import {
   resolveVoiceActionsChord,
   resolveVoiceActionsEnabled,
+  voiceChordMask,
   type VoiceActionsSettings
 } from '@shared/voice-actions-settings'
 import { VOICE_ACTIONS_IPC, VoiceReportSchema, type VoiceStateSnapshot } from '@shared/voice/voice-turn'
 import type { CommandMicActivationAuthority, CommandMicActivationFrame } from '../command-mic-activation-authority'
 import type { InputSessionAuthority } from '../input-session-authority'
 import { auditLog } from '../logger'
-import type { VoiceChordWatcherFactory } from './chord-watcher-port'
+import type { ChordWatcherEvent } from './chord-watcher'
+import { createVoiceChordWiring, type VoiceChordWiring } from './chord-wiring'
 import { commandSpeechAvailability, createParakeetPresence } from './voice-availability'
 import { VoiceSession, type VoiceAuditPhase } from './voice-session'
 
@@ -52,15 +54,22 @@ export interface VoiceActionsRuntimeDeps {
   parakeet: { refreshPresence(): Promise<boolean>; ensure(): Promise<void>; release(): Promise<void> }
   /** A live session or an import is using the speech helper (a meeting reservation is checked here too). */
   speechBusy(): boolean
-  /** V01's watcher factory. Absent until that ticket merges, then the shortcut reports `unavailable`. */
-  createWatcher?: VoiceChordWatcherFactory
+  /** The hold-chord wiring (V01). Defaults to the real one; tests and the QA FIFO source (V08) may replace it. */
+  chord?: VoiceChordWiring
   /** Defaults to the `voice.turn` audit event (phase and machine reason only). */
   audit?(phase: VoiceAuditPhase, detail?: { reason?: string }): void
   newTurnId?(): string
 }
 
 export interface VoiceActionsRuntime {
+  /** Boot: register the power events and bring the watcher and the session in line with the setting. */
+  start(): void
+  /** Settings changed (or a poll): re-read the effective setting and re-aim the watcher. Idempotent. */
   refresh(): void
+  /** The person signed in: a signed-out watcher may start. */
+  onSignedIn(): void
+  /** A verdict from the hold watcher (also the entry point a test or the QA FIFO source drives). */
+  onChordEvent(event: ChordWatcherEvent): void
   snapshot(): VoiceStateSnapshot
   onHardStop(reason: InputSessionStopReason): void
   onMeetingReserved(): void
@@ -88,12 +97,26 @@ export function createVoiceActionsRuntime(deps: VoiceActionsRuntimeDeps): VoiceA
       /* the renderer may be gone; getState recovers the snapshot */
     }
   }
-  const session = new VoiceSession({
-    settings: () => ({
-      enabled: resolveVoiceActionsEnabled(deps.getSettings().voiceActions, { qaIdentity: deps.qaIdentity }),
-      chord: resolveVoiceActionsChord(deps.getSettings().voiceActions, deps.platform ?? process.platform)
-    }),
-    createWatcher: deps.createWatcher,
+  const voice = (): VoiceActionsSettings | undefined => deps.getSettings().voiceActions
+  const platform = deps.platform ?? process.platform
+  const effectiveEnabled = (): boolean => resolveVoiceActionsEnabled(voice(), { qaIdentity: deps.qaIdentity })
+  // One effective setting feeds both the session and the watcher: no second default, no second chord vocabulary.
+  const chord =
+    deps.chord ??
+    createVoiceChordWiring({
+      enabled: effectiveEnabled,
+      requireAuth: deps.requireAuth,
+      meetingReserved: () => deps.authority.hasMeetingReservation,
+      onboardingExclusive: deps.onboardingActive,
+      platform,
+      chordMask: () => voiceChordMask(resolveVoiceActionsChord(voice(), platform)),
+      latchEnabled: () => voice()?.doublePressLatch === true,
+      onChordEvent: (event) => session.onChordEvent(event),
+      onStatus: () => session.onChordStatus()
+    })
+  const session: VoiceSession = new VoiceSession({
+    settings: () => ({ enabled: effectiveEnabled() }),
+    chord,
     gate: {
       signedIn: () => deps.requireAuth(),
       meetingReserved: () => deps.authority.hasMeetingReservation,
@@ -130,6 +153,10 @@ export function createVoiceActionsRuntime(deps: VoiceActionsRuntimeDeps): VoiceA
   })
   let presenceCheckedAt = Number.NEGATIVE_INFINITY
   return {
+    start() {
+      chord.start()
+      session.refresh()
+    },
     refresh() {
       // Settings polls call this often; the model-presence probe touches the disk, so it runs at most every 30 s.
       if (Date.now() - presenceCheckedAt >= PRESENCE_RECHECK_MS) {
@@ -139,7 +166,12 @@ export function createVoiceActionsRuntime(deps: VoiceActionsRuntimeDeps): VoiceA
       session.refresh()
     },
     snapshot: () => session.snapshot(),
-    onHardStop: (reason) => session.onHardStop(reason),
+    onSignedIn: () => chord.onSignedIn(),
+    onChordEvent: (event) => session.onChordEvent(event),
+    onHardStop(reason) {
+      chord.onInputSessionStop(reason)
+      session.onHardStop(reason)
+    },
     onMeetingReserved: () => session.onMeetingReserved(),
     onSpeechFinished(sessionId, result) {
       const lease = deps.authority.activeLease
@@ -163,7 +195,10 @@ export function createVoiceActionsRuntime(deps: VoiceActionsRuntimeDeps): VoiceA
       session.report(parsed.data)
       return { ok: true }
     },
-    dispose: () => session.dispose()
+    dispose() {
+      chord.stop()
+      session.dispose()
+    }
   }
 }
 

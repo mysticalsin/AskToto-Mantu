@@ -29,7 +29,7 @@ import {
   type VoiceState,
   type VoiceStateSnapshot
 } from '@shared/voice/voice-turn'
-import type { VoiceChordEvent, VoiceChordWatcher, VoiceChordWatcherFactory } from './chord-watcher-port'
+import type { ChordRevokeCause, ChordWatcherEvent, ChordWatcherStatus } from './chord-watcher'
 
 export type VoiceAvailability =
   | { ok: true }
@@ -37,10 +37,13 @@ export type VoiceAvailability =
 export type VoiceAuditPhase = 'started' | 'refused' | 'cancelled' | 'finished'
 
 export interface VoiceSessionDeps {
-  /** The effective settings: enabled already resolves the build default and managed policy. */
-  settings(): { enabled: boolean; chord: Parameters<VoiceChordWatcherFactory>[0] }
-  /** V01's watcher. Absent when this platform or build has no hold watcher. */
-  createWatcher?: VoiceChordWatcherFactory
+  /** The effective setting: enabled already resolves the build default and managed policy. */
+  settings(): { enabled: boolean }
+  /**
+   * V01's supervised hold-chord watcher. It reads the same effective setting, so `refresh` starts, re-aims or stops
+   * the helper; its verdicts come back through `onChordEvent`.
+   */
+  chord: { refresh(): void; status(): ChordWatcherStatus }
   gate: {
     signedIn(): boolean
     meetingReserved(): boolean
@@ -104,10 +107,25 @@ function reasonForHardStop(reason: InputSessionStopReason): VoiceReason | null {
   }
 }
 
+/** Why the watcher cut a turn off, in the person's terms. `null` is silent. */
+function reasonForRevoke(cause: ChordRevokeCause): VoiceReason | null {
+  switch (cause) {
+    case 'lock':
+      return 'screen_locked'
+    case 'suspend':
+      return 'system_suspend'
+    case 'sign-out':
+      return 'session_ended'
+    case 'meeting-started':
+      return 'meeting_started'
+    case 'helper-lost':
+      return 'not_ready'
+    default:
+      return null
+  }
+}
+
 export class VoiceSession {
-  #watcher: VoiceChordWatcher | null = null
-  #unsubscribe: (() => void) | null = null
-  #chordKey = ''
   #enabled = false
   #turn: Turn | null = null
   #stopping = false
@@ -130,36 +148,31 @@ export class VoiceSession {
     return this.#snapshot
   }
 
-  /** Apply the current effective settings: start, restart or stop the watcher. Idempotent and synchronous. */
+  /** Apply the current effective setting: start, re-aim or stop the watcher. Idempotent and synchronous. */
   refresh(): void {
     if (this.#disposed) return
-    const { enabled, chord } = this.deps.settings()
-    this.#enabled = enabled
-    if (!enabled) {
+    this.#enabled = this.deps.settings().enabled
+    if (!this.#enabled) {
       this.#cancelTurn(null, 'disabled')
-      this.#stopWatcher()
+      this.deps.chord.refresh()
       this.#clearFlash()
       this.#clearIdle()
       this.#set('off', null)
       return
     }
-    const key = chord.join('+')
-    if (this.#watcher && key !== this.#chordKey) this.#stopWatcher()
-    if (!this.#watcher && this.deps.createWatcher && chord.length > 0) {
-      const watcher = this.deps.createWatcher(chord)
-      this.#chordKey = key
-      this.#unsubscribe = watcher.onEvent((event) => this.#onChord(event))
-      this.#watcher = watcher
-      watcher.start()
-    }
+    this.deps.chord.refresh()
     if (this.#state === 'off') this.#set('idle', null)
     else this.#publish()
+  }
+
+  /** The watcher's status changed (helper started, lost, gave up): the snapshot's shortcut field follows. */
+  onChordStatus(): void {
+    if (!this.#disposed) this.#publish()
   }
 
   dispose(): void {
     if (this.#disposed) return
     this.#cancelTurn(null, 'disabled')
-    this.#stopWatcher()
     this.#clearFlash()
     this.#clearIdle()
     this.#disposed = true
@@ -226,9 +239,10 @@ export class VoiceSession {
     this.#cancelTurn('renderer_reset', 'renderer-reset', 'renderer-reset')
   }
 
-  #onChord(event: VoiceChordEvent): void {
+  /** A verdict from the watcher. Gating (meeting, onboarding, signed out, locked) already happened there. */
+  onChordEvent(event: ChordWatcherEvent): void {
     if (!this.#enabled || this.#disposed) return
-    switch (event) {
+    switch (event.type) {
       case 'armed':
       case 'latched':
         this.#begin()
@@ -239,6 +253,15 @@ export class VoiceSession {
         return
       case 'aborted':
         if (this.#turn?.phase === 'listening') this.#cancelTurn(null, 'aborted')
+        return
+      case 'refused':
+        // A hold during a meeting: explain, open nothing, touch no capture.
+        if (this.#turn) this.#cancelTurn(null, 'superseded')
+        this.#audit('refused', { reason: 'meeting_recording' })
+        this.#flash('meeting_recording')
+        return
+      case 'revoked':
+        if (this.#turn) this.#cancelTurn(reasonForRevoke(event.cause), `watcher-${event.cause}`)
         return
     }
   }
@@ -353,14 +376,6 @@ export class VoiceSession {
     }, IDLE_RELEASE_MS)
   }
 
-  #stopWatcher(): void {
-    this.#unsubscribe?.()
-    this.#unsubscribe = null
-    this.#watcher?.stop()
-    this.#watcher = null
-    this.#chordKey = ''
-  }
-
   #clearCap(): void {
     if (this.#capTimer) clearTimeout(this.#capTimer)
     this.#capTimer = null
@@ -395,7 +410,16 @@ export class VoiceSession {
 
   #shortcut(): VoiceShortcut {
     if (!this.#enabled) return 'stopped'
-    return this.#watcher ? 'running' : 'unavailable'
+    switch (this.deps.chord.status()) {
+      case 'running':
+      case 'paused':
+      case 'restarting':
+        return 'running'
+      case 'inert':
+        return 'unavailable'
+      default:
+        return 'stopped'
+    }
   }
 
   #build(): VoiceStateSnapshot {

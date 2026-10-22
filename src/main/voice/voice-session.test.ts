@@ -1,13 +1,31 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { VoiceBegin, VoiceEnd, VoiceStateSnapshot } from '@shared/voice/voice-turn'
 import { VOICE_TURN_MAX_MS, voiceReasonCopy } from '@shared/voice/voice-turn'
-import type { VoiceChordEvent, VoiceChordWatcher } from './chord-watcher-port'
+import type { ChordWatcherEvent, ChordWatcherStatus } from './chord-watcher'
 import { VoiceSession, type VoiceSessionDeps } from './voice-session'
 
 type Availability = ReturnType<VoiceSessionDeps['gate']['availability']>
 
-function harness(initial: { enabled?: boolean; withWatcher?: boolean } = {}) {
-  const config = { enabled: initial.enabled ?? true, chord: ['rcommand'] as string[] }
+type ChordInput = 'armed' | 'released' | 'aborted' | 'latched' | 'latch-ended' | ChordWatcherEvent
+
+const toEvent = (input: ChordInput): ChordWatcherEvent => {
+  if (typeof input !== 'string') return input
+  switch (input) {
+    case 'released':
+      return { type: 'released', reason: 'release' }
+    case 'aborted':
+      return { type: 'aborted', reason: 'other-input' }
+    case 'latch-ended':
+      return { type: 'latch-ended', reason: 'press' }
+    default:
+      return { type: input }
+  }
+}
+
+function harness(initial: { enabled?: boolean } = {}) {
+  const config = { enabled: initial.enabled ?? true }
+  const chordState: { status: ChordWatcherStatus } = { status: 'running' }
+  const chord = { refresh: vi.fn(), status: () => chordState.status }
   const gate = {
     signedIn: true,
     meetingReserved: false,
@@ -16,21 +34,6 @@ function harness(initial: { enabled?: boolean; withWatcher?: boolean } = {}) {
     explicitLeaseActive: false,
     availability: { ok: true } as Availability
   }
-  const listeners = new Set<(event: VoiceChordEvent) => void>()
-  const watchers: Array<VoiceChordWatcher & { chord: readonly string[] }> = []
-  const createWatcher = vi.fn((chord: readonly string[]) => {
-    const watcher = {
-      chord,
-      start: vi.fn(),
-      stop: vi.fn(),
-      onEvent: vi.fn((listener: (event: VoiceChordEvent) => void) => {
-        listeners.add(listener)
-        return () => void listeners.delete(listener)
-      })
-    }
-    watchers.push(watcher)
-    return watcher
-  })
   const events = {
     begin: [] as VoiceBegin[],
     end: [] as VoiceEnd[],
@@ -40,8 +43,8 @@ function harness(initial: { enabled?: boolean; withWatcher?: boolean } = {}) {
   }
   let mintResult = true
   const deps: VoiceSessionDeps = {
-    settings: () => ({ enabled: config.enabled, chord: config.chord as never }),
-    createWatcher: initial.withWatcher === false ? undefined : (createWatcher as never),
+    settings: () => ({ enabled: config.enabled }),
+    chord,
     gate: {
       signedIn: () => gate.signedIn,
       meetingReserved: () => gate.meetingReserved,
@@ -78,9 +81,7 @@ function harness(initial: { enabled?: boolean; withWatcher?: boolean } = {}) {
     audit: (phase, detail) => void events.audit.push({ phase, ...(detail?.reason ? { reason: detail.reason } : {}) })
   }
   const session = new VoiceSession(deps)
-  const emit = (event: VoiceChordEvent): void => {
-    for (const listener of [...listeners]) listener(event)
-  }
+  const emit = (event: ChordInput): void => session.onChordEvent(toEvent(event))
   return {
     session,
     deps,
@@ -88,8 +89,8 @@ function harness(initial: { enabled?: boolean; withWatcher?: boolean } = {}) {
     config,
     events,
     emit,
-    createWatcher,
-    watchers,
+    chord,
+    chordState,
     setMint: (value: boolean) => void (mintResult = value),
     last: () => events.state.at(-1)
   }
@@ -99,35 +100,35 @@ beforeEach(() => vi.useFakeTimers())
 afterEach(() => vi.useRealTimers())
 
 describe('VoiceSession watcher lifecycle', () => {
-  it('stays off and creates no watcher while voice actions are disabled', () => {
+  it('stays off while voice actions are disabled, and still tells the watcher so it stops', () => {
     const h = harness({ enabled: false })
     h.session.refresh()
-    expect(h.createWatcher).not.toHaveBeenCalled()
+    expect(h.chord.refresh).toHaveBeenCalledOnce()
     expect(h.session.snapshot()).toMatchObject({ state: 'off', enabled: false, shortcut: 'stopped' })
   })
 
-  it('starts one watcher on the configured chord when enabled', () => {
+  it('enabling re-aims the watcher and reports the shortcut from its status', () => {
     const h = harness()
     h.session.refresh()
-    expect(h.createWatcher).toHaveBeenCalledExactlyOnceWith(['rcommand'])
-    expect(h.watchers[0]?.start).toHaveBeenCalledOnce()
+    expect(h.chord.refresh).toHaveBeenCalledOnce()
     expect(h.session.snapshot()).toMatchObject({ state: 'idle', enabled: true, shortcut: 'running' })
-    h.session.refresh()
-    expect(h.createWatcher).toHaveBeenCalledOnce()
   })
 
-  it('reports the shortcut unavailable, not running, when no watcher exists on this build', () => {
-    const h = harness({ withWatcher: false })
-    h.session.refresh()
-    expect(h.session.snapshot()).toMatchObject({ state: 'idle', enabled: true, shortcut: 'unavailable' })
-  })
-
-  it('creates no watcher for an empty chord (a platform with no hold watcher) and reports it unavailable', () => {
+  it.each([
+    ['running', 'running'],
+    ['paused', 'running'],
+    ['restarting', 'running'],
+    ['inert', 'unavailable'],
+    ['failed', 'stopped'],
+    ['stopped', 'stopped']
+  ] as const)('watcher status %s reads as shortcut %s, and a status change is pushed', (status, shortcut) => {
     const h = harness()
-    h.config.chord = []
     h.session.refresh()
-    expect(h.createWatcher).not.toHaveBeenCalled()
-    expect(h.session.snapshot()).toMatchObject({ state: 'idle', enabled: true, shortcut: 'unavailable' })
+    const before = h.events.state.length
+    h.chordState.status = status
+    h.session.onChordStatus()
+    expect(h.session.snapshot().shortcut).toBe(shortcut)
+    expect(h.events.state.length).toBe(shortcut === 'running' ? before : before + 1)
   })
 
   it('toggling off stops the watcher and cancels a live turn in the same tick', () => {
@@ -139,7 +140,7 @@ describe('VoiceSession watcher lifecycle', () => {
     h.config.enabled = false
     h.session.refresh()
 
-    expect(h.watchers[0]?.stop).toHaveBeenCalledOnce()
+    expect(h.chord.refresh).toHaveBeenCalledTimes(2)
     expect(h.events.end).toEqual([{ turnId: 'turn-1', cancelled: true }])
     expect(h.deps.stopVoiceLease).toHaveBeenCalledWith('cancelled')
     expect(h.deps.activation.revoke).toHaveBeenCalled()
@@ -148,35 +149,63 @@ describe('VoiceSession watcher lifecycle', () => {
     expect(h.events.begin).toHaveLength(1)
   })
 
-  it('toggling back on starts a fresh watcher', () => {
+  it('toggling back on returns to idle', () => {
     const h = harness()
     h.session.refresh()
     h.config.enabled = false
     h.session.refresh()
     h.config.enabled = true
     h.session.refresh()
-    expect(h.createWatcher).toHaveBeenCalledTimes(2)
     expect(h.session.snapshot().state).toBe('idle')
   })
 
-  it('a changed chord restarts the watcher on the new chord, and an unchanged one does not', () => {
-    const h = harness()
-    h.session.refresh()
-    h.config.chord = ['control', 'option']
-    h.session.refresh()
-    expect(h.watchers[0]?.stop).toHaveBeenCalledOnce()
-    expect(h.createWatcher).toHaveBeenLastCalledWith(['control', 'option'])
-    h.session.refresh()
-    expect(h.createWatcher).toHaveBeenCalledTimes(2)
-  })
-
-  it('dispose stops the watcher and cancels the turn', () => {
+  it('dispose cancels the turn and ignores later verdicts', () => {
     const h = harness()
     h.session.refresh()
     h.emit('armed')
     h.session.dispose()
-    expect(h.watchers[0]?.stop).toHaveBeenCalled()
     expect(h.events.end.at(-1)).toEqual({ turnId: 'turn-1', cancelled: true })
+    h.emit('armed')
+    expect(h.events.begin).toHaveLength(1)
+  })
+})
+
+describe('VoiceSession verdicts the watcher gated itself', () => {
+  it('a hold refused because a meeting is recording explains why and opens nothing', () => {
+    const h = harness()
+    h.session.refresh()
+    h.emit({ type: 'refused', reason: 'meeting' })
+    expect(h.deps.activation.mint).not.toHaveBeenCalled()
+    expect(h.deps.push.begin).not.toHaveBeenCalled()
+    expect(h.deps.stopVoiceLease).not.toHaveBeenCalled()
+    expect(h.last()).toMatchObject({ state: 'failed', reason: 'meeting_recording' })
+    expect(h.events.audit.at(-1)).toEqual({ phase: 'refused', reason: 'meeting_recording' })
+  })
+
+  it.each([
+    ['lock', 'screen_locked'],
+    ['suspend', 'system_suspend'],
+    ['sign-out', 'session_ended'],
+    ['meeting-started', 'meeting_started'],
+    ['helper-lost', 'not_ready']
+  ] as const)('a watcher revoke (%s) cuts the open turn with %s copy', (cause, reason) => {
+    const h = harness()
+    h.session.refresh()
+    h.emit('armed')
+    h.emit({ type: 'revoked', cause })
+    expect(h.events.end).toEqual([{ turnId: 'turn-1', cancelled: true }])
+    expect(h.last()).toMatchObject({ state: 'failed', reason })
+  })
+
+  it('quit and disable revokes are silent, and a revoke with no turn changes nothing', () => {
+    const h = harness()
+    h.session.refresh()
+    const before = h.events.state.length
+    h.emit({ type: 'revoked', cause: 'lock' })
+    expect(h.events.state).toHaveLength(before)
+    h.emit('armed')
+    h.emit({ type: 'revoked', cause: 'quit' })
+    expect(h.last()).toMatchObject({ state: 'idle', reason: null })
   })
 })
 

@@ -2,7 +2,8 @@ import { describe, expect, it, vi } from 'vitest'
 import { DEFAULT_VOICE_ACTIONS_SETTINGS } from '@shared/voice-actions-settings'
 import { VOICE_ACTIONS_IPC } from '@shared/voice/voice-turn'
 import type { InputSessionLease } from '@shared/input-session'
-import type { VoiceChordEvent, VoiceChordWatcher } from './chord-watcher-port'
+import type { ChordWatcherEvent, ChordWatcherStatus } from './chord-watcher'
+import type { VoiceChordWiringDeps } from './chord-wiring'
 import {
   createCommandMicAvailability,
   createVoiceActionsRuntime,
@@ -10,6 +11,38 @@ import {
 } from './voice-actions-runtime'
 
 vi.mock('../logger', () => ({ auditLog: vi.fn() }))
+
+// The real wiring spawns a helper and registers power events; the runtime test only needs what the runtime hands it.
+const wiringCalls: VoiceChordWiringDeps[] = []
+const chordFake = {
+  start: vi.fn(),
+  refresh: vi.fn(),
+  onSignedIn: vi.fn(),
+  onInputSessionStop: vi.fn(),
+  stop: vi.fn(),
+  suspendedReason: () => null,
+  status: (): ChordWatcherStatus => chordStatus
+}
+let chordStatus: ChordWatcherStatus = 'running'
+vi.mock('./chord-wiring', () => ({
+  createVoiceChordWiring: (deps: VoiceChordWiringDeps) => {
+    wiringCalls.push(deps)
+    return chordFake
+  }
+}))
+
+const toEvent = (input: string): ChordWatcherEvent => {
+  switch (input) {
+    case 'released':
+      return { type: 'released', reason: 'release' }
+    case 'aborted':
+      return { type: 'aborted', reason: 'other-input' }
+    case 'latch-ended':
+      return { type: 'latch-ended', reason: 'press' }
+    default:
+      return { type: input as 'armed' | 'latched' }
+  }
+}
 
 const frame = { webContentsId: 7, frameId: '12:3', isTopFrame: true, url: 'app://metis/index.html' }
 
@@ -35,16 +68,16 @@ function setup(
   } = {}
 ) {
   const sent: Array<{ channel: string; payload: unknown }> = []
-  const listeners = new Set<(event: VoiceChordEvent) => void>()
-  const watcher: VoiceChordWatcher = {
-    start: vi.fn(),
-    stop: vi.fn(),
-    onEvent: (listener) => {
-      listeners.add(listener)
-      return () => void listeners.delete(listener)
-    }
-  }
-  const createWatcher = vi.fn(() => watcher)
+  wiringCalls.length = 0
+  chordStatus = 'running'
+  for (const fn of [
+    chordFake.start,
+    chordFake.refresh,
+    chordFake.onSignedIn,
+    chordFake.onInputSessionStop,
+    chordFake.stop
+  ])
+    fn.mockClear()
   const state = {
     lease: null as InputSessionLease | null,
     meeting: false,
@@ -87,58 +120,97 @@ function setup(
       release: vi.fn(async () => {})
     },
     speechBusy: () => false,
-    createWatcher: createWatcher as never,
     audit: vi.fn(),
     ...overrides
   }
   const runtime = createVoiceActionsRuntime(deps)
-  const emit = (event: VoiceChordEvent): void => {
-    for (const listener of [...listeners]) listener(event)
-  }
-  return { runtime, deps, state, authority, activation, sent, createWatcher, watcher, emit }
+  const emit = (event: string | ChordWatcherEvent): void =>
+    runtime.onChordEvent(typeof event === 'string' ? toEvent(event) : event)
+  const wiring = (): VoiceChordWiringDeps => wiringCalls[0] as VoiceChordWiringDeps
+  return { runtime, deps, state, authority, activation, sent, emit, wiring, chord: chordFake }
 }
 
 describe('effective enabled: ON in QA builds, OFF in release builds until the flag flips', () => {
-  it('a QA build with a fresh profile starts the watcher', () => {
+  it('a QA build with a fresh profile is enabled and the watcher is told to reconcile', () => {
     const h = setup({ qaIdentity: true })
-    h.runtime.refresh()
-    expect(h.createWatcher).toHaveBeenCalledExactlyOnceWith(['rcommand'])
-    expect(h.runtime.snapshot()).toMatchObject({ enabled: true, shortcut: 'running' })
+    h.runtime.start()
+    expect(h.chord.start).toHaveBeenCalledOnce()
+    expect(h.wiring().enabled()).toBe(true)
+    expect(h.runtime.snapshot()).toMatchObject({ enabled: true, shortcut: 'running', state: 'idle' })
   })
 
-  it('a release build with a fresh profile stays off and starts nothing', () => {
+  it('a release build with a fresh profile stays off: the watcher is told it is disabled', () => {
     const h = setup({ qaIdentity: false })
-    h.runtime.refresh()
-    expect(h.createWatcher).not.toHaveBeenCalled()
-    expect(h.runtime.snapshot()).toMatchObject({ state: 'off', enabled: false })
+    h.runtime.start()
+    expect(h.wiring().enabled()).toBe(false)
+    expect(h.runtime.snapshot()).toMatchObject({ state: 'off', enabled: false, shortcut: 'stopped' })
   })
 
-  it('an explicit ON in a release build (the Preview toggle) starts it, and an explicit OFF in QA stops it', () => {
+  it('an explicit ON in a release build (the Preview toggle) enables it, and an explicit OFF in QA disables it', () => {
     const release = setup({ qaIdentity: false, stored: { enabled: true } })
+    expect(release.wiring().enabled()).toBe(true)
     release.runtime.refresh()
     expect(release.runtime.snapshot().enabled).toBe(true)
     const qa = setup({ qaIdentity: true, stored: { enabled: false } })
-    qa.runtime.refresh()
-    expect(qa.runtime.snapshot().enabled).toBe(false)
+    expect(qa.wiring().enabled()).toBe(false)
   })
 
-  it('uses the Windows chord on win32 and no chord, so no watcher, on another platform', () => {
-    const win = setup({ platform: 'win32' })
-    win.runtime.refresh()
-    expect(win.createWatcher).toHaveBeenCalledWith(['rcontrol'])
-    const other = setup({ platform: 'linux' })
-    other.runtime.refresh()
-    expect(other.createWatcher).not.toHaveBeenCalled()
-    expect(other.runtime.snapshot().shortcut).toBe('unavailable')
-  })
-
-  it('a managed or user change that flips the setting is applied on the next refresh, in one tick', () => {
+  it('the watcher reads the one effective setting live: a change applies on the next refresh, in one tick', () => {
     const h = setup()
     h.runtime.refresh()
     h.state.stored = { ...h.state.stored, enabled: false }
+    expect(h.wiring().enabled()).toBe(false)
     h.runtime.refresh()
-    expect(h.watcher.stop).toHaveBeenCalled()
+    expect(h.chord.refresh).toHaveBeenCalledTimes(2)
     expect(h.runtime.snapshot()).toMatchObject({ state: 'off', enabled: false })
+  })
+
+  it('the chord mask comes from the setting with the watcher vocabulary: Right Command on macOS, Right Control on Windows', () => {
+    const mac = setup()
+    expect(mac.wiring().chordMask?.()).toBe(32)
+    const win = setup({ platform: 'win32' })
+    expect(win.wiring().chordMask?.()).toBe(2)
+    const rebound = setup({ stored: { holdChord: { mac: ['leftControl', 'leftAlt'], win: ['rightControl'] } } })
+    expect(rebound.wiring().chordMask?.()).toBe(1 | 4)
+    const other = setup({ platform: 'linux' })
+    expect(other.wiring().chordMask?.()).toBe(0)
+  })
+
+  it('the double-press latch is off by default and follows the setting', () => {
+    const off = setup()
+    expect(off.wiring().latchEnabled?.()).toBe(false)
+    const on = setup({ stored: { doublePressLatch: true } })
+    expect(on.wiring().latchEnabled?.()).toBe(true)
+  })
+
+  it('watcher verdicts drive the session and a status change refreshes the snapshot shortcut', () => {
+    const h = setup()
+    h.runtime.refresh()
+    h.wiring().onChordEvent?.({ type: 'armed' })
+    expect(h.runtime.snapshot().state).toBe('listening')
+    chordStatus = 'failed'
+    h.wiring().onStatus?.('failed')
+    expect(h.runtime.snapshot().shortcut).toBe('stopped')
+  })
+
+  it('a hold refused for a meeting by the watcher stays a refusal: no mint, no begin, no lease touched', () => {
+    const h = setup()
+    h.runtime.refresh()
+    h.emit({ type: 'refused', reason: 'meeting' })
+    expect(h.activation.mintFromHardware).not.toHaveBeenCalled()
+    expect(h.sent.some((m) => m.channel === VOICE_ACTIONS_IPC.begin)).toBe(false)
+    expect(h.authority.hardStop).not.toHaveBeenCalled()
+    expect(h.runtime.snapshot().reason).toBe('meeting_recording')
+  })
+
+  it('sign-in, hard stops and disposal reach the watcher too', () => {
+    const h = setup()
+    h.runtime.onSignedIn()
+    expect(h.chord.onSignedIn).toHaveBeenCalledOnce()
+    h.runtime.onHardStop('sign-out')
+    expect(h.chord.onInputSessionStop).toHaveBeenCalledWith('sign-out')
+    h.runtime.dispose()
+    expect(h.chord.stop).toHaveBeenCalledOnce()
   })
 })
 

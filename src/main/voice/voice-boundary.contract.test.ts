@@ -44,7 +44,7 @@ describe('voice actions boundary: the activation is main-only and the meeting pi
   })
 
   it('the voice modules never open a microphone or touch the meeting pipeline', () => {
-    for (const spec of ['./voice-session', './voice-actions-runtime', './voice-availability', './chord-watcher-port']) {
+    for (const spec of ['./voice-session', './voice-actions-runtime', './voice-availability']) {
       const text = readModuleSource(__dirname, spec).text
       expect(text, spec).not.toMatch(/getUserMedia|AudioContext|startInputSession/)
       expect(text, spec).not.toMatch(/from '\.\.\/(features\/meetings|transcripts|meeting-|speaker|live-)/)
