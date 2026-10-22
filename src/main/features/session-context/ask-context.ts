@@ -1,8 +1,9 @@
+import { contextRecord } from '@shared/context-authority'
 import type { AskStart } from '@shared/ipc'
 import { redactSecrets } from '@shared/redact'
 import { SESSION_CONTEXT_DEFAULT_TAIL } from '@shared/session-context-request'
 import type { ContextHandle, FrameKey, MeetingContextRegistry } from './meeting-context-registry'
-import { fillSlots, lastThemText, transcriptTailText } from './transcript-text'
+import { fillSlots, lastThemText, transcriptBlockOrigin, transcriptTailText } from './transcript-text'
 
 /** Shown instead of an answer that would have been built from nothing. */
 export const NO_CONVERSATION_MESSAGE = 'Métis has no live conversation to use yet. Start listening, then ask again.'
@@ -42,7 +43,11 @@ export function applyAskContext(req: AskStart, deps: AskContextDeps, gate: AskCo
   if (request.requireTranscript && !transcript.trim()) return NO_CONVERSATION_MESSAGE
   // With no line from the other side yet, the claim falls back to the bounded transcript, as the renderer used to.
   const lastThem = (handle ? redact(lastThemText(handle.snapshot, request.tailChars)) : '') || transcript
-  req.prompt = fillSlots(req.prompt, { transcript, lastThem })
+  // Both are captured speech: tagged by who spoke, and data whatever they say.
+  req.prompt = fillSlots(req.prompt, {
+    transcript: contextRecord(handle ? transcriptBlockOrigin(handle.snapshot) : 'other-speaker', transcript),
+    lastThem: contextRecord('other-speaker', lastThem)
+  })
   if (request.field) req.transcript = transcript
   if (handle) gate.arm(handle)
   return redactCarried(req, deps)

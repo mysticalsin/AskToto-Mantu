@@ -1,3 +1,4 @@
+import { contextRecord, neutralizeDelimiters, quoteAsData } from '@shared/context-authority'
 import type { AskStart } from '@shared/ipc'
 import type { ProviderKind, ProviderId } from '@shared/providers'
 import type { StreamCacheUsage } from '@shared/operator'
@@ -151,12 +152,15 @@ export function userText(req: AskStart): string {
  */
 function clippedTranscript(transcript: string | undefined, cap: number): string {
   const t = transcript || ''
-  if (t.length <= cap) return t
+  if (t.length <= cap) return fenced(t)
   return (
     `[NOTE: transcript truncated — this is only the final ${cap} of ${t.length} characters; earlier discussion is missing]\n` +
-    t.slice(-cap)
+    fenced(t.slice(-cap))
   )
 }
+
+/** Transcript text sits inside a triple-quote fence in the prompt: a participant's line must not be able to close it. */
+const fenced = (transcript: string): string => neutralizeDelimiters(transcript)
 
 // ~60k tokens ≈ 4-5 hours of speech: effectively never truncates a real meeting.
 const RECAP_TRANSCRIPT_CAP = 240_000
@@ -180,7 +184,7 @@ function baseUserText(req: AskStart): string {
     case 'suggest':
       return (
         'Live transcript of the conversation I am in right now (THEM = the other person, YOU = me):\n\n"""\n' +
-        (req.transcript || '').slice(-6000) +
+        fenced((req.transcript || '').slice(-6000)) +
         '\n"""\n\nGive me what to say next, per your instructions.'
       )
     case 'vision':
@@ -214,7 +218,7 @@ function screenContextBlock(block: string): string {
     'USE IT ONLY IF IT HELPS ANSWER MY QUESTION. If my question is not about what is on screen, ignore ' +
     'this block completely and just answer the question — do not mention the screen, and do not describe ' +
     'it back to me:\n' +
-    block +
+    quoteAsData(contextRecord('screen', block)) +
     '\n\n'
   )
 }
@@ -223,7 +227,7 @@ function screenContextBlock(block: string): string {
 function brainContextBlock(block: string): string {
   return (
     'KNOWLEDGE FROM YOUR PAST MEETINGS (each fact ends with its source meeting — cite it when you use the fact):\n' +
-    block +
+    quoteAsData(contextRecord('document', block), 'brain') +
     '\n\n'
   )
 }

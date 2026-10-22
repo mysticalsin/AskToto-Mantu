@@ -8,6 +8,7 @@
  *
  * Privacy: the text lives in this call only. The audit event carries a status and a class, never words.
  */
+import { ownerCommand, type ContextRecord } from '@shared/context-authority'
 import { VoiceAskSchema, type VoiceAsk } from '@shared/voice/voice-turn'
 import {
   createVoiceActionExecutor,
@@ -36,9 +37,9 @@ export interface VoiceTurnPipelineDeps {
 
 export interface VoiceTurnPipeline {
   /** Fire and forget: a failure is reported as an outcome, never thrown into the capture. */
-  handle(text: string, claim: VoiceTurnClaim): void
+  handle(input: string | ContextRecord, claim: VoiceTurnClaim): void
   /** The same, awaitable. Used by tests and by `handle`. */
-  run(text: string, claim: VoiceTurnClaim): Promise<VoiceTurnOutcome>
+  run(input: string | ContextRecord, claim: VoiceTurnClaim): Promise<VoiceTurnOutcome>
 }
 
 export function createVoiceTurnPipeline(deps: VoiceTurnPipelineDeps): VoiceTurnPipeline {
@@ -52,8 +53,11 @@ export function createVoiceTurnPipeline(deps: VoiceTurnPipelineDeps): VoiceTurnP
     }
   }
 
-  async function run(text: string, claim: VoiceTurnClaim): Promise<VoiceTurnOutcome> {
-    const route = await router.route(text)
+  async function run(input: string | ContextRecord, claim: VoiceTurnClaim): Promise<VoiceTurnOutcome> {
+    // Bare text arrives only from the main-owned hold capture, beside the claim main minted from a hardware
+    // activation: that is the owner speaking. Anything tagged as content is routed by its own tag (R124).
+    const record = typeof input === 'string' ? ownerCommand('user-spoken-by-owner', input) : input
+    const route = await router.route(record)
     // Whatever was recognised, nothing continues for a turn that was revoked while the router worked.
     if (!claim.valid()) {
       audit('stale')
@@ -86,6 +90,10 @@ export function createVoiceTurnPipeline(deps: VoiceTurnPipelineDeps): VoiceTurnP
       case 'unsupported':
         audit('unsupported')
         return { kind: 'unsupported' }
+      case 'no_authority':
+        // Content is not a command. Nothing was proposed, asked or classified, and the claim is not spent.
+        audit('no_authority')
+        return { kind: 'unsupported' }
     }
   }
 
@@ -99,8 +107,8 @@ export function createVoiceTurnPipeline(deps: VoiceTurnPipelineDeps): VoiceTurnP
 
   return {
     run,
-    handle(text, claim) {
-      run(text, claim).then(report, () => report({ kind: 'stale' }))
+    handle(input, claim) {
+      run(input, claim).then(report, () => report({ kind: 'stale' }))
     }
   }
 }

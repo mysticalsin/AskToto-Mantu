@@ -11,6 +11,7 @@
  * trailing sentence punctuation and one matched pair of outer quotes. The wake word is dropped only at the very
  * start, so a title that contains "Métis" keeps it.
  */
+import { mayProposeActions, type ContextRecord } from '../context-authority'
 import type { DesktopActionRequest, DesktopAdapterId } from '../desktop-actions'
 import { NOTE_BODY_MAX_CHARS, NOTE_TITLE_MAX_CHARS, SEARCH_QUERY_MAX_CHARS, validateDesktopRequest } from './catalog'
 
@@ -330,4 +331,14 @@ export function parseVoiceUtterance(raw: string): VoiceUtterance {
   if (question || QUESTION_LEAD.test(text)) return { kind: 'question', text: raw.normalize('NFC').trim() }
   if (ACTION_VERBS.test(text)) return { kind: 'unsupported' }
   return { kind: 'none' }
+}
+
+/**
+ * The grammar for a tagged record (G36, R124). Only the owner's own typed or spoken command is understood: content
+ * from another speaker, a screen, a document or a connector, or a record whose authority does not match its origin,
+ * parses to nothing, whatever it says. `parseVoiceUtterance` stays the pure text-to-request step for text already
+ * known to be the owner's.
+ */
+export function parseVoiceUtteranceFrom(record: ContextRecord): VoiceUtterance {
+  return mayProposeActions(record) ? parseVoiceUtterance(record.text) : { kind: 'none' }
 }

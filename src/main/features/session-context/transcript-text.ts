@@ -1,3 +1,9 @@
+import {
+  neutralizeDelimiters,
+  transcriptOrigin,
+  type ContextOrigin,
+  type ContextRecord
+} from '@shared/context-authority'
 import type { LedgerUtterance } from '@shared/kernel/transcript-ledger'
 import type { ContextSnapshot } from '@shared/kernel/session-context'
 import type { TranscriptLine } from '@shared/transcript-line'
@@ -38,11 +44,30 @@ export function lastThemText(snapshot: ContextSnapshot, maxChars: number): strin
   return ''
 }
 
-/** Replaces every slot token in one pass. The inserted text is never scanned again, so it cannot name a slot. */
-export function fillSlots(prompt: string, values: { transcript: string; lastThem: string }): string {
+/**
+ * The origin tag of a snapshot's transcript block (G36, R124): the owner only when every final line is the owner's,
+ * otherwise another speaker, the less-trusted of the two. Either way the block is data, never a command.
+ */
+export function transcriptBlockOrigin(snapshot: ContextSnapshot): ContextOrigin {
+  const segments = finalsOf(snapshot)
+  if (segments.length === 0) return 'other-speaker'
+  return segments.every((segment) => transcriptOrigin(segment.speakerId) === 'user-spoken-by-owner')
+    ? 'user-spoken-by-owner'
+    : 'other-speaker'
+}
+
+/**
+ * Replaces every slot token in one pass with the text of a tagged record (the transcript block, the last line the
+ * other side spoke). The inserted text is never scanned again, so it cannot name a slot, and its
+ * fence and block delimiters are neutralized so a participant's line cannot close the quoted transcript the prompt
+ * wraps it in and speak as the user (R124).
+ */
+export function fillSlots(prompt: string, values: { transcript: ContextRecord; lastThem: ContextRecord }): string {
   if (!prompt.includes(TRANSCRIPT_SLOT) && !prompt.includes(LAST_THEM_SLOT)) return prompt
+  const lastThem = neutralizeDelimiters(values.lastThem.text)
+  const transcript = neutralizeDelimiters(values.transcript.text)
   return prompt
     .split(TRANSCRIPT_SLOT)
-    .map((part) => part.split(LAST_THEM_SLOT).join(values.lastThem))
-    .join(values.transcript)
+    .map((part) => part.split(LAST_THEM_SLOT).join(lastThem))
+    .join(transcript)
 }

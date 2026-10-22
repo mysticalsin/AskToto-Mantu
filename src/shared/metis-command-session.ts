@@ -2,11 +2,8 @@
  * Métis command session state machine (pure).
  * Trusted command capture can create one typed proposal; it cannot execute it.
  */
-import {
-  commandContextHash,
-  createCommandProposal,
-  type CommandProposal
-} from './metis-command-proposal'
+import { commandChannelRecord, mayProposeActions } from './context-authority'
+import { commandContextHash, createCommandProposal, type CommandProposal } from './metis-command-proposal'
 import { parseMetisCommandTranscript, type ParseSnapshot } from './metis-command-parse'
 import {
   METIS_PILL_HI,
@@ -118,7 +115,9 @@ export function reduceMetisCommandSession(
     return { ...prev, pillCopy: METIS_PILL_LISTENING, chime: 'none' }
   }
 
-  if (event.channel === 'meeting') return prev
+  // Meeting audio is content (another speaker's words): it carries no authority, so it never wakes, proposes or
+  // activates anything (R124). Only the main-owned command capture is the owner speaking.
+  if (!mayProposeActions(commandChannelRecord(event.channel, event.text))) return prev
 
   if (transcriptContainsEndPhrase(event.text)) {
     return {
