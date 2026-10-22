@@ -235,6 +235,7 @@ function makeHarness() {
       playListenChime: false,
       showLiveTranscript: false
     },
+    liveError: null,
     listen: {
       listening: true,
       lines,

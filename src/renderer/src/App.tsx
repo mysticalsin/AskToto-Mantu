@@ -145,7 +145,8 @@ import {
   transcriptHasContent
 } from '@shared/quick-actions'
 import { micSpeakerLabel } from '@shared/speaker-names'
-import { onboardingLaunchFromSearch } from './lib/onboarding-launch'
+import { useRevokedMeetingSave } from './lib/revoked-meeting-save'
+import { initialSettingsTabFromLaunch, initialViewFromLaunch } from './lib/app-launch'
 import { useRecoveredDraftCount } from './lib/recovered-draft-count'
 import { DEMO, DEMO_ANSWER, DEMO_LINES, DEMO_SUG } from './lib/app-demo'
 import {
@@ -164,17 +165,6 @@ function recapWriteKey(ownerId: string, runId: string): string {
 }
 
 type View = RendererView
-
-/** Main uses this one-shot launch hint only when Act 6 chose "set up AI" after the save had replied. */
-function initialViewFromLaunch(): View {
-  if (typeof location === 'undefined') return 'answer'
-  return onboardingLaunchFromSearch(location.search).view
-}
-
-function initialSettingsTabFromLaunch(): 'ai' | undefined {
-  if (typeof location === 'undefined') return undefined
-  return onboardingLaunchFromSearch(location.search).settingsTab
-}
 
 /** A renderer can be retired while an auto-hide callback is already queued. Parking is best effort. */
 function parkOverlayAfterHide(force = false): void {
@@ -2656,6 +2646,11 @@ export function App(): JSX.Element {
     [persistLiveMeetingOnExit]
   )
   persistLiveMeetingOnExitRef.current = persistAndRetireLiveMeeting
+  const liveError = useRevokedMeetingSave(
+    listen,
+    { meetingStartRef, discardedMeetingRef, discardPendingOwnerRef, claimedSavesRef, savedRef },
+    () => persistAndRetireLiveMeeting(ask.cancel(), 0)
+  )
 
   // "New meeting" from the bar — save the meeting we're leaving, then start a fresh session right away.
   // A single click ends the live meeting and snaps the timer to 0:00 with no other visible change — easy
@@ -3663,7 +3658,7 @@ export function App(): JSX.Element {
         listening={listen.listening}
         loading={listen.loading}
         loadingPct={listen.loadingPct}
-        error={listen.error}
+        error={liveError}
         captureNotice={captureError}
         autosaveWarning={autosaveWarn}
         showTranscript={transcriptShown}
@@ -3682,7 +3677,7 @@ export function App(): JSX.Element {
       listen.listening,
       listen.loading,
       listen.loadingPct,
-      listen.error,
+      liveError,
       captureError,
       autosaveWarn,
       settings?.showLiveTranscript,
@@ -4138,7 +4133,7 @@ export function App(): JSX.Element {
   // across the user's desktop. The dock receives its live notice through its own bounded, scrollable body.
   const showWideMeetingChrome = showListeningChrome && !rightEdgeDockVisible
   // The Reader's approval and error Details, and its header status (the attention tone while an action waits).
-  const readerDetailErrors = rightEdgeDetailErrors(ask.answer?.error, captureError, listen.error, openMeetingError)
+  const readerDetailErrors = rightEdgeDetailErrors(ask.answer?.error, captureError, liveError, openMeetingError)
   const readerTone = rightEdgeReaderTone({
     attention: !!commandState.proposalId,
     thinking: !!(capturing || ask.answer?.streaming || suggest.answer?.streaming),
@@ -4319,7 +4314,7 @@ export function App(): JSX.Element {
                 onSpotlightRef={spotlightRef}
                 spotlightReady={spotlightRefReady}
                 onHistory={onBarHistory}
-                liveNotice={listen.error}
+                liveNotice={liveError}
                 onSettings={onBarSettings}
                 onOpenReader={openRightEdgeReader}
                 detailsAvailable={commandState.proposalId !== null || readerDetailErrors.length > 0}
@@ -4439,12 +4434,12 @@ export function App(): JSX.Element {
               {/* Listen-engine status (offline/reconnecting/crash notes) — shown regardless of which view is
                   active. Copilot already renders the same `listen.error` text inline among its chips, so skip
                   it there to avoid showing the same note twice; every other view has no other place for it. */}
-              {showWideMeetingChrome && listen.error && view !== 'copilot' && (
+              {showWideMeetingChrome && liveError && view !== 'copilot' && (
                 <div
-                  title={listen.error ?? undefined}
+                  title={liveError ?? undefined}
                   className="fade-up rounded-xl border border-[var(--color-danger)]/30 bg-[var(--color-danger)]/10 px-3 py-1.5 text-[11px] leading-snug text-[var(--color-danger)] line-clamp-2"
                 >
-                  {listen.error}
+                  {liveError}
                 </div>
               )}
               {/* Opening a past meeting failed (recallRead ok:false) — shown regardless of view, since the

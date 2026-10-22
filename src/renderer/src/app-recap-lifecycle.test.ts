@@ -7,6 +7,7 @@ import type { AnswerState } from './state'
 import type { SaveDraftTranscriptResult, SaveMeeting, TranscriptLine } from '@shared/ipc'
 import { recapPersistAction } from './lib/transcript'
 import { startDraftAutosave } from './lib/draft-autosave'
+import { errorWithSavedNote, saveRevokedMeeting } from './lib/revoked-meeting-save'
 import {
   OwnedOperationGate,
   RecapWriteCoordinator,
@@ -443,6 +444,94 @@ describe('actual App live recap lifecycle', () => {
     })
     expect(h.ui.setSavedPath).not.toHaveBeenCalled()
     expect(h.recallUpdateRecap).not.toHaveBeenCalled()
+  })
+
+  it('a forced revoke with lines saves once; a later reset does not save again', async () => {
+    const h = lifecycleHost(async () => ({ path: 'a.md' }))
+    const handled = { current: null as string | null }
+    const ownership = {
+      meetingStartRef: h.context.meetingStartRef,
+      discardedMeetingRef: h.context.discardedMeetingRef,
+      discardPendingOwnerRef: h.context.discardPendingOwnerRef,
+      claimedSavesRef: h.context.claimedSavesRef,
+      savedRef: h.context.savedRef
+    }
+    const ended = { reason: 'screen-locked', startedAt: 100 }
+    const run = (override: Partial<Parameters<typeof saveRevokedMeeting>[0]> = {}) =>
+      saveRevokedMeeting({
+        ended,
+        lineCount: lines.length,
+        handled,
+        ownership,
+        persist: () => h.context.persistAndRetireLiveMeeting(h.context.ask.cancel()),
+        ...override
+      })
+
+    // The banner may claim "saved" only once this resolves.
+    await expect(run()).resolves.toBe('100')
+    expect(h.saveTranscript).toHaveBeenCalledTimes(1)
+    expect(errorWithSavedNote('Listening stopped when your Mac locked.', ended, '100')).toBe(
+      'Listening stopped when your Mac locked. Your transcript is saved.'
+    )
+
+    // The same end observed again (re-render, effect re-run) is a no-op.
+    await expect(run()).resolves.toBeNull()
+    expect(h.saveTranscript).toHaveBeenCalledTimes(1)
+
+    // A later New meeting / reset rescue of the same owner finds it claimed and writes nothing more.
+    h.newMeeting()
+    await Promise.all(h.exitPromises)
+    expect(h.saveTranscript).toHaveBeenCalledTimes(1)
+  })
+
+  it('never saves for a sign-in that ended, an empty transcript, a discarded owner or a successor meeting', async () => {
+    const h = lifecycleHost(async () => ({ path: 'a.md' }))
+    const base = {
+      lineCount: lines.length,
+      handled: { current: null as string | null },
+      ownership: {
+        meetingStartRef: h.context.meetingStartRef,
+        discardedMeetingRef: h.context.discardedMeetingRef,
+        discardPendingOwnerRef: h.context.discardPendingOwnerRef,
+        claimedSavesRef: h.context.claimedSavesRef,
+        savedRef: h.context.savedRef
+      },
+      persist: () => h.context.persistAndRetireLiveMeeting(h.context.ask.cancel())
+    }
+    for (const reason of ['sign-out', 'auth-revoked'])
+      await expect(saveRevokedMeeting({ ...base, ended: { reason, startedAt: 100 } })).resolves.toBeNull()
+    await expect(
+      saveRevokedMeeting({ ...base, lineCount: 0, ended: { reason: 'screen-locked', startedAt: 100 } })
+    ).resolves.toBeNull()
+    await expect(saveRevokedMeeting({ ...base, ended: { reason: 'screen-locked', startedAt: 99 } })).resolves.toBeNull()
+    h.context.discardedMeetingRef.current = '100'
+    await expect(
+      saveRevokedMeeting({ ...base, ended: { reason: 'system-suspend', startedAt: 100 } })
+    ).resolves.toBeNull()
+    expect(h.saveTranscript).not.toHaveBeenCalled()
+  })
+
+  it('reports no saved note when the revoke-time save gives up', async () => {
+    const h = lifecycleHost(async () => {
+      throw new Error('disk full')
+    })
+    const saved = await saveRevokedMeeting({
+      ended: { reason: 'system-suspend', startedAt: 100 },
+      lineCount: lines.length,
+      handled: { current: null },
+      ownership: {
+        meetingStartRef: h.context.meetingStartRef,
+        discardedMeetingRef: h.context.discardedMeetingRef,
+        discardPendingOwnerRef: h.context.discardPendingOwnerRef,
+        claimedSavesRef: h.context.claimedSavesRef,
+        savedRef: h.context.savedRef
+      },
+      persist: () => h.context.persistAndRetireLiveMeeting(h.context.ask.cancel())
+    })
+    expect(saved).toBeNull()
+    expect(errorWithSavedNote('Listening stopped.', { reason: 'system-suspend', startedAt: 100 }, saved)).toBe(
+      'Listening stopped.'
+    )
   })
 
   it('joins an in-flight manual save before exit, without duplicate create or recap update', async () => {
