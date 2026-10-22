@@ -86,6 +86,7 @@ import { applyCorrections, readAliasMap, replayCorrections, readCorrectionsJourn
 import { mergeExtraction } from './merge-extraction'
 import { applyHumanMarks } from './human-marks-apply'
 import { lintBrain } from './lint'
+import { isJobAdmissionOpen, settleJobCallbacks } from './ingest-job-hooks'
 import { preserveQuarantinedBeforeRebuild } from './rebuild-quarantine'
 import { publishForExtraction, publishIndexes, publishAll } from './publish'
 import { refuseIfDemoTagged } from '@shared/demo-guard'
@@ -502,30 +503,10 @@ type Job = {
   admissionChecks?: Array<() => void>
   /** Receipt join callbacks run only after this job's full extraction and mutation lifecycle settles. */
   settledCallbacks?: Array<() => void>
+  /** Q04b: the file was edited again while this job was extracting; re-ingest that key once it settles. */
+  reingestAgain?: boolean
 }
 const queue: Job[] = []
-
-function isJobAdmissionOpen(job: Job): boolean {
-  for (const check of job.admissionChecks ?? []) {
-    try {
-      check()
-    } catch {
-      return false
-    }
-  }
-  return true
-}
-
-function settleJobCallbacks(job: Job): void {
-  for (const callback of job.settledCallbacks ?? []) {
-    try {
-      callback()
-    } catch {
-      /* receipt settlement cannot fail ingest cleanup */
-    }
-  }
-  job.settledCallbacks = []
-}
 
 /** Background extraction nobody is waiting on: the only queue work the maintenance gate governs. */
 function isUnattendedModelWork(job: Job): boolean {
@@ -1565,6 +1546,7 @@ function pump(): void {
         .finally(() => {
           inFlightJobs.delete(job)
           settleJobCallbacks(job)
+          if (job.reingestAgain) void enqueueIngest(job.file, { force: true, reingest: true }).catch(logReingestFailure)
           pump() // this job's ingest just completed — re-check for a drain, and for newly-eligible backfill work
         })
     })
@@ -1574,6 +1556,7 @@ function pump(): void {
 
 onMaintenanceMayBegin(pump)
 
+const logReingestFailure = (e: unknown): void => mainLog.warn('[brain] re-ingest after an edit failed:', e)
 type EnqueueIngestOptions = { force?: boolean; deferred?: boolean; reingest?: boolean }
 
 /**
@@ -1651,7 +1634,12 @@ export async function enqueueIngest(
     }
     // A write that lands while the prior extraction is active cannot be safely folded into that job.
     // Keep the old job's result from clobbering the newer source by rebuilding from durable sources.
-    // Q04b: `reingest` never rebuilds the whole brain; the drift tick re-ingests this key after the job.
+    // Q04b: `reingest` never rebuilds the whole brain. A running extraction may have read the old text, so it
+    // re-queues this one key when it settles; a job still queued reads the new text itself.
+    if (reingest && sameFile) {
+      if (inFlightJobs.has(tracked)) tracked.reingestAgain = true
+      else tracked.sourceVersion = sourceVersion
+    }
     if (!reingest && (force || (sourceVersion && tracked.sourceVersion && sourceVersion !== tracked.sourceVersion))) {
       await requestSourceRefresh(s, checkAdmission)
       checkAdmission()

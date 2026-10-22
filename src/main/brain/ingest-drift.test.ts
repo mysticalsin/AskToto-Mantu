@@ -177,6 +177,39 @@ describe('source drift: per-meeting re-ingest and a budgeted rebuild (Q04 / D8-1
     expect(readDeal(getSettings(), 'survivor')).not.toBeNull()
   })
 
+  it('Q04b: an edit made while that meeting is extracting re-queues exactly one per-key re-ingest when it settles', async () => {
+    await seedIndex({ aStale: false })
+    let release: () => void = () => {}
+    const held = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    createStreamMock.mockImplementationOnce((opts: StreamOptions & { handlers: StreamHandlers }): StreamHandle => {
+      void held.then(() => {
+        opts.handlers.onDelta('{}')
+        opts.handlers.onDone({})
+      })
+      return { abort: () => {} }
+    })
+    writeFileSync(join(meetingsFolder, 'a.md'), '---\ndate: 2026-01-01\n---\nAlpha first edit.', 'utf8')
+    await enqueueIngest(join(meetingsFolder, 'a.md'), { force: true, reingest: true })
+    await vi.waitFor(() => expect(createStreamMock).toHaveBeenCalledTimes(1), { timeout: 15_000 })
+
+    // Second edit lands while the first extraction is still running: no rebuild, no wait for the daily tick.
+    writeFileSync(join(meetingsFolder, 'a.md'), '---\ndate: 2026-01-01\n---\nAlpha second edit.', 'utf8')
+    await enqueueIngest(join(meetingsFolder, 'a.md'), { force: true, reingest: true })
+    expect(createStreamMock).toHaveBeenCalledTimes(1)
+    release()
+
+    await vi.waitFor(() => expect(createStreamMock).toHaveBeenCalledTimes(2), { timeout: 15_000 })
+    await waitForIdle()
+    expect(createStreamMock).toHaveBeenCalledTimes(2)
+    expect(JSON.stringify(createStreamMock.mock.calls[1][0])).toContain('second edit')
+    const idx = readIndex(getSettings())
+    expect(idx.sourceRefreshRequested).toBeFalsy()
+    expect(idx.ingested['a.md']?.ok).toBe(true)
+    expect(readDeal(getSettings(), 'survivor')).not.toBeNull()
+  })
+
   it('Q04b: without the reingest option a forced enqueue on an ok meeting still rebuilds (unchanged contract)', async () => {
     await seedIndex({ aStale: false })
     await enqueueIngest(join(meetingsFolder, 'a.md'), { force: true })

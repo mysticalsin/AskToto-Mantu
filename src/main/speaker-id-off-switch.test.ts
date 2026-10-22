@@ -295,6 +295,44 @@ describe('Speaker Intelligence hard off-switch wiring', () => {
     ])
   })
 
+  it('speaker backfill re-ingests that meeting only and never asks for a whole-brain rebuild (Q04b)', async () => {
+    const lines = [{ t: 1_000, text: 'Synthetic transcript text', name: 'Speaker 1', speaker: 'them' }]
+    const settings = { speakerId: { enabled: false } }
+    const enqueueIngest = vi.fn(async () => undefined)
+    const speakerId = { discardSession: vi.fn(), autoEnrollFromLabeledWindows: vi.fn(() => 1) }
+    const applySpeakerIdPolicy = actualFunction('applySpeakerIdPolicy', {
+      speakerIdInstance: speakerId,
+      ...speakerIdPolicyGlobals
+    })
+    const speakerIdProcessingEnabled = actualFunction('speakerIdProcessingEnabled', {
+      getSettings: () => settings,
+      applySpeakerIdPolicy
+    })
+    const backfill = actualFunction('backfillSpeakerNames', {
+      requireAuth: () => true,
+      getSettings: () => settings,
+      speakerIdProcessingEnabled,
+      safeMeetingBasename: (file: string) => file,
+      recallRead: async () => ({ ok: true, lines, startedAt: 1_000 }),
+      fetchTeamsTranscriptForMeeting: async () => ({ entries: [] }),
+      authStatus: () => ({ name: 'Synthetic operator' }),
+      applySpeakerNames: () => ({ named: 1, lines: [{ ...lines[0], name: 'Resolved person' }] }),
+      clusterNamePairsFromAlignment: () => [{ clusterLabel: 'Speaker 1', name: 'Resolved person' }],
+      getSpeakerId: () => speakerId,
+      auditLog: vi.fn(),
+      updateMeetingTranscript: vi.fn(async () => ({ ok: true })),
+      enqueueIngest,
+      resolveMeetingsFolder: () => '/unused',
+      join,
+      mainLog: { warn: vi.fn() }
+    })
+
+    await backfill('synthetic.md')
+
+    expect(enqueueIngest).toHaveBeenCalledTimes(1)
+    expect(enqueueIngest).toHaveBeenCalledWith(join('/unused', 'synthetic.md'), { force: true, reingest: true })
+  })
+
   it('settings persistence and managed settings reads both apply the saved speaker policy', () => {
     const applySpeakerIdPolicy = vi.fn((enabled: boolean) => enabled)
     const setSettings = vi.fn(() => ({ speakerId: { enabled: false }, onboardingDone: true }))

@@ -5587,7 +5587,7 @@ async function backfillSpeakerNames(
     auditLog('transcript.speakers_backfilled', { named })
     // Re-run extraction now that the saved transcript names real speakers — the brain prompt already
     // attributes commitments to "you"/"them"/a name when the speaker is clear (see shared/brain.ts).
-    await enqueueIngest(join(resolveMeetingsFolder(settings), safeName), { force: true })
+    await enqueueIngest(join(resolveMeetingsFolder(settings), safeName), { force: true, reingest: true })
     return { ok: true, named }
   } catch (e) {
     mainLog.warn('[speaker-backfill] failed:', e instanceof Error ? e.message : String(e))
