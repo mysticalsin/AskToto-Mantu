@@ -110,12 +110,7 @@ export function filterMergeCandidates<T extends { id: string; name: string }>(
  *  transcript never needs a live substitution for, while "Acme Corp" → "Acme" genuinely changes what
  *  is heard. Gates the "also fix live transcription" checkbox. */
 export function isMeaningfulRename(oldName: string, newName: string): boolean {
-  const norm = (s: string): string =>
-    s
-      .trim()
-      .toLowerCase()
-      .normalize('NFKD')
-      .replace(/[̀-ͯ]/g, '')
+  const norm = (s: string): string => s.trim().toLowerCase().normalize('NFKD').replace(/[̀-ͯ]/g, '')
   return norm(oldName) !== norm(newName) && norm(newName).length > 0
 }
 
@@ -271,9 +266,7 @@ function MoneyCard({
     rawValue: unknown
   }): JSX.Element => (
     <div className="flex items-center justify-between gap-2">
-      <span className="text-[11px] font-semibold uppercase tracking-wide text-[color:var(--color-ink-3)]">
-        {label}
-      </span>
+      <span className="text-[11px] font-semibold uppercase tracking-wide text-[color:var(--color-ink-3)]">{label}</span>
       <div className="flex items-center gap-2">
         <span
           className={
@@ -294,7 +287,9 @@ function MoneyCard({
 
   return (
     <div className="flex flex-col gap-2 rounded-xl border border-[var(--color-hair-soft)] bg-white/[0.02] px-3 py-2.5">
-      <div className="text-[11px] font-semibold uppercase tracking-wide text-[color:var(--color-ink-3)]">Deal value</div>
+      <div className="text-[11px] font-semibold uppercase tracking-wide text-[color:var(--color-ink-3)]">
+        Deal value
+      </div>
       <Row label="Amount" field="amount" mode={amountMode} rawValue={deal.amount?.value} />
       <Row label="Close date" field="close_date" mode={dateMode} rawValue={deal.close_date?.value} />
       {error && <div className="text-[11px] text-[var(--color-danger)]">{error}</div>}
@@ -316,12 +311,8 @@ export interface RecentMerge {
   intoLabel: string
 }
 
-/** Does the post-merge "Undo" banner belong on the record currently open? BrainView keeps `recentMerge`
- *  for the rest of the dashboard session — only Undo, Dismiss or the next merge clear it, and Back merely
- *  pops to the dashboard — and hands it to whichever record page is mounted next. Without this gate the
- *  banner follows the user onto unrelated records and offers an Undo that restores two entities that page
- *  never mentions, discarding everything either side gained since the merge (unmergeEntities restores a
- *  point-in-time snapshot). Kept as an exported helper so the scoping is unit-testable without rendering. */
+/** Does the post-merge "Undo" banner belong on the record currently open? Without this gate it would follow
+ *  the user onto unrelated records (BrainView keeps `recentMerge` all session). Exported for unit tests. */
 export function mergeBannerApplies(merge: RecentMerge | null | undefined, ref: BrainRecordRef): boolean {
   return !!merge && merge.kind === ref.kind && merge.intoId === ref.id
 }
@@ -403,7 +394,12 @@ export function BrainRecordPage({
     if (!newName) return
     setRenameSaving(true)
     setRenameError(null)
-    const r = await window.toto.brainEntityRename(kind, id, newName, isMeaningfulRename(entity.name, newName) && alsoFixAsr)
+    const r = await window.toto.brainEntityRename(
+      kind,
+      id,
+      newName,
+      isMeaningfulRename(entity.name, newName) && alsoFixAsr
+    )
     setRenameSaving(false)
     if (r.ok) {
       setRenaming(false)
@@ -548,7 +544,10 @@ export function BrainRecordPage({
             {KIND_LABEL[kind]}
           </span>
           {entity.aliases.map((a) => (
-            <span key={a} className="rounded-full bg-white/[0.04] px-2 py-0.5 text-[10px] text-[color:var(--color-ink-3)]">
+            <span
+              key={a}
+              className="rounded-full bg-white/[0.04] px-2 py-0.5 text-[10px] text-[color:var(--color-ink-3)]"
+            >
               also: {a}
             </span>
           ))}
@@ -739,7 +738,8 @@ export function BrainRecordPage({
             ) : (
               <div className="flex flex-col gap-1.5">
                 <div className="text-[12px] text-[color:var(--color-ink-2)]">
-                  Merges <strong>{entity.name}</strong> into <strong>{mergeTarget.name}</strong>. Reversible via Undo.
+                  Merges <strong>{entity.name}</strong> into <strong>{mergeTarget.name}</strong>. You can undo this
+                  until either record changes.
                 </div>
                 {mergeError && <div className="text-[11px] text-[var(--color-danger)]">{mergeError}</div>}
                 <div className="flex items-center gap-1">

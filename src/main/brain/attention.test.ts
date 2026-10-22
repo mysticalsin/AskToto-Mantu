@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { basename, join } from 'node:path'
 import { tmpdir } from 'node:os'
 import type { Settings } from '@shared/ipc'
-import { MeetingExtractionSchema, type DealEntity } from '@shared/brain'
+import { DealEntitySchema, MeetingExtractionSchema, type DealEntity } from '@shared/brain'
 import { ingestExtraction, updateIndex } from './ingest'
 import { updateEntityField } from './corrections'
 import { slugify, setDealOutcome, readMeetingExtraction, readDeal, writeDeal } from './store'
@@ -36,8 +36,8 @@ describe('computeAttention (Task MI-3 needs-attention aggregation)', () => {
     await settleBrainWritesForTests()
     rmSync(folder, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
   })
-  it('a clean brain (no entities) produces no items', () => {
-    expect(computeAttention(s)).toEqual([])
+  it('a clean brain (no entities) produces no items', async () => {
+    expect(await computeAttention(s)).toEqual([])
   })
 
   it('a clean brain with entities but no lint/ambiguous/contradicted signals produces no items', async () => {
@@ -47,19 +47,24 @@ describe('computeAttention (Task MI-3 needs-attention aggregation)', () => {
       deal: { name: 'Acme Core Banking', stage: 'discovery' }
     })
     await ingestExtraction(s, clean, transcriptMd('2026-06-01'), join(folder, 'clean.md'))
-    expect(computeAttention(s)).toEqual([])
+    expect(await computeAttention(s)).toEqual([])
   })
 
   it('flags a lintBrain finding (closed deal still carrying a live win-likelihood band), entity-linked', async () => {
     const x = MeetingExtractionSchema.parse({
-      deal: { name: 'Acme Core Banking', stage: 'discovery', win_likelihood_band: 'good', band_evidence: 'they love it' }
+      deal: {
+        name: 'Acme Core Banking',
+        stage: 'discovery',
+        win_likelihood_band: 'good',
+        band_evidence: 'they love it'
+      }
     })
     await ingestExtraction(s, x, transcriptMd('2026-06-01'), join(folder, 'm1.md'))
     const dealSlug = slugify('Acme Core Banking')
     const updated = await setDealOutcome(s, dealSlug, 'won')
     expect(updated).not.toBeNull()
 
-    const items = computeAttention(s)
+    const items = await computeAttention(s)
     const lint = items.find((i) => i.kind === 'lint')
     expect(lint).toBeDefined()
     expect(lint?.entityKind).toBe('deal')
@@ -74,7 +79,7 @@ describe('computeAttention (Task MI-3 needs-attention aggregation)', () => {
     })
     await ingestExtraction(s, x, transcriptMd('2026-06-01'), join(folder, 'm1.md'))
 
-    const items = computeAttention(s)
+    const items = await computeAttention(s)
     const ambiguous = items.find((i) => i.kind === 'ambiguous')
     expect(ambiguous).toBeDefined()
     expect(ambiguous?.entityKind).toBe('account')
@@ -96,7 +101,7 @@ describe('computeAttention (Task MI-3 needs-attention aggregation)', () => {
     const x2 = MeetingExtractionSchema.parse({ deal: { name: 'Acme Core Banking', stage: 'closed-lost' } })
     await ingestExtraction(s, x2, transcriptMd('2030-01-01'), join(folder, 'm2.md'))
 
-    const items = computeAttention(s)
+    const items = await computeAttention(s)
     const contradicted = items.find((i) => i.kind === 'contradicted_pin')
     expect(contradicted).toBeDefined()
     expect(contradicted?.entityKind).toBe('deal')
@@ -113,7 +118,7 @@ describe('computeAttention (Task MI-3 needs-attention aggregation)', () => {
     const pinned = await updateEntityField(s, { kind: 'deal', id: dealSlug, field: 'stage', value: 'negotiation' })
     expect(pinned.ok).toBe(true)
 
-    const items = computeAttention(s)
+    const items = await computeAttention(s)
     expect(items.find((i) => i.kind === 'contradicted_pin')).toBeUndefined()
   })
 
@@ -129,7 +134,7 @@ describe('computeAttention (Task MI-3 needs-attention aggregation)', () => {
     })
     await ingestExtraction(s, x2, transcriptMd('2026-02-01'), join(folder, 'a2.md'))
 
-    const items = computeAttention(s)
+    const items = await computeAttention(s)
     const lint = items.find((i) => i.kind === 'lint')
     expect(lint).toBeDefined()
     expect(lint?.entityKind).toBe('person')
@@ -140,10 +145,16 @@ describe('computeAttention (Task MI-3 needs-attention aggregation)', () => {
 
   it('flags a durably failed ingest source with kind ingest_failed, no entityKind, and the error + exhausted flag in detail', async () => {
     await updateIndex(s, (idx) => {
-      idx.ingested['bad-meeting.md'] = { at: Date.now(), ok: false, error: 'Provider timeout', attempts: 6, exhausted: true }
+      idx.ingested['bad-meeting.md'] = {
+        at: Date.now(),
+        ok: false,
+        error: 'Provider timeout',
+        attempts: 6,
+        exhausted: true
+      }
     })
 
-    const items = computeAttention(s)
+    const items = await computeAttention(s)
     const failed = items.find((i) => i.kind === 'ingest_failed')
     expect(failed).toBeDefined()
     expect(failed?.entityKind).toBeUndefined()
@@ -161,7 +172,7 @@ describe('computeAttention (Task MI-3 needs-attention aggregation)', () => {
       }
     })
 
-    const failed = computeAttention(s).filter((i) => i.kind === 'ingest_failed')
+    const failed = (await computeAttention(s)).filter((i) => i.kind === 'ingest_failed')
     expect(failed.some((i) => i.id === 'good.md')).toBe(false)
     expect(failed.length).toBeLessThanOrEqual(10)
   })
@@ -231,7 +242,8 @@ describe('render-gate property — no unverified NUMBER ever reaches the Attenti
 
   // Checks the raw digit run AND the comma-grouped rendering (toLocaleString, used by formatDeal) so a
   // reformatted-but-still-present figure can't slip past a naive contiguous-substring check.
-  const containsValue = (text: string, n: number): boolean => text.includes(String(n)) || text.includes(n.toLocaleString())
+  const containsValue = (text: string, n: number): boolean =>
+    text.includes(String(n)) || text.includes(n.toLocaleString())
 
   const baseDeal = (id: string, name: string, amount: DealEntity['amount']): DealEntity => ({
     schema_version: 2,
@@ -282,7 +294,7 @@ describe('render-gate property — no unverified NUMBER ever reaches the Attenti
       })
     )
 
-    const items = computeAttention(s)
+    const items = await computeAttention(s)
     const ambiguous = items.find((i) => i.kind === 'ambiguous' && i.entityKind === 'deal' && i.id === slug)
     expect(ambiguous).toBeDefined()
     expect(containsValue(ambiguous!.detail, AMBIGUOUS_AMOUNT)).toBe(false)
@@ -312,7 +324,7 @@ describe('render-gate property — no unverified NUMBER ever reaches the Attenti
       })
     )
 
-    const items = computeAttention(s)
+    const items = await computeAttention(s)
     const contradicted = items.find((i) => i.kind === 'contradicted_pin' && i.entityKind === 'deal' && i.id === slug)
     expect(contradicted).toBeDefined()
     expect(containsValue(contradicted!.detail, PINNED_AMOUNT)).toBe(false)
@@ -336,12 +348,62 @@ describe('render-gate property — no unverified NUMBER ever reaches the Attenti
       })
     )
 
-    const items = computeAttention(s)
+    const items = await computeAttention(s)
     expect(items.filter((i) => i.entityKind === 'deal' && i.id === slug)).toEqual([]) // nothing contradicts it — not flagged
 
     // The redaction lives ONLY in the attention feed; every other reader of the record (money card,
     // Mars, formatDeal) still shows the real, legitimately-verified figure untouched.
     const stored = readDeal(s, slug)!
     expect(containsValue(formatDeal(stored), CLEAN_VERIFIED_AMOUNT)).toBe(true)
+  })
+})
+
+describe('computeAttention reads through the storage gateway (Q05 / D8-5)', () => {
+  let folder: string
+  let s: Settings
+
+  beforeEach(() => {
+    folder = mkdtempSync(join(tmpdir(), 'asktoto-attention-gateway-'))
+    s = settingsFor(folder)
+  })
+  afterEach(async () => {
+    await settleBrainWritesForTests()
+    rmSync(folder, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
+  })
+
+  const ambiguousDeal = (slug: string, name: string): DealEntity =>
+    DealEntitySchema.parse({
+      id: slug,
+      name,
+      amount: {
+        value: { value: 1, currency: 'EUR' },
+        source_file: 'm1.md',
+        date: '2026-01-01',
+        confidence: 'AMBIGUOUS',
+        state: 'extracted',
+        superseded: []
+      }
+    })
+
+  it('computeAttention skips cloud-only entity files and still reports the local ones', async () => {
+    useStorageForTests({
+      detector: {
+        classify: async (files) =>
+          new Map(files.map((file) => [file.path, file.path.includes('cloud-only') ? 'dataless' : 'local'] as const))
+      }
+    })
+    await writeDeal(s, 'local-deal', ambiguousDeal('local-deal', 'Local Deal'))
+    await writeDeal(s, 'cloud-only-deal', ambiguousDeal('cloud-only-deal', 'Cloud Deal'))
+
+    const items = await computeAttention(s)
+
+    expect(items.map((i) => i.id)).toEqual(['local-deal'])
+  })
+
+  it('computeAttention returns a promise, so a slow cloud read cannot block the main thread', async () => {
+    useStorageForTests()
+    const pending = computeAttention(s)
+    expect(pending).toBeInstanceOf(Promise)
+    expect(await pending).toEqual([])
   })
 })

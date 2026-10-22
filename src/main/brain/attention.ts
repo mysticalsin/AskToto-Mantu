@@ -1,8 +1,10 @@
 import type { Settings } from '@shared/ipc'
 import type { AttentionItem } from '@shared/ipc'
 import type { ProvenantField } from '@shared/brain'
-import { listEntities, readPerson, readAccount, readDeal, readIndex } from './store'
-import { lintBrainDetailed, ingestFailureDetails } from './ingest'
+import { mapWithConcurrency } from '../infra/concurrency'
+import { loadAccount, loadDeal, loadEntitySlugs, loadPerson, readIndexAsync } from './store'
+import { ingestFailureDetails } from './ingest'
+import { lintDeal, lintPerson } from './lint'
 
 /**
  * Needs-attention aggregation (Task MI-3) — the signal classes BrainView's Attention section surfaces,
@@ -69,27 +71,42 @@ function fieldItems<T>(
   return items
 }
 
-export function computeAttention(s: Settings): AttentionItem[] {
-  const items: AttentionItem[] = []
+/** Loads every entity of one kind through the storage gateway: a cloud-only or stuck file is classified and
+ *  skipped (loaders answer null), never opened on the main thread; at most 16 reads are in flight. */
+async function loadAll<T>(
+  s: Settings,
+  kind: 'person' | 'account' | 'deal',
+  load: (s: Settings, slug: string) => Promise<T | null>
+): Promise<Array<{ slug: string; entity: T }>> {
+  const slugs = await loadEntitySlugs(s, kind)
+  const loaded = await mapWithConcurrency(slugs, 16, async (slug) => ({ slug, entity: await load(s, slug) }))
+  return loaded.flatMap((row) => (row?.entity ? [{ slug: row.slug, entity: row.entity }] : []))
+}
 
-  for (const f of lintBrainDetailed(s)) {
+export async function computeAttention(s: Settings): Promise<AttentionItem[]> {
+  const items: AttentionItem[] = []
+  const [people, accounts, deals] = await Promise.all([
+    loadAll(s, 'person', loadPerson),
+    loadAll(s, 'account', loadAccount),
+    loadAll(s, 'deal', loadDeal)
+  ])
+
+  const lint = [
+    ...people.flatMap((p) => lintPerson(p.slug, p.entity)),
+    ...deals.flatMap((d) => lintDeal(d.slug, d.entity))
+  ]
+  for (const f of lint) {
     items.push({ kind: 'lint', entityKind: f.entityKind, id: f.id, label: f.label, detail: f.detail })
   }
 
-  for (const slug of listEntities(s, 'person')) {
-    const p = readPerson(s, slug)
-    if (!p) continue
+  for (const { slug, entity: p } of people) {
     items.push(...fieldItems('person', slug, p.name, 'Role', p.role_provenance, (v) => v))
     items.push(...fieldItems('person', slug, p.name, 'Organization', p.org_provenance, (v) => v))
   }
-  for (const slug of listEntities(s, 'account')) {
-    const a = readAccount(s, slug)
-    if (!a) continue
+  for (const { slug, entity: a } of accounts) {
     items.push(...fieldItems('account', slug, a.name, 'Sector', a.sector_provenance, (v) => v))
   }
-  for (const slug of listEntities(s, 'deal')) {
-    const d = readDeal(s, slug)
-    if (!d) continue
+  for (const { slug, entity: d } of deals) {
     items.push(...fieldItems('deal', slug, d.name, 'Stage', d.stage_provenance, (v) => v))
     items.push(
       ...fieldItems('deal', slug, d.name, 'Win likelihood', d.win_likelihood_band_provenance, (v) => v ?? 'no read')
@@ -106,14 +123,12 @@ export function computeAttention(s: Settings): AttentionItem[] {
   // per-file detail lives in brain:status's failedDetails for the dashboard's own failure banner). No
   // entityKind: there is no record to jump to, so `id` carries the filename and the renderer opens the
   // transcript instead.
-  for (const f of ingestFailureDetails(readIndex(s), 10)) {
+  for (const f of ingestFailureDetails(await readIndexAsync(s), 10)) {
     items.push({
       kind: 'ingest_failed',
       id: f.file,
       label: f.file,
-      detail: f.exhausted
-        ? `Exhausted after repeated retries: ${f.error}`
-        : `Failed to index: ${f.error}`
+      detail: f.exhausted ? `Exhausted after repeated retries: ${f.error}` : `Failed to index: ${f.error}`
     })
   }
 

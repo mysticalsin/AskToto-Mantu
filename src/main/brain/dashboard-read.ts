@@ -10,6 +10,10 @@ import {
   loadMeetingExtractionSlugs
 } from './store'
 import { resolveMeetingsFolder } from '../transcripts'
+import { mapWithConcurrency } from '../infra/concurrency'
+
+/** D8-6: at most this many entity or extraction files are read at once, whatever the size of the brain. */
+const READ_CONCURRENCY = 16
 
 type BrainStatusCounts = { people: number; accounts: number; deals: number; nodes: number; edges: number }
 let brainStatusCountsCache: { folder: string; revision: number; counts: BrainStatusCounts } | null = null
@@ -42,10 +46,10 @@ export async function readBrainDashboard(s: Settings) {
     loadMeetingExtractionSlugs(s)
   ])
   const [people, accounts, deals, meetings] = await Promise.all([
-    Promise.all(personSlugs.map((slug) => loadPerson(s, slug))),
-    Promise.all(accountSlugs.map((slug) => loadAccount(s, slug))),
-    Promise.all(dealSlugs.map((slug) => loadDeal(s, slug))),
-    Promise.all((meetingSlugs ?? []).map((slug) => loadMeetingExtraction(s, slug)))
+    mapWithConcurrency(personSlugs, READ_CONCURRENCY, (slug) => loadPerson(s, slug)),
+    mapWithConcurrency(accountSlugs, READ_CONCURRENCY, (slug) => loadAccount(s, slug)),
+    mapWithConcurrency(dealSlugs, READ_CONCURRENCY, (slug) => loadDeal(s, slug)),
+    mapWithConcurrency(meetingSlugs ?? [], READ_CONCURRENCY, (slug) => loadMeetingExtraction(s, slug))
   ])
   // Source receipts bind private on-device paths/bytes to ingestion. Keep them Main-only even though the
   // dashboard needs the ordinary meeting refs and extraction fields.

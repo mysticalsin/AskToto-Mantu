@@ -718,6 +718,126 @@ describe('corrections engine', () => {
     expect(r2.ok).toBe(false)
   })
 
+  // ── Q05 / D8-8: Undo refuses once either record changed after the merge ───
+  const UNMERGE_REFUSAL = "This merge can't be undone because one of these records changed after it."
+
+  it('unmerge is refused after a later pin on the survivor, and nothing is restored or journaled', async () => {
+    await ingestThreeMeetings(s)
+    expect((await mergeEntities(s, { kind: 'person', fromId: M_SILVA_SLUG, intoId: MARIA_SLUG })).ok).toBe(true)
+    const mergeSeq = readCorrectionsJournal(s).find((e) => e.kind === 'entity_merge')!.seq
+    expect((await updateEntityField(s, { kind: 'person', id: MARIA_SLUG, field: 'role', value: 'CEO' })).ok).toBe(true)
+    const before = snapshotEntities(s)
+    const journalBefore = readCorrectionsJournal(s).length
+
+    const r = await unmergeEntities(s, { targetSeq: mergeSeq })
+
+    expect(r).toEqual({ ok: false, error: UNMERGE_REFUSAL })
+    expect(snapshotEntities(s)).toEqual(before)
+    expect(readCorrectionsJournal(s)).toHaveLength(journalBefore)
+    expect(readPerson(s, MARIA_SLUG)!.role).toBe('CEO')
+  })
+
+  it('unmerge is refused after a later rename of the survivor', async () => {
+    await ingestThreeMeetings(s)
+    expect((await mergeEntities(s, { kind: 'person', fromId: M_SILVA_SLUG, intoId: MARIA_SLUG })).ok).toBe(true)
+    const mergeSeq = readCorrectionsJournal(s).find((e) => e.kind === 'entity_merge')!.seq
+    expect((await renameEntity(s, { kind: 'person', id: MARIA_SLUG, newName: 'Maria S. Silva' })).ok).toBe(true)
+    expect(await unmergeEntities(s, { targetSeq: mergeSeq })).toEqual({ ok: false, error: UNMERGE_REFUSAL })
+  })
+
+  it('unmerge is refused for a stale seq once a later merge absorbed the survivor', async () => {
+    await ingestThreeMeetings(s)
+    expect((await mergeEntities(s, { kind: 'person', fromId: M_SILVA_SLUG, intoId: MARIA_SLUG })).ok).toBe(true)
+    const firstSeq = readCorrectionsJournal(s).find((e) => e.kind === 'entity_merge')!.seq
+    const third = MeetingExtractionSchema.parse({
+      account: { name: 'Acme Corp', sector: 'banking', confidence: 'EXTRACTED' },
+      people: [{ name: 'Jean Dupont', role: null, org: null, confidence: 'EXTRACTED' }]
+    })
+    await ingestExtraction(s, third, transcriptMd('2026-06-04'), join(folder, 'm4.md'))
+    const other = slugify('Jean Dupont')
+    expect((await mergeEntities(s, { kind: 'person', fromId: MARIA_SLUG, intoId: other })).ok).toBe(true)
+    expect(await unmergeEntities(s, { targetSeq: firstSeq })).toEqual({ ok: false, error: UNMERGE_REFUSAL })
+  })
+
+  it('unmerge still works when only an unrelated record changed after the merge', async () => {
+    await ingestThreeMeetings(s)
+    expect((await mergeEntities(s, { kind: 'person', fromId: M_SILVA_SLUG, intoId: MARIA_SLUG })).ok).toBe(true)
+    const mergeSeq = readCorrectionsJournal(s).find((e) => e.kind === 'entity_merge')!.seq
+    expect((await updateEntityField(s, { kind: 'deal', id: DEAL_SLUG, field: 'stage', value: 'contract' })).ok).toBe(
+      true
+    )
+    expect((await unmergeEntities(s, { targetSeq: mergeSeq })).ok).toBe(true)
+  })
+
+  // ── Q05 / D8-5: the alias map is cached between entity writes ────────────
+  it('readAliasMap is served from cache until an entity write', async () => {
+    await ingestThreeMeetings(s)
+    const first = readAliasMap(s)
+    expect(first.has('zed-cache-probe')).toBe(false)
+
+    // Edit an entity file behind the store's back: no write generation moves, so the cached map is served.
+    const file = join(brainDir(s), 'entities', 'person', `${MARIA_SLUG}.json`)
+    const raw = JSON.parse(readFileSync(file, 'utf8')) as { aliases: string[] }
+    raw.aliases.push('Zed Cache Probe')
+    writeFileSync(file, JSON.stringify(raw), 'utf8')
+    expect(readAliasMap(s).has('zed-cache-probe')).toBe(false)
+
+    // Any store write invalidates it.
+    await writeJson(s, 'probe.json', { v: 1 })
+    expect(readAliasMap(s).has('zed-cache-probe')).toBe(true)
+  })
+
+  it('readAliasMap hands out a copy, so a caller mutating its map cannot poison the cache', async () => {
+    await ingestThreeMeetings(s)
+    const first = readAliasMap(s)
+    first.clear()
+    expect(readAliasMap(s).size).toBeGreaterThan(0)
+  })
+
+  it('readAliasMap reflects a purge immediately', async () => {
+    await ingestThreeMeetings(s)
+    expect(readAliasMap(s).size).toBeGreaterThan(0)
+    purgeBrain(s, { mode: 'erase' })
+    expect(readAliasMap(s).size).toBe(0)
+  })
+
+  // ── Q05 / D8-11: Accept pins only the value the person reviewed ──────────
+  it('updateEntityField refuses an accept when the stored value changed since it was reviewed', async () => {
+    await ingestThreeMeetings(s)
+    const current = readFieldProvenance(s, { kind: 'deal', id: DEAL_SLUG, field: 'stage' })!
+    expect(current.state).toBe('extracted')
+
+    const stale = await updateEntityField(
+      s,
+      { kind: 'deal', id: DEAL_SLUG, field: 'stage', value: 'discovery' },
+      { expectedValue: 'a different value' }
+    )
+    expect(stale).toEqual({ ok: false, error: 'This value changed. Review it again.' })
+    expect(readFieldProvenance(s, { kind: 'deal', id: DEAL_SLUG, field: 'stage' })!.state).toBe('extracted')
+
+    const fresh = await updateEntityField(
+      s,
+      { kind: 'deal', id: DEAL_SLUG, field: 'stage', value: current.value },
+      { expectedValue: current.value }
+    )
+    expect(fresh.ok).toBe(true)
+    expect(readFieldProvenance(s, { kind: 'deal', id: DEAL_SLUG, field: 'stage' })!.state).toBe('pinned')
+  })
+
+  it('updateEntityField refuses an accept when the field was pinned in the meantime', async () => {
+    await ingestThreeMeetings(s)
+    const current = readFieldProvenance(s, { kind: 'deal', id: DEAL_SLUG, field: 'stage' })!
+    expect((await updateEntityField(s, { kind: 'deal', id: DEAL_SLUG, field: 'stage', value: 'contract' })).ok).toBe(
+      true
+    )
+    const r = await updateEntityField(
+      s,
+      { kind: 'deal', id: DEAL_SLUG, field: 'stage', value: current.value },
+      { expectedValue: current.value }
+    )
+    expect(r).toEqual({ ok: false, error: 'This value changed. Review it again.' })
+  })
+
   // ── ★ Pinned field survives a subsequent merge from a newer meeting ─────
   it('a pinned deal stage is not overwritten by a later meeting; the incoming value is recorded as superseded', async () => {
     await ingestThreeMeetings(s)

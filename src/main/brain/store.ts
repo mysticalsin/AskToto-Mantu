@@ -36,10 +36,12 @@ import {
 } from '@shared/brain'
 import { resolveMeetingsFolder, readSavedFile, writeSaved, decodeSavedResult, envelopeKeyKind } from '../transcripts'
 import { classifyAll, storageAt } from '../infra/storage/meetings-storage'
+import { mapWithConcurrency } from '../infra/concurrency'
 import { readStableSnapshotBytes } from '../infra/storage/stable-read'
 import { mainLog, auditLog } from '../logger'
 import { fileKeyState, isKeychainAvailable } from '../secrets'
 import { cloneEntity } from './entity-values'
+import { indexUnavailableMessage } from './index-messages'
 import { migrateAccount, migrateDeal, migratePerson } from './entity-migrate'
 import { HUMAN_MARKS_FILE, recordDealOutcomeMark } from './human-marks'
 
@@ -521,6 +523,12 @@ function setAsideCorruptIndex(p: string): ResolvedIndex {
   return { kind: 'absent' }
 }
 
+async function indexVersionChanged(gateway: ReturnType<typeof storageAt>, seen: { mtimeMs: number; size: number }) {
+  const rel = join('.brain', INDEX_REL)
+  const now = (await classifyAll(gateway, [rel])).get(rel)
+  return !now || !('version' in now) || now.version.mtimeMs !== seen.mtimeMs || now.version.size !== seen.size
+}
+
 function loadIndex(s: Settings): ResolvedIndex {
   const p = join(brainDir(s), INDEX_REL)
   const hit = indexCache.get(p)
@@ -592,6 +600,12 @@ async function loadIndexAsync(s: Settings): Promise<ResolvedIndex> {
     return recordUnavailable(p, hit, mtimeMs, size, { kind: 'unavailable', cause: 'io', detail: read.status })
   }
   const classified = classifyIndexBytes(read.bytes)
+  // D8-9: quarantine only the bytes that were classified. If the file changed since (another device synced a
+  // valid index), leave it alone and report io, uncached, so the next poll reads the new file.
+  if (classified.kind === 'corrupt' && (await indexVersionChanged(gateway, read.version))) {
+    indexCache.delete(p)
+    return { kind: 'unavailable', cause: 'io', detail: 'changed' }
+  }
   const load: ResolvedIndex = classified.kind === 'corrupt' ? setAsideCorruptIndex(p) : classified
   if (load.kind === 'absent') {
     indexCache.delete(p)
@@ -615,10 +629,7 @@ export const readIndexAsync = async (s: Settings): Promise<BrainIndex> => {
   return load.kind === 'ready' ? load.index : BrainIndexSchema.parse({})
 }
 
-export const loadIndexForStatus = async (s: Settings): Promise<BrainIndex> => {
-  const load = await loadIndexAsync(s)
-  return load.kind === 'ready' ? load.index : BrainIndexSchema.parse({})
-}
+export const loadIndexForStatus = readIndexAsync
 
 /** Non-null while an existing index.json cannot be used here: the index is read-only for the session. */
 export function indexUnavailable(s: Settings): IndexUnavailableCause | null {
@@ -631,32 +642,7 @@ export async function indexUnavailableAsync(s: Settings): Promise<IndexUnavailab
   return load.kind === 'unavailable' ? load.cause : null
 }
 
-/** User-facing, content-free explanation for brainStatus.error. */
-export function indexUnavailableMessage(cause: IndexUnavailableCause): string {
-  switch (cause) {
-    case 'undecryptable':
-      return (
-        "Mantu Intelligence can't read its index on this device: it was encrypted with a key this " +
-        "device doesn't have (another device, or a keychain that is unavailable). Nothing was changed " +
-        'or deleted. Indexing is paused on this device.'
-      )
-    case 'io':
-      return (
-        "Mantu Intelligence couldn't read its index file just now (it may still be downloading from " +
-        'OneDrive). Nothing was changed. Indexing resumes automatically once the file can be read.'
-      )
-    case 'unsupported':
-      return (
-        "Mantu Intelligence's index was written by a newer version of Métis. Nothing was changed. " +
-        'Update Métis on this device to resume indexing.'
-      )
-    case 'corrupt-kept':
-      return (
-        "Mantu Intelligence's index is damaged and the automatic repair limit for this folder has " +
-        'been reached. Nothing was deleted. Indexing is paused on this device.'
-      )
-  }
-}
+export { indexUnavailableMessage }
 
 /** Refusal copy for an explicit rebuild while the existing index is unavailable; null when it is usable. */
 export async function rebuildUnavailableError(s: Settings): Promise<string | null> {
@@ -744,6 +730,7 @@ export const writeDeal = async (s: Settings, slug: string, v: DealEntity): Promi
   invalidateMatchKeyDir(join(brainDir(s), 'entities', 'deal'))
 }
 
+const ENTITY_NAMES_CAP = 500
 /**
  * Canonical people/account NAMES ONLY, merged and deduped — feeds the renderer's ASR entity-casing bias
  * (brain:entityNames), which refreshes opportunistically on mount, not in response to a user action. That
@@ -752,12 +739,23 @@ export const writeDeal = async (s: Settings, slug: string, v: DealEntity): Promi
  */
 export async function loadEntityDisplayNames(s: Settings): Promise<{ names: string[] }> {
   const [personSlugs, accountSlugs] = await Promise.all([loadEntitySlugs(s, 'person'), loadEntitySlugs(s, 'account')])
-  const [people, accounts] = await Promise.all([
-    Promise.all(personSlugs.map((slug) => loadPerson(s, slug))),
-    Promise.all(accountSlugs.map((slug) => loadAccount(s, slug)))
-  ])
-  const names = [...people, ...accounts].map((entity) => entity?.name).filter((n): n is string => !!n)
-  return { names: Array.from(new Set(names)).slice(0, 500) }
+  const loads = [
+    ...personSlugs.map((slug) => () => loadPerson(s, slug)),
+    ...accountSlugs.map((slug) => () => loadAccount(s, slug))
+  ]
+  // D8-6: 16 reads at a time, and no new read once 500 names are in hand (the list is capped at 500).
+  const seen = new Set<string>()
+  const loaded = await mapWithConcurrency(
+    loads,
+    16,
+    async (load) => {
+      const name = (await load())?.name
+      if (name) seen.add(name)
+      return name
+    },
+    () => seen.size >= ENTITY_NAMES_CAP
+  )
+  return { names: Array.from(new Set(loaded.filter((n): n is string => !!n))).slice(0, ENTITY_NAMES_CAP) }
 }
 
 /**
@@ -1101,6 +1099,7 @@ export function purgeBrain(
     if (existsSync(root)) rmSync(root, { recursive: true, force: true })
     if (opts.mode === 'erase') rmSync(preservedDir, { recursive: true, force: true })
     resetMatchKeyCacheForTests() // Receipt Mode must not match against a wiped corpus
+    _writeGen += 1 // the cached alias map described the wiped entities
     if (kept.length > 0) {
       restoreKept()
       // Everything except the restored human files is confirmed gone; their presence here is

@@ -7,6 +7,7 @@
  * assertBrainReader; every privileged write stays main-window-only through assertMainWindow.
  */
 import { basename } from 'node:path'
+import { isDeepStrictEqual } from 'node:util'
 import type { BrowserWindow, IpcMain, IpcMainInvokeEvent, MessageBoxOptions } from 'electron'
 import {
   IPC,
@@ -49,6 +50,7 @@ import {
 } from '../brain/corrections'
 import { publishEntity, removeFromWiki } from '../brain/publish'
 import { computeAttention } from '../brain/attention'
+import { VALUE_CHANGED_ERROR } from '../brain/field-provenance'
 import { openIntelligenceWindow } from '../intelligence'
 import {
   loadIndexForStatus as loadBrainIndexForStatus,
@@ -213,6 +215,18 @@ export function registerBrainIpc(deps: BrainIpcDependencies): void {
     // guarded backfill request only).
     assertMainWindow(e)
     if (!requireAuth()) throw new Error('Not signed in.')
+    // D8-10: a rebuild wipes the derived store, so ask first and say what it costs. Cancel is the default.
+    const { response } = await showMessageBox({
+      type: 'warning' as const,
+      title: 'Rebuild Mantu Intelligence',
+      message: 'Rebuild Mantu Intelligence?',
+      detail:
+        'Métis deletes the derived knowledge and extracts it again from your meetings. Your corrections are kept.',
+      buttons: ['Rebuild', 'Cancel'],
+      defaultId: 1,
+      cancelId: 1
+    })
+    if (response !== 0) return { queued: 0, error: 'cancelled' }
     // The full orchestration lives in ingest.ts's startRebuild (unit-testable, keeps this handler thin):
     //  - preserveCorrections purge whose result is CHECKED (MI-2.5 Fix F — abort on a partial wipe);
     //  - a corrupt/blocked-journal guard (MI-2.5 review Fix 2 — refuse rather than rebuild atop a store
@@ -473,7 +487,15 @@ export function registerBrainIpc(deps: BrainIpcDependencies): void {
     // (does), the same outcome an in-place edit-then-save-with-no-changes would produce today — there is
     // no separate "verify without editing" mutation, so this is the correction engine's exact legal
     // expression of "accept".
-    const r = await updateEntityField(s, { kind: entityKind, id: entityId, field, value: provenance.value })
+    // D8-11: pin only the value that was reviewed. The check is repeated inside updateEntityField's lock, so
+    // an ingest that lands between this read and the write cannot be overwritten with the older value.
+    const expectedValue = parsed.data.expectedValue === undefined ? provenance.value : parsed.data.expectedValue
+    if (!isDeepStrictEqual(expectedValue, provenance.value)) return { ok: false, error: VALUE_CHANGED_ERROR }
+    const r = await updateEntityField(
+      s,
+      { kind: entityKind, id: entityId, field, value: provenance.value },
+      { expectedValue }
+    )
     if (r.ok) {
       await markBrainChanged(s)
       auditLog('brain.entity.field_decision', { kind: entityKind, field, decision })
@@ -494,10 +516,10 @@ export function registerBrainIpc(deps: BrainIpcDependencies): void {
     const { sourceDigest: _sourceDigest, sourceRootId: _sourceRootId, ...visible } = extraction
     return visible
   })
-  ipcMain.handle(IPC.brainAttention, (e) => {
+  ipcMain.handle(IPC.brainAttention, async (e) => {
     assertMainWindow(e)
     if (!requireAuth()) return { items: [] }
-    return { items: computeAttention(getSettings()) }
+    return { items: await computeAttention(getSettings()) }
   })
 
   // Commitment settlement — the human closes the loop the LLM never may (kept/broken are only ever

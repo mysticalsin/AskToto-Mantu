@@ -670,18 +670,17 @@ export const EntityUpdateFieldPayloadSchema = z.object({
   field: z.string().min(1).max(60),
   value: z.unknown()
 })
-/** Payload for brain:field-decision (dashboard suggestion accept/dismiss, deferred CRM pattern 3) — the
- *  human reviews one provenance-bearing field (see ProvenantField/RENDERABLE_PROVENANCE_STATES in
- *  shared/brain.ts) and either accepts or dismisses the extraction. `field` is bounded the same way
- *  brain:entityUpdateField's is; the legal (kind, field) set is validated in corrections.ts, not here.
- *  `decision: 'dismiss'` is accepted by this schema but currently always refused by the handler — there
- *  is no correction-engine mutation that clears/reverts a field's value, only ones that pin a NEW one
- *  (see readFieldProvenance's doc comment in corrections.ts). */
+/** Payload for brain:field-decision (dashboard suggestion accept/dismiss) — the human reviews one
+ *  provenance-bearing field (see ProvenantField in shared/brain.ts) and accepts or dismisses it. `field` is
+ *  bounded like brain:entityUpdateField's; the legal (kind, field) set is validated in corrections.ts.
+ *  `dismiss` is accepted here but always refused by the handler: no mutation clears a field's value. Accept
+ *  pins `expectedValue` (the value reviewed, D8-11) and is refused if the stored value has since changed. */
 export const FieldDecisionPayloadSchema = z.object({
   entityKind: EntityKindSchema,
   entityId: z.string().min(1).max(200).regex(SLUG_RE, 'Invalid entity id.'),
   field: z.string().min(1).max(60),
-  decision: z.enum(['accept', 'dismiss'])
+  decision: z.enum(['accept', 'dismiss']),
+  expectedValue: z.unknown().optional()
 })
 
 /** `dealSlug` is optional — a commitment spoken in a deal-less meeting (x.deal is null) lives ONLY on

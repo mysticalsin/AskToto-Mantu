@@ -47,6 +47,11 @@ import {
   writeGraph,
   listEntities
 } from './store'
+import { cachedAliasMap } from './alias-map-cache'
+import { acceptIsStale, VALUE_CHANGED_ERROR } from './field-provenance'
+import { laterEditTouchesMerge, UNMERGE_BLOCKED_ERROR } from './unmerge-guard'
+
+export { readFieldProvenance } from './field-provenance'
 
 /**
  * Correction engine (Task MI-2) — journal, aliases, and the human-correction mutations themselves.
@@ -243,7 +248,8 @@ type TaggedEntry = { sourceId: string; localSeq: number; entry: CorrectionEntry 
 /** Stable cross-device identity for a correction — `seq` is deliberately excluded: it's assigned
  *  per-device by appendCorrectionEntry (the journal's own length at append time) and collides trivially
  *  once two devices' journals have forked, so it cannot identify an entry across a conflict-copy merge. */
-const journalEntryIdentity = (e: CorrectionEntry): string => JSON.stringify({ kind: e.kind, at: e.at, payload: e.payload })
+const journalEntryIdentity = (e: CorrectionEntry): string =>
+  JSON.stringify({ kind: e.kind, at: e.at, payload: e.payload })
 
 /**
  * Union multiple devices' journal entries into one deterministic, re-sequenced journal (Fix G — an
@@ -263,7 +269,8 @@ function mergeJournalSources(sources: Array<{ sourceId: string; entries: Correct
   const entriesBySource = new Map<string, CorrectionEntry[]>()
   for (const src of sources) entriesBySource.set(src.sourceId, src.entries)
   const tagged: TaggedEntry[] = []
-  for (const src of sources) src.entries.forEach((entry, localSeq) => tagged.push({ sourceId: src.sourceId, localSeq, entry }))
+  for (const src of sources)
+    src.entries.forEach((entry, localSeq) => tagged.push({ sourceId: src.sourceId, localSeq, entry }))
 
   // Minor (c): an entity_unmerge's base identity is just {kind, at, targetSeq}; two unmerges from
   // different devices that coincidentally share `at` and `targetSeq` but reference DIFFERENT merges would
@@ -388,7 +395,9 @@ export async function readCorrectionsJournalSafe(
     } catch (e) {
       mainLog.error('[brain] could not write corrections corruption lock — block may not persist:', e)
     }
-    mainLog.warn(`[brain] corrections journal was corrupt — preserved to ${quarantinedTo}, corrections BLOCKED until resolved`)
+    mainLog.warn(
+      `[brain] corrections journal was corrupt — preserved to ${quarantinedTo}, corrections BLOCKED until resolved`
+    )
     return {
       ok: false,
       entries: [],
@@ -428,7 +437,10 @@ export async function readCorrectionsJournalSafe(
       // forever. Rename it ONCE into the corrupt- namespace (excluded from isConflictCopyName), so it
       // stops being rechecked while its bytes stay preserved for inspection.
       try {
-        renameSync(join(root, name), join(root, `corrections.corrupt-conflict-${name.replace(/\.json$/i, '')}-${now().replace(/[:.]/g, '-')}.json`))
+        renameSync(
+          join(root, name),
+          join(root, `corrections.corrupt-conflict-${name.replace(/\.json$/i, '')}-${now().replace(/[:.]/g, '-')}.json`)
+        )
         mainLog.warn(`[brain] a corrupt OneDrive conflict copy (${name}) was preserved and set aside`)
       } catch (e) {
         mainLog.warn(`[brain] could not set aside corrupt conflict copy ${name}:`, e)
@@ -439,7 +451,10 @@ export async function readCorrectionsJournalSafe(
   await writeJson(s, CORRECTIONS_REL, journalToWrite(merged, unrecognized))
   for (const name of resolvedCopies) {
     try {
-      renameSync(join(root, name), join(root, `${name.replace(/\.json$/i, '')}.merged-${now().replace(/[:.]/g, '-')}.json`))
+      renameSync(
+        join(root, name),
+        join(root, `${name.replace(/\.json$/i, '')}.merged-${now().replace(/[:.]/g, '-')}.json`)
+      )
     } catch (e) {
       mainLog.warn(`[brain] could not rename resolved conflict copy ${name}:`, e)
     }
@@ -694,9 +709,11 @@ export function aliasMapFromJournal(entries: CorrectionEntry[]): AliasMap {
  * of the fix that makes a single union map safe for both.
  */
 export function readAliasMap(s: Settings): AliasMap {
-  const map = readEntityAliasMap(s)
-  for (const [k, v] of aliasMapFromJournal(readCorrectionsJournal(s))) map.set(k, v)
-  return map
+  return cachedAliasMap(s, () => {
+    const map = readEntityAliasMap(s)
+    for (const [k, v] of aliasMapFromJournal(readCorrectionsJournal(s))) map.set(k, v)
+    return map
+  })
 }
 
 /**
@@ -744,7 +761,11 @@ export function resolveEntitySlug(
 
 // ── Shared entity dispatch + alias union ──────────────────────────────────────
 
-function readTypedEntity(s: Settings, kind: EntityKind, slug: string): PersonEntity | AccountEntity | DealEntity | null {
+function readTypedEntity(
+  s: Settings,
+  kind: EntityKind,
+  slug: string
+): PersonEntity | AccountEntity | DealEntity | null {
   if (kind === 'person') return readPerson(s, slug)
   if (kind === 'account') return readAccount(s, slug)
   return readDeal(s, slug)
@@ -946,7 +967,11 @@ export async function renameEntity(
     if (payload.newName === entity.name) return { ok: true }
     const oldName = entity.name
     const sanitized = { kind: payload.kind, id, newName: payload.newName }
-    await appendCorrectionEntry(s, { seq: 0, at, kind: 'entity_rename', payload: sanitized, snapshot: { oldName } }, gate)
+    await appendCorrectionEntry(
+      s,
+      { seq: 0, at, kind: 'entity_rename', payload: sanitized, snapshot: { oldName } },
+      gate
+    )
     const r = await applyRename(s, sanitized, { oldName })
     if (!r.ok) return { ok: false, error: r.error }
     return { ok: true }
@@ -1130,7 +1155,10 @@ function precheckMerge(
   const into = readTypedEntity(s, payload.kind, payload.intoId)
   if (!from) return { ok: false, error: 'Source entity not found (already merged or does not exist).' }
   if (!into) return { ok: false, error: 'Target entity not found.' }
-  return { ok: true, snapshot: { fromEntity: JSON.parse(JSON.stringify(from)), intoEntity: JSON.parse(JSON.stringify(into)) } }
+  return {
+    ok: true,
+    snapshot: { fromEntity: JSON.parse(JSON.stringify(from)), intoEntity: JSON.parse(JSON.stringify(into)) }
+  }
 }
 
 /** Merge `fromId` into `intoId`: unions aliases (adding fromId's old display name + id as new aliases
@@ -1189,14 +1217,18 @@ function resolveUnmergeRestore(
   journal: CorrectionEntry[]
 ): { ok: true; resolved: ResolvedUnmerge } | { ok: false; error: string } {
   const matches = journal.filter(
-    (e): e is Extract<CorrectionEntry, { kind: 'entity_merge' }> => e.seq === payload.targetSeq && e.kind === 'entity_merge'
+    (e): e is Extract<CorrectionEntry, { kind: 'entity_merge' }> =>
+      e.seq === payload.targetSeq && e.kind === 'entity_merge'
   )
   // MQA-016: a journal that reached this build with a duplicated seq (written by a pre-fix build, or by a
   // fork resolved elsewhere) makes "Undo" ambiguous — and applyUnmerge whole-file overwrites BOTH sides
   // from the snapshot, so picking the first match silently restores an unrelated pair of entities over
   // their current state. Refuse instead; nothing is restored and nothing is journaled.
   if (matches.length > 1) {
-    return { ok: false, error: 'More than one merge shares this correction number — refusing to undo an ambiguous one.' }
+    return {
+      ok: false,
+      error: 'More than one merge shares this correction number — refusing to undo an ambiguous one.'
+    }
   }
   const entry = matches[0]
   if (!entry) return { ok: false, error: 'Correction not found.' }
@@ -1223,19 +1255,10 @@ async function applyUnmerge(
 
 /** Restore both entity files from the `entity_merge` journal entry at `targetSeq`, exactly as they were
  *  before that merge — un-tombstoning the source. Refuses (never partially applies) when the target
- *  entry doesn't exist or carries no snapshot. Graph edges rewritten by the original merge are NOT
- *  reverted, and neither is the merge-time dependents repaint (the sweepXxxNameDependents pass that
- *  rewrote the FROM side's baked display strings — account.people entries for a person merge,
- *  deal.account/person.org for an account merge, account.deals for a deal merge — to the survivor's
- *  name): the restore covers the two merged entity files themselves, nothing else. Both stay converged
- *  anyway — a rebuild replays the merge (sweeping again) before replaying this unmerge, so live and
- *  rebuilt dependents end up identically repainted.
- *
- *  These are POINT-IN-TIME snapshots: unmerge restores both sides exactly as they were at merge time,
- *  so any correction applied to EITHER side between the merge and the unmerge (a field pin on the
- *  target, a rename, meetings ingested into the merged entity) is intentionally discarded by the
- *  restore — undoing a merge means returning to the world as it was, not surgically extracting one
- *  entity's rows out of the blended state. */
+ *  entry doesn't exist, carries no snapshot, or (Q05 / D8-8) when any later journal entry touched either
+ *  side: the restore is a point-in-time snapshot, so it would discard that later edit. Graph edges and the
+ *  merge-time dependents repaint are NOT reverted; a rebuild replays the merge, the sweep and this unmerge
+ *  in order, so live and rebuilt dependents converge anyway. */
 export async function unmergeEntities(
   s: Settings,
   payload: { targetSeq: number }
@@ -1246,6 +1269,7 @@ export async function unmergeEntities(
     if (!gate.ok) return { ok: false, error: gate.error }
     const resolved = resolveUnmergeRestore(payload, gate.entries)
     if (!resolved.ok) return { ok: false, error: resolved.error }
+    if (laterEditTouchesMerge(gate.entries, resolved.resolved.entry)) return { ok: false, error: UNMERGE_BLOCKED_ERROR }
     await appendCorrectionEntry(s, { seq: 0, at, kind: 'entity_unmerge', payload }, gate)
     const r = await applyUnmerge(s, payload, gate.entries)
     if (!r.ok) return { ok: false, error: r.error }
@@ -1300,44 +1324,6 @@ function landPin<T>(
 // LLM context (buildBrainContext) and the markdown/Dust mirror — cap it so one call can't bloat storage
 // and downstream prompt size unboundedly. 2000 chars is generous for any legitimate role/org/stage/date.
 const MAX_FIELD_STRING_LEN = 2000
-
-/** Read-only counterpart to applyFieldUpdate below — looks up the CURRENT provenance for one
- *  (kind, id, field) without writing anything. Mirrors applyFieldUpdate's exact (kind, field) support
- *  set field-for-field, so a field this doesn't recognize is one updateEntityField wouldn't accept
- *  either. Returns undefined for an unknown entity/field, never throws.
- *
- *  Used by the dashboard's accept-suggestion action (main/index.ts's brain:field-decision handler) to
- *  confirm a field is genuinely `state: 'extracted'` before calling updateEntityField with the field's
- *  OWN unchanged value — the only correction-engine mutation this task found a legal expression for
- *  (see updateEntityField's doc comment: it always pins to `state: 'pinned'`, never `'verified'`, and
- *  there is no field_update variant that clears/reverts a value, so "dismiss" has no expression here). */
-export function readFieldProvenance(
-  s: Settings,
-  payload: { kind: EntityKind; id: string; field: string }
-): ProvenantField<unknown> | undefined {
-  const id = slugify(payload.id)
-  if (payload.kind === 'person') {
-    const person = readPerson(s, id)
-    if (!person) return undefined
-    if (payload.field === 'role') return person.role_provenance
-    if (payload.field === 'org') return person.org_provenance
-    return undefined
-  }
-  if (payload.kind === 'account') {
-    const account = readAccount(s, id)
-    if (!account) return undefined
-    if (payload.field === 'sector') return account.sector_provenance
-    return undefined
-  }
-  const deal = readDeal(s, id)
-  if (!deal) return undefined
-  if (payload.field === 'stage') return deal.stage_provenance
-  if (payload.field === 'win_likelihood_band') return deal.win_likelihood_band_provenance
-  if (payload.field === 'velocity') return deal.velocity_provenance
-  if (payload.field === 'amount') return deal.amount
-  if (payload.field === 'close_date') return deal.close_date
-  return undefined
-}
 
 async function applyFieldUpdate(
   s: Settings,
@@ -1451,19 +1437,26 @@ async function applyFieldUpdate(
  *  source". The prior value (if different) is preserved in `superseded`. */
 export async function updateEntityField(
   s: Settings,
-  payload: { kind: EntityKind; id: string; field: string; value?: unknown }
+  payload: { kind: EntityKind; id: string; field: string; value?: unknown },
+  // Accept (D8-11): refuse unless the field is still pending review with the value the person looked at.
+  opts?: { expectedValue: unknown }
 ): Promise<{ ok: boolean; error?: string }> {
   return withEntityLock(async () => {
     const at = new Date().toISOString()
     const sanitized = { ...payload, id: slugify(payload.id) }
     const gate = await readCorrectionsJournalSafe(s)
     if (!gate.ok) return { ok: false, error: gate.error }
+    if (opts && acceptIsStale(s, sanitized, opts.expectedValue)) return { ok: false, error: VALUE_CHANGED_ERROR }
     // Fix 3: journal-first. Validate + capture the snapshot read-only, append the journal entry (the
     // commit point), THEN perform the real write — so a crash between the two leaves a replayable record
     // instead of a durably-pinned entity with no journal trace (which the next rebuild would revert).
     const pre = await applyFieldUpdate(s, sanitized, at, { dryRun: true })
     if (!pre.ok) return { ok: false, error: pre.error }
-    await appendCorrectionEntry(s, { seq: 0, at, kind: 'field_update', payload: sanitized, snapshot: pre.snapshot }, gate)
+    await appendCorrectionEntry(
+      s,
+      { seq: 0, at, kind: 'field_update', payload: sanitized, snapshot: pre.snapshot },
+      gate
+    )
     const r = await applyFieldUpdate(s, sanitized, at)
     if (!r.ok) return { ok: false, error: r.error }
     return { ok: true }
@@ -1599,8 +1592,11 @@ export async function replayCorrections(s: Settings): Promise<{ applied: number;
             // field, so it must land the way the live merge delivered it — folded, not pinned. Pinning it
             // clobbers the survivor's own pin, and the later entity_merge replay then re-elects the
             // clobbered value under foldProvenant rule 3, silently replacing the pin the human kept.
-            const mergedAway = hit !== undefined && hit.kind === entry.payload.kind && hit.id !== slugify(entry.payload.id)
-            r = await applyFieldUpdate(s, { ...entry.payload, id: resolvedId }, entry.at, { foldOntoSurvivor: mergedAway })
+            const mergedAway =
+              hit !== undefined && hit.kind === entry.payload.kind && hit.id !== slugify(entry.payload.id)
+            r = await applyFieldUpdate(s, { ...entry.payload, id: resolvedId }, entry.at, {
+              foldOntoSurvivor: mergedAway
+            })
             break
           }
           case 'commitment_reject': {

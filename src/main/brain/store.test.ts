@@ -25,6 +25,9 @@ let failReadOnce: NodeJS.ErrnoException | null = null
 let failReadPersistent: NodeJS.ErrnoException | null = null
 let failRenameOnce: NodeJS.ErrnoException | null = null
 const renameSyncSpy = vi.fn()
+/** Q05 / D8-9: lets a test change what the gateway reports for a path between two classify calls. */
+let afterClassify: ((classes: Map<string, unknown>, call: number) => Map<string, unknown>) | null = null
+let classifyCalls = 0
 
 function mkErr(code: string, message = code): NodeJS.ErrnoException {
   const e = new Error(message) as NodeJS.ErrnoException
@@ -35,6 +38,18 @@ function mkErr(code: string, message = code): NodeJS.ErrnoException {
 function isPrimaryIndexPath(p: unknown): boolean {
   return typeof p === 'string' && p.replace(/\\/g, '/').endsWith('/.brain/index.json')
 }
+
+vi.mock('../infra/storage/meetings-storage', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../infra/storage/meetings-storage')>()
+  return {
+    ...actual,
+    classifyAll: async (...args: Parameters<typeof actual.classifyAll>) => {
+      const classes = await actual.classifyAll(...args)
+      classifyCalls += 1
+      return (afterClassify ? afterClassify(classes, classifyCalls) : classes) as typeof classes
+    }
+  }
+})
 
 vi.mock('node:fs', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs')>()
@@ -92,7 +107,10 @@ describe('classifyIndexBytes — pure classification, no filesystem writes', () 
     expect(store.classifyIndexBytes(Buffer.alloc(0))).toEqual({ kind: 'absent' })
 
     const healthy = BrainIndexSchema.parse({})
-    expect(store.classifyIndexBytes(Buffer.from(JSON.stringify(healthy), 'utf8'))).toEqual({ kind: 'ready', index: healthy })
+    expect(store.classifyIndexBytes(Buffer.from(JSON.stringify(healthy), 'utf8'))).toEqual({
+      kind: 'ready',
+      index: healthy
+    })
 
     expect(store.classifyIndexBytes(Buffer.from('{"ingested": tru', 'utf8'))).toEqual({ kind: 'corrupt' })
   })
@@ -122,6 +140,8 @@ describe('the read/replace invariant — I/O faults, retry, and quarantine limit
     failReadPersistent = null
     failRenameOnce = null
     renameSyncSpy.mockClear()
+    afterClassify = null
+    classifyCalls = 0
   })
   afterEach(async () => {
     vi.useRealTimers()
@@ -168,7 +188,7 @@ describe('the read/replace invariant — I/O faults, retry, and quarantine limit
     expect(store.indexUnavailable(s)).toBeNull()
   })
 
-  it('a failed set-aside rename (EPERM) leaves the invalid index in place as \'corrupt-kept\', without spinning on every read', () => {
+  it("a failed set-aside rename (EPERM) leaves the invalid index in place as 'corrupt-kept', without spinning on every read", () => {
     const bad = Buffer.from('{"ingested": tru', 'utf8')
     writeFileSync(primary, bad)
     failRenameOnce = mkErr('EPERM')
@@ -181,6 +201,38 @@ describe('the read/replace invariant — I/O faults, retry, and quarantine limit
     expect(realFs.readFileSync(primary)).toEqual(bad)
     // One rename ATTEMPT for the whole run (it failed and was cached) — not one per readIndex call.
     expect(renameSyncSpy).toHaveBeenCalledTimes(1)
+  })
+
+  it('corrupt-index quarantine skips when the file changed since classification (D8-9)', async () => {
+    const root = realFs.realpathSync.native(realFs.mkdtempSync(join(tmpdir(), 'asktoto-store-d8-9-')))
+    try {
+      const s2 = { meetingsFolder: root } as Settings
+      mkdirSync(join(root, '.brain'), { recursive: true })
+      useStorageForTests()
+      const index = join(store.brainDir(s2), 'index.json')
+      const bytes = Buffer.from('{"ingested": tru', 'utf8')
+      writeFileSync(index, bytes)
+      const rel = join('.brain', 'index.json')
+      // The poll classified torn bytes, then another device replaced the file before the rename ran.
+      afterClassify = (classes, call) => {
+        if (call < 2) return classes
+        const entry = classes.get(rel) as { version: { size: number } }
+        return new Map(classes).set(rel, { ...entry, version: { ...entry.version, size: entry.version.size + 1 } })
+      }
+
+      expect((await store.readIndexAsync(s2)).ingested).toEqual({})
+      expect(renameSyncSpy).not.toHaveBeenCalled()
+      expect(realFs.readFileSync(index)).toEqual(bytes)
+
+      // Unchanged since classification: the same read quarantines it exactly as before.
+      afterClassify = null
+      await store.readIndexAsync(s2)
+      expect(renameSyncSpy).toHaveBeenCalledTimes(1)
+      expect(existsSync(index)).toBe(false)
+    } finally {
+      await settleBrainWritesForTests()
+      realFs.rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
+    }
   })
 
   it('unavailability is logged and audited once per classification, not once per poll', () => {
@@ -274,33 +326,63 @@ describe('loadEntityDisplayNames — gateway-backed (M2-0031)', () => {
     expect(result.names.slice().sort()).toEqual(['Acme Corp', 'Ada Lovelace'])
   })
 
-  it('a kernel-blocked entity read (a cloud-only file, or a FIFO in the ST-1 QA harness) is classified ' +
-    'and skipped, never awaited on the main thread', async () => {
-    const stuckPath = join(folder, '.brain', 'entities', 'person', 'ada-lovelace.json')
-    const stuck = new Promise<Buffer>(() => {
-      /* models open()+read() blocking forever on a cloud-only/FIFO file — never settles */
-    })
-    // Sync (via the unmocked realFs), each wrapped in Promise.resolve: a real fs/promises call here would
-    // settle through the actual libuv poll phase, which a bulk vi.advanceTimersByTimeAsync (below) is not
-    // guaranteed to turn — the healthy account read must resolve on its own microtask tick, independent of
-    // how the fake clock schedules its yields, or this test would race the very stall it proves is fixed.
+  it('stops loading entity files once 500 names are collected (D8-6)', async () => {
+    const dir = join(folder, '.brain', 'entities', 'person')
+    mkdirSync(dir, { recursive: true })
+    for (let i = 0; i < 560; i += 1) {
+      const slug = `person-${String(i).padStart(4, '0')}`
+      realFs.writeFileSync(join(dir, `${slug}.json`), JSON.stringify(person(`Person ${i}`)))
+    }
+    let entityReads = 0
     const fs: StorageFs = {
       readdir: (p) => Promise.resolve(realFs.readdirSync(p)),
       realpath: (p) => Promise.resolve(realFs.realpathSync(p)),
       stat: (p) => Promise.resolve(realFs.statSync(p)),
       lstat: (p) => Promise.resolve({ isSymbolicLink: realFs.lstatSync(p).isSymbolicLink() }),
-      readFile: (p) => (p === stuckPath ? stuck : Promise.resolve(realFs.readFileSync(p)))
+      readFile: (p) => {
+        if (p.includes('person-')) entityReads += 1
+        return Promise.resolve(realFs.readFileSync(p))
+      }
     }
     useStorageForTests({ fs })
 
-    vi.useFakeTimers()
-    const resultPromise = store.loadEntityDisplayNames(s)
-    await vi.advanceTimersByTimeAsync(5_000) // the gateway's own content-read deadline (CONTENT_DEADLINE_MS)
-    const result = await resultPromise
+    const result = await store.loadEntityDisplayNames(s)
 
-    // The stuck person entity is dropped (classified 'timeout', never counted as a name); the healthy
-    // account still resolves. Before M2-0031 this same shape (readPerson/readJson, sync readFileSync)
-    // would have hung this test — and the real IPC handler, and the whole main process — forever.
-    expect(result.names).toEqual(['Acme Corp'])
+    expect(result.names).toHaveLength(500)
+    expect(entityReads).toBeLessThan(560)
+    expect(entityReads).toBeLessThanOrEqual(500 + 16)
   })
+
+  it(
+    'a kernel-blocked entity read (a cloud-only file, or a FIFO in the ST-1 QA harness) is classified ' +
+      'and skipped, never awaited on the main thread',
+    async () => {
+      const stuckPath = join(folder, '.brain', 'entities', 'person', 'ada-lovelace.json')
+      const stuck = new Promise<Buffer>(() => {
+        /* models open()+read() blocking forever on a cloud-only/FIFO file — never settles */
+      })
+      // Sync (via the unmocked realFs), each wrapped in Promise.resolve: a real fs/promises call here would
+      // settle through the actual libuv poll phase, which a bulk vi.advanceTimersByTimeAsync (below) is not
+      // guaranteed to turn — the healthy account read must resolve on its own microtask tick, independent of
+      // how the fake clock schedules its yields, or this test would race the very stall it proves is fixed.
+      const fs: StorageFs = {
+        readdir: (p) => Promise.resolve(realFs.readdirSync(p)),
+        realpath: (p) => Promise.resolve(realFs.realpathSync(p)),
+        stat: (p) => Promise.resolve(realFs.statSync(p)),
+        lstat: (p) => Promise.resolve({ isSymbolicLink: realFs.lstatSync(p).isSymbolicLink() }),
+        readFile: (p) => (p === stuckPath ? stuck : Promise.resolve(realFs.readFileSync(p)))
+      }
+      useStorageForTests({ fs })
+
+      vi.useFakeTimers()
+      const resultPromise = store.loadEntityDisplayNames(s)
+      await vi.advanceTimersByTimeAsync(5_000) // the gateway's own content-read deadline (CONTENT_DEADLINE_MS)
+      const result = await resultPromise
+
+      // The stuck person entity is dropped (classified 'timeout', never counted as a name); the healthy
+      // account still resolves. Before M2-0031 this same shape (readPerson/readJson, sync readFileSync)
+      // would have hung this test — and the real IPC handler, and the whole main process — forever.
+      expect(result.names).toEqual(['Acme Corp'])
+    }
+  )
 })

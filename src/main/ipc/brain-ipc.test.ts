@@ -17,11 +17,14 @@ const mocks = vi.hoisted(() => ({
   loadBrainEntityDisplayNames: vi.fn(async () => ({ names: ['Ada'] })),
   openIntelligenceWindow: vi.fn(() => ({ ok: true })),
   requestBackfill: vi.fn(async () => ({ queued: 0, deferred: 0 })),
-  computeAttention: vi.fn(() => []),
+  computeAttention: vi.fn(async () => [] as unknown[]),
   listPreservedBrainIndexes: vi.fn(() => []),
   currentBrainIndexIsReadable: vi.fn(() => false),
   deletePreservedBrainIndex: vi.fn(() => ({ ok: true })),
-  clearJournalCorruptionLock: vi.fn(() => true)
+  clearJournalCorruptionLock: vi.fn(() => true),
+  readFieldProvenance: vi.fn(() => undefined as { state: string; value: unknown } | undefined),
+  updateEntityField: vi.fn(async () => ({ ok: true }) as { ok: boolean; error?: string }),
+  publishEntity: vi.fn(async () => {})
 }))
 
 vi.mock('../store', () => ({ getSettings: () => settings, setSettings: vi.fn() }))
@@ -45,8 +48,8 @@ vi.mock('../brain/corrections', () => ({
   renameEntity: vi.fn(),
   mergeEntities: vi.fn(),
   unmergeEntities: vi.fn(),
-  updateEntityField: vi.fn(),
-  readFieldProvenance: vi.fn(),
+  updateEntityField: mocks.updateEntityField,
+  readFieldProvenance: mocks.readFieldProvenance,
   rejectCommitment: vi.fn(),
   isJournalCorruptionBlockedAsync: vi.fn(),
   clearJournalCorruptionLock: mocks.clearJournalCorruptionLock,
@@ -54,7 +57,7 @@ vi.mock('../brain/corrections', () => ({
   readAliasMap: mocks.readAliasMap,
   resolveEntitySlug: mocks.resolveEntitySlug
 }))
-vi.mock('../brain/publish', () => ({ publishEntity: vi.fn(), removeFromWiki: vi.fn() }))
+vi.mock('../brain/publish', () => ({ publishEntity: mocks.publishEntity, removeFromWiki: vi.fn() }))
 vi.mock('../brain/attention', () => ({ computeAttention: mocks.computeAttention }))
 vi.mock('../intelligence', () => ({ openIntelligenceWindow: mocks.openIntelligenceWindow }))
 vi.mock('../brain/store', () => ({
@@ -271,6 +274,83 @@ describe('brain IPC behaviour kept from the entry point', () => {
     expect(await handler(IPC.brainClearJournalCorruption)(event)).toEqual({ ok: true, cleared: true })
     expect(mocks.clearJournalCorruptionLock).toHaveBeenCalledWith(settings)
     expect(mocks.auditLog).toHaveBeenCalledWith('brain.corrections.lock_cleared', { cleared: true })
+  })
+
+  it('rebuildAll asks first and Cancel purges nothing', async () => {
+    const showMessageBox = vi.fn(async () => ({ response: 1 }))
+    const { handler } = setup({ showMessageBox })
+    expect(await handler(IPC.brainRebuildAll)(event)).toEqual({ queued: 0, error: 'cancelled' })
+    expect(mocks.startRebuild).not.toHaveBeenCalled()
+    expect(mocks.auditLog).not.toHaveBeenCalled()
+    expect(showMessageBox).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: 'Rebuild Mantu Intelligence?',
+        detail:
+          'Métis deletes the derived knowledge and extracts it again from your meetings. Your corrections are kept.',
+        buttons: ['Rebuild', 'Cancel'],
+        defaultId: 1,
+        cancelId: 1
+      })
+    )
+  })
+
+  it('rebuildAll starts only after the person confirms', async () => {
+    const showMessageBox = vi.fn(async () => ({ response: 0 }))
+    const { handler } = setup({ showMessageBox })
+    await handler(IPC.brainRebuildAll)(event)
+    expect(showMessageBox).toHaveBeenCalledTimes(1)
+    expect(mocks.startRebuild).toHaveBeenCalledTimes(1)
+  })
+
+  it('accept refuses when the value changed since it was reviewed', async () => {
+    mocks.readFieldProvenance.mockReturnValue({ state: 'extracted', value: 'proposal' })
+    const { handler } = setup()
+    const payload = { entityKind: 'deal', entityId: 'acme', field: 'stage', decision: 'accept' }
+
+    // The reviewed value no longer matches the stored one: refused before anything is written.
+    expect(await handler(IPC.brainFieldDecision)(event, { ...payload, expectedValue: 'discovery' })).toEqual({
+      ok: false,
+      error: 'This value changed. Review it again.'
+    })
+    expect(mocks.updateEntityField).not.toHaveBeenCalled()
+
+    // The value matches here but changes before the write: the in-lock check refuses and nothing is audited.
+    mocks.updateEntityField.mockResolvedValueOnce({ ok: false, error: 'This value changed. Review it again.' })
+    expect(await handler(IPC.brainFieldDecision)(event, { ...payload, expectedValue: 'proposal' })).toEqual({
+      ok: false,
+      error: 'This value changed. Review it again.'
+    })
+    expect(mocks.updateEntityField).toHaveBeenCalledWith(
+      settings,
+      { kind: 'deal', id: 'acme', field: 'stage', value: 'proposal' },
+      { expectedValue: 'proposal' }
+    )
+    expect(mocks.auditLog).not.toHaveBeenCalledWith('brain.entity.field_decision', expect.anything())
+  })
+
+  it('accept with no reviewed value pins the value it just read, still guarded inside the lock', async () => {
+    mocks.readFieldProvenance.mockReturnValue({ state: 'extracted', value: 'proposal' })
+    const { handler } = setup()
+    const result = await handler(IPC.brainFieldDecision)(event, {
+      entityKind: 'deal',
+      entityId: 'acme',
+      field: 'stage',
+      decision: 'accept'
+    })
+    expect(result).toEqual({ ok: true })
+    expect(mocks.updateEntityField).toHaveBeenCalledWith(
+      settings,
+      { kind: 'deal', id: 'acme', field: 'stage', value: 'proposal' },
+      { expectedValue: 'proposal' }
+    )
+  })
+
+  it('brain attention is answered from the async feed', async () => {
+    mocks.computeAttention.mockResolvedValueOnce([{ kind: 'lint', id: 'x', label: 'X', detail: 'd' }] as never)
+    const { handler } = setup()
+    expect(await handler(IPC.brainAttention)(event)).toEqual({
+      items: [{ kind: 'lint', id: 'x', label: 'X', detail: 'd' }]
+    })
   })
 
   it('opens the dashboard with no avoid rectangle when the overlay is gone', async () => {
