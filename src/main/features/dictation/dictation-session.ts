@@ -67,6 +67,9 @@ export type DictationReason =
   | 'reconcile_required'
   | 'not_ready'
   | 'microphone_unavailable'
+  | 'device_missing'
+  | 'device_lost'
+  | 'device_busy'
   | 'no_speech'
   | 'recognition_unavailable'
   | 'meeting_started'
@@ -349,7 +352,15 @@ export class DictationSession {
       this.#clearWatchdog()
       return
     }
+    // G18: the input device changed after speech was captured. The renderer seals and sends what it heard, so the
+    // turn is not failed here; the transcript (or a capture failure) still arrives on its own path.
+    if (report.phase === 'device_changed') return
     switch (report.reason) {
+      case 'device_missing':
+      case 'device_lost':
+      case 'device_busy':
+        this.#cancelTurn(report.reason, 'report')
+        return
       case 'policy_blocked':
         this.#cancelTurn('policy_blocked', 'report')
         return
