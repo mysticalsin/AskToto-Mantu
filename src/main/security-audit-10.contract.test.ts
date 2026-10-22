@@ -304,6 +304,17 @@ describe('AUDIT-10 — SSO-gated listening and ask side effects', () => {
     expect(cancel).toMatch(/if \(!requireAuth\(\)\) return/)
     expect(cancel.indexOf('if (!requireAuth()) return')).toBeLessThan(cancel.indexOf('streams.get(id)'))
   })
+
+  it('session clear aborts in-flight ask streams', () => {
+    // askCancel stays auth-gated (above): cancel starts nothing, but it is the deliberate AUDIT-10 control.
+    // The session boundary itself must tear down every running answer, otherwise a provider request keeps
+    // streaming (and billing) after sign-out with no way left to cancel it.
+    const revoke = sliceBetween('function revokePrivilegedSurface', 'setSessionClearedHandler(')
+    expect(revoke).toMatch(/abortAllAskStreams\(streams\)/)
+    // The window-replacement and shutdown teardown share the same helper, not two hand-rolled copies.
+    expect(indexSrc.split('abortAllAskStreams(streams)').length - 1).toBe(3)
+    expect(indexSrc).not.toMatch(/streams\.forEach\(/)
+  })
 })
 
 describe('AUDIT-10 — outbound IPC caps sit in front of the network', () => {
@@ -652,5 +663,33 @@ describe('AUDIT-10 extra — XSS / import / webhook', () => {
     expect(listAndMutations).not.toMatch(
       /if \(!importJobs\) throw new Error\('Audio import service is unavailable\.'\)/
     )
+  })
+})
+
+describe('Q11 — account and credential hygiene in index.ts', () => {
+  it('D9-1: pasting a non-empty Dust key takes the session off the OAuth refresh branch', () => {
+    const body = sliceBetween('ipcMain.handle(IPC.setApiKey', 'ipcMain.handle(IPC.restoreEmbeddedCloudflareKey')
+    expect(body).toMatch(/parsed\.provider === 'dust' && parsed\.key\.trim\(\)\)\s*retireDustOAuthSession\(\)/)
+    expect(body.indexOf('setApiKey(parsed.provider, parsed.key)')).toBeLessThan(
+      body.indexOf('retireDustOAuthSession()')
+    )
+    // refreshDustAuth only re-mints from OAuth while the origin says so: the branch the paste now leaves.
+    const refresh = sliceBetween('function makeRefreshDustAuth', 'const fresh = await refreshDustCliSession()')
+    expect(refresh).toMatch(/dustSessionOrigin === 'oauth'/)
+  })
+
+  it("D9-3: Disconnect removes the seeded dust-cli items, reading Métis's token before it is cleared", () => {
+    const body = sliceBetween('ipcMain.handle(IPC.clearApiKey', 'ipcMain.handle(IPC.testApiKey')
+    const read = body.indexOf("getApiKey('dust')")
+    expect(read).toBeGreaterThan(-1)
+    expect(read).toBeLessThan(body.indexOf('clearApiKey(parsed.provider)'))
+    expect(body).toMatch(/clearSeededDustCliSession\(/)
+    expect(body).toMatch(/retireDustOAuthSession\(\)/)
+  })
+
+  it('D9-2: the answer-feedback handler passes the renderer askId through a bounded validator', () => {
+    const body = sliceBetween('ipcMain.handle(IPC.answerFeedback', 'registerImportAudioIpc(')
+    expect(body).toMatch(/boundedAnswerAskId\(r\?\.askId\)/)
+    expect(body).toMatch(/recordOperatorRating\(getSettings\(\), rating, askId\)/)
   })
 })

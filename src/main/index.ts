@@ -125,7 +125,6 @@ import {
   getApiKey,
   setApiKey,
   clearApiKey,
-  clearDustRefreshToken,
   testApiKey,
   hasApiKey,
   hasKeysMap,
@@ -870,13 +869,15 @@ import { initAutoUpdate, checkForUpdateNow, startUpdateDownload } from './update
 import { runSelfTest, redirectSelfTestUserData } from './selftest'
 import { devEnv, devToolsEnabled } from './dev-env'
 import { importDustCliSession, refreshDustCliSession } from './dustcli'
-import { ensureManagedDustCli } from './dust-cli-chat'
+import { clearSeededDustCliSession, ensureManagedDustCli } from './dust-cli-chat'
+import { abortAllAskStreams, boundedAnswerAskId } from './ask-stream-registry'
 import {
   beginDustDeviceLogin,
   pollDustDeviceLoginOnce,
   listDustWorkspacesForToken,
   completeDustOAuthLogin,
-  refreshDustOAuthSession
+  refreshDustOAuthSession,
+  retireDustOAuthSession
 } from './dust-oauth'
 import { asrManifestComplete } from './asr-manifest'
 import { createAsrModelProtocolHandler } from './asr-model-protocol'
@@ -2733,8 +2734,7 @@ function replaceTransparentOverlayWithExclusiveOnboarding(): void {
   leaveExclusiveOsFullscreen(dying)
   commandControl.revokeForLifecycleEvent('window_replaced')
   clearCompletedOnboardingExitFallback(dying)
-  streams.forEach((stream) => stream.abort())
-  streams.clear()
+  abortAllAskStreams(streams)
   const dyingWebContents = dying.webContents
   invalidateCloudSttOwner({ window: dying, webContents: dyingWebContents, webContentsId: dyingWebContents.id })
   try {
@@ -3265,8 +3265,7 @@ function createWindow(targetDisplay?: Electron.Display): void {
       hardStopInputSession('window-hidden')
       commandControl.revokeForLifecycleEvent('window_closed')
       // Abort any in-flight LLM streams so their callbacks don't fire against a destroyed window.
-      streams.forEach((s) => s.abort())
-      streams.clear()
+      abortAllAskStreams(streams)
       invalidateCloudSttOwner(selfOwner)
       stopOverlayCursorWatch()
       stopExclusiveBoundsWatch()
@@ -4928,6 +4927,7 @@ function revokePrivilegedSurface(): void {
   refreshScreenPreprocess() // stops the watcher child, the 6s tick and the cached description
   invalidateCloudSttOwner() // closes authenticated live-speech sockets and invalidates their callbacks
   closeIntelligenceWindow() // account-scoped state belongs to the session being cleared or replaced
+  abortAllAskStreams(streams) // askCancel is auth-gated, so a running answer would outlive the sign-out
 }
 setSessionClearedHandler(commandControl.wrapLifecycleListener('auth_session_cleared', revokePrivilegedSurface))
 
@@ -6341,6 +6341,7 @@ function registerIpc(): void {
     if (!requireAuth()) return { hasKeys: hasKeysMap() }
     const parsed = SetApiKeyPayloadSchema.parse(payload)
     setApiKey(parsed.provider, parsed.key)
+    if (parsed.provider === 'dust' && parsed.key.trim()) retireDustOAuthSession() // a pasted key must outlive OAuth refresh
     // MQA-003/MQA-004: the recorded "this key is broken" verdict was about the OLD credential. Clearing
     // it here is what makes pasting a working key feel like it fixed the problem immediately, instead of
     // the provider staying demoted and flagged until the cooldown happened to expire.
@@ -6373,25 +6374,16 @@ function registerIpc(): void {
     assertMainWindow(e)
     if (!requireAuth()) return { hasKeys: hasKeysMap() }
     const parsed = ClearApiKeyPayloadSchema.parse(payload)
+    const seededDustToken = parsed.provider === 'dust' ? getApiKey('dust') : '' // read before it is cleared
     clearApiKey(parsed.provider)
     resetProviderHealth(parsed.provider) // same reason as setApiKey above
     resetHeadroom(parsed.provider)
-    // Dust's credential is a PAIR: the access token (the provider key just cleared) and the WorkOS
-    // refresh token in its own encrypted file. Clearing only the key left dust-refresh.bin on disk, so
-    // the next refresh could silently re-mint a working Dust key and reconnect an integration the user
-    // had explicitly removed — the same "a disconnect must actually remove the secret" rule mcpDisconnect
-    // already follows for its own refresh slot. Report an undeletable file honestly instead of claiming a
-    // clean removal while the secret survives.
+    // Dust's credential is a PAIR (key + refresh token) and Spotlight seeds the key into the shared dust-cli
+    // keychain: Disconnect must remove them all (see retireDustOAuthSession and clearSeededDustCliSession).
     let dustRefreshRemoved = true
     if (parsed.provider === 'dust') {
-      dustRefreshRemoved = clearDustRefreshToken()
-      // Take the session OFF the oauth branch as well. refreshAndPersistDust only re-mints while
-      // dustSessionOrigin === 'oauth', so leaving it there means a later hand-pasted Dust key could be
-      // silently overwritten by a token minted from the account the user just disconnected — the exact
-      // resurrection this clear exists to prevent, and the one path still open when the token file could
-      // not be deleted above. Whichever way the user reconnects next sets the origin itself (OAuth at
-      // dust-oauth.ts's completeDustOAuthLogin, CLI at dustImportCli), so this value is inert until then.
-      setSettings({ dustSessionOrigin: 'cli', dustTokenMintedAt: 0 })
+      dustRefreshRemoved = retireDustOAuthSession()
+      void clearSeededDustCliSession(seededDustToken)
     }
     auditLog('key.removed', {
       provider: parsed.provider,
@@ -8910,11 +8902,12 @@ function registerIpc(): void {
   // answer text or question (those would be content). Seeds the H-section acceptance-rate eval later.
   ipcMain.handle(IPC.answerFeedback, (e, raw: unknown) => {
     assertMainWindow(e)
-    const r = raw as { rating?: unknown; kind?: unknown } | null
+    const r = raw as { rating?: unknown; kind?: unknown; askId?: unknown } | null
     const rating = r?.rating === 'up' || r?.rating === 'down' ? r.rating : null
     if (!rating) return
     auditLog('answer.feedback', { rating, kind: typeof r?.kind === 'string' ? r.kind : undefined })
-    void recordOperatorRating(getSettings(), rating)
+    const askId = boundedAnswerAskId(r?.askId) // the answer actually rated, not the latest ask
+    void recordOperatorRating(getSettings(), rating, askId)
   })
 
   // --- Import audio jobs (main-owned so navigation and overlay closure cannot interrupt them) ---

@@ -37,7 +37,7 @@
     "src/shared/contracts/knowledge/record.ts": 1
   },
   "FF-04": {
-    "src/main/auth.ts": 976,
+    "src/main/auth.ts": 975,
     "src/main/brain/corrections.ts": 1637,
     "src/main/brain/ingest.ts": 2744,
     "src/main/brain/publish.ts": 954,
@@ -67,7 +67,7 @@
     "src/main/asr-model-download.ts": 10,
     "src/main/asr-model-path.ts": 1,
     "src/main/asr-model-protocol.ts": 3,
-    "src/main/auth.ts": 24,
+    "src/main/auth.ts": 21,
     "src/main/boot-sentinel.ts": 12,
     "src/main/brain/corrections.ts": 10,
     "src/main/brain/match-key-cache.ts": 4,
@@ -110,7 +110,7 @@
     "src/main/operator-queue.ts": 7,
     "src/main/operator-skill-key.ts": 2,
     "src/main/qa-capture-source.ts": 1,
-    "src/main/secrets.ts": 13,
+    "src/main/secrets.ts": 12,
     "src/main/selftest.ts": 16,
     "src/main/speaker-id.ts": 6,
     "src/main/store.ts": 40,

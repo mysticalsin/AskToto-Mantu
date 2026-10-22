@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { BaseSettingsSchema } from '@shared/ipc'
+import { readModuleSource } from '../test-helpers/module-source'
 
 /**
  * The settings:set write boundary. src/main/index.ts boots Electron at import time and this seam is a
@@ -167,7 +168,13 @@ describe('settings:set — main-owned keys are not renderer-writable', () => {
     expect(start).toBeGreaterThan(-1)
     const body = indexSrc.slice(start, start + 1600)
     expect(body).toMatch(/parsed\.provider === 'dust'/)
-    expect(body).toMatch(/clearDustRefreshToken\(\)/)
+    // The pair-removal now lives in dust-oauth's retireDustOAuthSession (shared with the paste path, D9-1):
+    // the handler must call it, and it must still delete the refresh token and leave the OAuth branch.
+    expect(body).toMatch(/dustRefreshRemoved = retireDustOAuthSession\(\)/)
+    const { text: oauth } = readModuleSource(__dirname, './dust-oauth')
+    const retire = oauth.slice(oauth.indexOf('export function retireDustOAuthSession'))
+    expect(retire).toMatch(/clearDustRefreshToken\(\)/)
+    expect(retire).toMatch(/dustSessionOrigin: 'cli'/)
     // The result must carry the bad news rather than reporting a clean removal.
     expect(body).toMatch(/dustRefreshRemoved/)
   })
