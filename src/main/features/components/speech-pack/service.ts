@@ -33,6 +33,7 @@ import { componentManifestIdentity, resolveSpeechPack } from './resolver'
 import { runSpeechPackSelfTest } from './self-test'
 import type { PriorReadyMarker } from './activation-authority'
 import type { PackageRuntimeContract } from './package-contract'
+import { installedOptionalComponents, resolveOptionalComponents } from './optional-components'
 import { resolveOptionalRuntimeReadiness, runtimeIdsForEngine, runtimeIdsForLocalLlm } from './runtime-components'
 
 export interface SpeechPackServiceOptions {
@@ -417,6 +418,10 @@ export function createSpeechPackService(options: SpeechPackServiceOptions) {
         localLlm: resolveOptionalRuntimeReadiness(runtimeIdsForLocalLlm()[0], packageContract)
       },
       components: rows,
+      optionalComponents: resolveOptionalComponents({
+        contract: packageContract,
+        installed: installedOptionalComponents(rows)
+      }),
       progress: currentProgress
     })
   }

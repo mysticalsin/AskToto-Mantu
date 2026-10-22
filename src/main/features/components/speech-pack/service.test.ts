@@ -132,6 +132,49 @@ describe('explicit speech-pack service boundary', () => {
     expect(service.hasEngine()).toBe(false)
   })
 
+  it('lists the optional components with size, provider and privacy, from the same package facts as the engine (G11)', async () => {
+    const { service } = setup({
+      packageRuntimeContract: async () => ({
+        status: 'legacy-full' as const,
+        profile: 'full' as const,
+        inventory: null
+      })
+    })
+    const snapshot = await service.snapshot()
+    expect(snapshot.optionalComponents?.map((row) => row.id)).toEqual(['local-llm', 'whisper', 'parakeet'])
+    for (const row of snapshot.optionalComponents ?? []) {
+      // A 1.9.x install keeps its bundled models: nothing to download, nothing blocked.
+      expect(row).toMatchObject({ presence: 'bundled', blockedBy: null, installable: false, privacy: 'on-device' })
+      expect(row.downloadBytes).toBeGreaterThan(0)
+    }
+  })
+
+  it('reports every optional component absent and blocked on a lean package, and never as installable (G11)', async () => {
+    const { service } = setup({
+      packageRuntimeContract: async () => ({
+        status: 'verified' as const,
+        profile: 'lean' as const,
+        inventory: {
+          schema: 1 as const,
+          profile: 'lean' as const,
+          platform: 'darwin' as const,
+          arch: 'arm64' as const,
+          appVersion: '2.12.0',
+          electronVersion: '43.6.0',
+          sourceCommit: 'a'.repeat(40),
+          coreFiles: [],
+          identity: 'b'.repeat(64)
+        }
+      })
+    })
+    const snapshot = await service.snapshot()
+    expect(snapshot.optionalComponents).toHaveLength(3)
+    for (const row of snapshot.optionalComponents ?? []) {
+      expect(row).toMatchObject({ presence: 'absent', blockedBy: 'runtime-not-published', installable: false })
+    }
+    expect(snapshot.optionalComponents?.find((row) => row.id === 'parakeet')?.offer.surface).toBe('first-hold')
+  })
+
   it('uses asynchronous runtime/model metadata and fails closed when the selected engine changes mid-read', async () => {
     let selectionIdentity = 'selection:0'
     const { service } = setup({

@@ -87,6 +87,38 @@ export const SpeechPackComponentSnapshotSchema = z
     }
   })
 
+export const OptionalComponentIdSchema = z.enum(['local-llm', 'whisper', 'parakeet'])
+/**
+ * One optional on-device component as Settings and the first-hold offer describe it (G11). `presence` is what
+ * this install already carries: 'bundled' (a full 1.9.x package ships it), 'installed' (a verified download),
+ * 'model-only' (verified weights without a runtime that can run them) or 'absent'. `blockedBy` says why it
+ * cannot be offered today; `installable` is true only when an explicit, consented download could complete.
+ */
+export const OptionalComponentStatusSchema = z
+  .object({
+    id: OptionalComponentIdSchema,
+    label: z.string().min(1).max(80),
+    provider: z.string().min(1).max(120),
+    sourceHost,
+    privacy: z.literal('on-device'),
+    privacyNote: z.string().min(1).max(240),
+    downloadBytes: byteCount.positive(),
+    installedBytes: byteCount.positive(),
+    presence: z.enum(['bundled', 'installed', 'model-only', 'absent']),
+    blockedBy: z.enum(['runtime-not-published', 'package-invalid', 'package-incompatible']).nullable(),
+    installable: z.boolean(),
+    offer: z.object({ surface: z.enum(['first-hold', 'settings']), consent: z.literal('required') }).strict()
+  })
+  .strict()
+  .superRefine((value, ctx) => {
+    if (
+      value.installable &&
+      (value.blockedBy !== null || value.presence === 'bundled' || value.presence === 'installed')
+    ) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['installable'], message: 'Invalid installable state' })
+    }
+  })
+
 export const SpeechPackSnapshotSchema = z
   .object({
     featureEnabled: z.boolean(),
@@ -129,6 +161,7 @@ export const SpeechPackSnapshotSchema = z
       })
       .strict(),
     components: z.array(SpeechPackComponentSnapshotSchema).max(2),
+    optionalComponents: z.array(OptionalComponentStatusSchema).max(3).optional(),
     progress: SpeechPackProgressSchema.nullable()
   })
   .strict()
@@ -145,6 +178,11 @@ export const SpeechPackSnapshotSchema = z
       ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['profileError'], message: 'Invalid package profile' })
     if (new Set(value.components.map((row) => row.componentId)).size !== value.components.length)
       ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['components'], message: 'Duplicate component' })
+    if (
+      value.optionalComponents &&
+      new Set(value.optionalComponents.map((row) => row.id)).size !== value.optionalComponents.length
+    )
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['optionalComponents'], message: 'Duplicate component' })
     if (value.selectedComponent && !value.components.some((row) => row.componentId === value.selectedComponent))
       ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['components'], message: 'Missing selected component' })
     if (value.engineReadiness.engine !== value.selectedEngine)
@@ -210,6 +248,9 @@ export const SpeechPackInstallWithPlanRequestSchema = z
 export const SpeechPackInstallWithPlanResultSchema = SpeechPackActionResultSchema
 
 export type SpeechPackComponentId = z.infer<typeof SpeechPackComponentIdSchema>
+export type SpeechRuntimeComponentId = z.infer<typeof SpeechRuntimeComponentIdSchema>
+export type OptionalComponentId = z.infer<typeof OptionalComponentIdSchema>
+export type OptionalComponentStatus = z.infer<typeof OptionalComponentStatusSchema>
 export type SpeechPackActionReason = z.infer<typeof SpeechPackActionReasonSchema>
 export type SpeechPackActionRequest = z.infer<typeof SpeechPackActionRequestSchema>
 export type SpeechPackActionResult = z.infer<typeof SpeechPackActionResultSchema>

@@ -1,3 +1,4 @@
+import { descriptorFor } from './optional-component-descriptors'
 import type { PackageRuntimeContract } from './package-contract'
 
 export type OptionalRuntimeComponentId =
@@ -99,14 +100,14 @@ export function runtimeHostFacts(): OptionalRuntimeHostFacts {
   }
 }
 
+/** The runtimes an engine needs, read from the optional component descriptors (Apple Speech has none). */
 export function runtimeIdsForEngine(engine: 'whisper' | 'parakeet' | 'apple'): OptionalRuntimeComponentId[] {
-  if (engine === 'whisper') return ['runtime.asr-whisper-worker']
-  if (engine === 'parakeet') return ['runtime.asr-sherpa-onnx']
-  return []
+  if (engine === 'apple') return []
+  return [...descriptorFor(engine).runtimeIds]
 }
 
-export function runtimeIdsForLocalLlm(): readonly ['runtime.llama-server'] {
-  return ['runtime.llama-server']
+export function runtimeIdsForLocalLlm(): readonly OptionalRuntimeComponentId[] {
+  return descriptorFor('local-llm').runtimeIds
 }
 
 export function runtimeTargetFor(
