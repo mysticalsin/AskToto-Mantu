@@ -7,7 +7,18 @@ import type { Writable } from 'node:stream'
 import { afterEach, describe, expect, it } from 'vitest'
 import { installQaFaultHook } from '../../src/main/qa-identity'
 import { QA_CAPTURE_ENV } from '../../src/main/qa-capture-source'
-import { assertQaFaultHookMatchesIdentity, QA_CAPTURE_MARKER, QA_FAULT_MARKER, QA_IDENTITY_PACKAGE_NAME } from './qa-fault-hook.mjs'
+import { QA_CHORD_FIFO_ENV, QA_DESKTOP_SINK_ENV } from '../../src/main/qa-voice-hooks'
+import {
+  assertQaFaultHookMatchesIdentity,
+  QA_CAPTURE_MARKER,
+  QA_CHORD_MARKER,
+  QA_DESKTOP_SINK_MARKER,
+  QA_FAULT_MARKER,
+  QA_IDENTITY_PACKAGE_NAME
+} from './qa-fault-hook.mjs'
+
+/** Everything a QA-identity main bundle carries: the fault hook, the capture source, the chord FIFO and the desktop sink. */
+const ALL_QA_MARKERS = [QA_FAULT_MARKER, QA_CAPTURE_MARKER, QA_CHORD_MARKER, QA_DESKTOP_SINK_MARKER].join(' ')
 
 type AsarHeaderEntry = {
   files?: Record<string, AsarHeaderEntry>
@@ -79,7 +90,7 @@ describe('assertQaFaultHookMatchesIdentity', () => {
 
   it('Q3: the QA-identity package with the hook passes', async () => {
     // M2-0494: a QA-identity main bundle carries both QA hooks, the fault hook and the capture source.
-    const archive = await buildArchive(QA_IDENTITY_PACKAGE_NAME, `/* ${QA_FAULT_MARKER} ${QA_CAPTURE_MARKER} */\n`)
+    const archive = await buildArchive(QA_IDENTITY_PACKAGE_NAME, `/* ${ALL_QA_MARKERS} */\n`)
     expect(assertQaFaultHookMatchesIdentity(archive)).toEqual({ qaIdentity: true })
   })
 
@@ -101,10 +112,12 @@ describe('assertQaFaultHookMatchesIdentity', () => {
   })
 
   it('Q6: repeated shipping packages whose main bundle carries the hook fail deterministically', async () => {
-    await Promise.all(Array.from({ length: 64 }, async (_, index) => {
-      const archive = await buildArchive('asktoto', `/* ${QA_FAULT_MARKER} ${index} */\n`)
-      expect(() => assertQaFaultHookMatchesIdentity(archive)).toThrow(/shipping package carries the QA fault hook/)
-    }))
+    await Promise.all(
+      Array.from({ length: 64 }, async (_, index) => {
+        const archive = await buildArchive('asktoto', `/* ${QA_FAULT_MARKER} ${index} */\n`)
+        expect(() => assertQaFaultHookMatchesIdentity(archive)).toThrow(/shipping package carries the QA fault hook/)
+      })
+    )
   })
 
   it('Q7: replacing an archive at the same path does not reuse a stale asar header', async () => {
@@ -140,5 +153,32 @@ describe('assertQaFaultHookMatchesIdentity', () => {
 
   it('Q11 (M2-0494): the gate looks for the env name the capture hook compiles in', () => {
     expect(QA_CAPTURE_MARKER).toBe(QA_CAPTURE_ENV)
+  })
+
+  it('Q12 (V08): a shipping package whose main bundle carries the chord FIFO or the desktop sink fails', async () => {
+    const withFifo = await buildArchive('asktoto', `process.env.${QA_CHORD_MARKER}\n`)
+    expect(() => assertQaFaultHookMatchesIdentity(withFifo)).toThrow(/shipping package carries the QA chord FIFO hook/)
+    const withSink = await buildArchive('asktoto', `process.env.${QA_DESKTOP_SINK_MARKER}\n`)
+    expect(() => assertQaFaultHookMatchesIdentity(withSink)).toThrow(
+      /shipping package carries the QA desktop sink hook/
+    )
+  })
+
+  it('Q13 (V08): a QA-identity package without the chord FIFO, or without the desktop sink, fails', async () => {
+    const noFifo = await buildArchive(
+      QA_IDENTITY_PACKAGE_NAME,
+      `/* ${QA_FAULT_MARKER} ${QA_CAPTURE_MARKER} ${QA_DESKTOP_SINK_MARKER} */\n`
+    )
+    expect(() => assertQaFaultHookMatchesIdentity(noFifo)).toThrow(/QA-identity package lacks the QA chord FIFO hook/)
+    const noSink = await buildArchive(
+      QA_IDENTITY_PACKAGE_NAME,
+      `/* ${QA_FAULT_MARKER} ${QA_CAPTURE_MARKER} ${QA_CHORD_MARKER} */\n`
+    )
+    expect(() => assertQaFaultHookMatchesIdentity(noSink)).toThrow(/QA-identity package lacks the QA desktop sink hook/)
+  })
+
+  it('Q14 (V08): the gate looks for the env names the voice hooks compile in', () => {
+    expect(QA_CHORD_MARKER).toBe(QA_CHORD_FIFO_ENV)
+    expect(QA_DESKTOP_SINK_MARKER).toBe(QA_DESKTOP_SINK_ENV)
   })
 })

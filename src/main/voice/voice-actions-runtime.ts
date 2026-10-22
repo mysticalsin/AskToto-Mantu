@@ -141,6 +141,7 @@ export function createVoiceActionsRuntime(deps: VoiceActionsRuntimeDeps): VoiceA
       platform,
       chordMask: () => voiceChordMask(resolveVoiceActionsChord(voice(), platform)),
       latchEnabled: () => voice()?.doublePressLatch === true,
+      qaFifoSource: true,
       onChordEvent: (event) => session.onChordEvent(event),
       onStatus: () => session.onChordStatus()
     })

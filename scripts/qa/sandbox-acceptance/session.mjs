@@ -33,16 +33,17 @@ const READY_POLL_MS = 250
  */
 export const HARNESS_CHROMIUM_SWITCHES = Object.freeze(['--disable-features=AudioServiceSandbox'])
 
-/** @param {{ layout: ReturnType<typeof import('./lib.mjs').sandboxLayout>, appPath: string, parentEnv: Record<string, string | undefined>, captureFile?: string | null, platform?: string, bundleId?: string | null }} args */
+/** @param {{ layout: ReturnType<typeof import('./lib.mjs').sandboxLayout>, appPath: string, parentEnv: Record<string, string | undefined>, captureFile?: string | null, platform?: string, bundleId?: string | null, extraEnv?: Record<string, string> }} args */
 export function planLaunch({
   layout,
   appPath,
   parentEnv,
   captureFile = null,
   platform = process.platform,
-  bundleId = undefined
+  bundleId = undefined,
+  extraEnv = {}
 }) {
-  const childEnv = buildChildEnv({ parentEnv, layout, captureFile, platform })
+  const childEnv = buildChildEnv({ parentEnv, layout, captureFile, platform, extraEnv })
   return {
     childEnv,
     guardConfig: {
@@ -58,7 +59,7 @@ export function planLaunch({
 
 /**
  * Every launch guard plus the socket-path budget, as the list --dry-run prints. Reads only the bundle id; launches nothing.
- * @param {{ layout: any, appPath: string, parentEnv: Record<string, string | undefined>, captureFile?: string | null, bundleId?: string | null, platform?: string }} args
+ * @param {{ layout: any, appPath: string, parentEnv: Record<string, string | undefined>, captureFile?: string | null, bundleId?: string | null, platform?: string, extraEnv?: Record<string, string> }} args
  */
 export function guardReport({
   layout,
@@ -66,9 +67,18 @@ export function guardReport({
   parentEnv,
   captureFile = null,
   bundleId = undefined,
-  platform = process.platform
+  platform = process.platform,
+  extraEnv = {}
 }) {
-  const { childEnv, guardConfig } = planLaunch({ layout, appPath, parentEnv, captureFile, bundleId, platform })
+  const { childEnv, guardConfig } = planLaunch({
+    layout,
+    appPath,
+    parentEnv,
+    captureFile,
+    bundleId,
+    platform,
+    extraEnv
+  })
   const result = evaluateGuards(guardConfig)
   result.checks.push(checkSocketBudget(layout.tmp))
   return {
@@ -98,7 +108,7 @@ export const readAudit = (layout) => parseAuditLog(readAuditLog(layout.auditLog)
  * Launch the app and wait for its own `app.renderer.ready` audit record, then (optionally) attach over CDP.
  * Throws on a guard refusal, an early exit, an `app.crash`/`app.unresponsive` record, or the timeout.
  * @param {{ layout: any, appPath: string, parentEnv: Record<string, string | undefined>, captureFile?: string | null,
- *   readyTimeoutMs?: number, connect?: boolean, log?: (line: string) => void,
+ *   readyTimeoutMs?: number, connect?: boolean, log?: (line: string) => void, extraEnv?: Record<string, string>,
  *   deps?: { platform?: string, readBundleId?: (appPath: string) => string | null } }} args
  * `deps` is a test seam (a fake bundle whose Info.plist plutil cannot read, and a non-darwin CI host); the CLIs never pass it.
  */
@@ -110,6 +120,7 @@ export async function launchApp({
   readyTimeoutMs = 120_000,
   connect = true,
   log = () => {},
+  extraEnv = {},
   deps = {}
 }) {
   const { childEnv, guardConfig } = planLaunch({
@@ -117,6 +128,7 @@ export async function launchApp({
     appPath,
     parentEnv,
     captureFile,
+    extraEnv,
     ...(deps.platform ? { platform: deps.platform } : {}),
     ...(deps.readBundleId ? { bundleId: deps.readBundleId(appPath) } : {})
   })

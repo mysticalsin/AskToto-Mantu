@@ -20,6 +20,8 @@ import type { InputSessionStopReason } from '@shared/input-session'
 import { CHORD_PLATFORM_DEFAULTS } from '@shared/voice/modifier-mask'
 import { auditLog, mainLog } from '../logger'
 import { macWatchModifiersSpawnSpec } from '../mac-helper'
+import { QA_IDENTITY_BUILD } from '../qa-identity'
+import { createQaChordFifoSource } from '../qa-voice-hooks'
 import {
   spawnLineHelper,
   type LineHelperHandle,
@@ -80,6 +82,11 @@ export interface VoiceChordWiringDeps {
   log?(message: string): void
   /** The consumer of chord events (the voice turn, V02). */
   onChordEvent?(event: ChordWatcherEvent): void
+  /**
+   * Let the QA chord FIFO source (qa-voice-hooks.ts, V08) replace the helper as the line source. Only the voice hold sets
+   * this: a second watcher on the same FIFO would split its lines. Honoured only by the QA-identity build.
+   */
+  qaFifoSource?: boolean
 }
 
 export interface VoiceChordWiring {
@@ -97,8 +104,20 @@ export function createVoiceChordWiring(deps: VoiceChordWiringDeps): VoiceChordWi
   const platform = deps.platform ?? process.platform
   const defaultMask = platform === 'win32' ? CHORD_PLATFORM_DEFAULTS.win32 : CHORD_PLATFORM_DEFAULTS.darwin
 
+  // QA-identity builds only: the guard is the compile-time literal, so shipping bytes drop the whole branch.
+  const qaFifo =
+    QA_IDENTITY_BUILD && deps.qaFifoSource === true
+      ? createQaChordFifoSource({
+          qaIdentity: QA_IDENTITY_BUILD,
+          packaged: app.isPackaged,
+          env: process.env,
+          audit: (event, detail) => auditLog(event, detail)
+        })
+      : null
+
   const helperSpec = (): LineHelperSpec | null => {
     if (deps.helperSpec) return deps.helperSpec()
+    if (qaFifo) return qaFifo.helperSpec()
     if (platform === 'darwin') return macWatchModifiersSpawnSpec()
     if (platform === 'win32') {
       return winKeywatchSpawnSpec({ resourcesPath: process.resourcesPath ?? '', exists: existsSync })
@@ -115,7 +134,8 @@ export function createVoiceChordWiring(deps: VoiceChordWiringDeps): VoiceChordWi
 
   const watcher = createChordWatcher({
     helperSpec,
-    spawnHelper: deps.spawnHelper ?? ((spec, handlers) => spawnLineHelper(spec, handlers)),
+    spawnHelper:
+      deps.spawnHelper ?? (qaFifo ? qaFifo.spawnHelper : (spec, handlers) => spawnLineHelper(spec, handlers)),
     enabled: deps.enabled,
     signedIn: deps.requireAuth,
     gate,

@@ -693,7 +693,8 @@ async function ingest(
   const id = deviceSuppliedId(body.id)
   // Listening and recap events have their own device-scoped namespace, so their client id is
   // independent of an Ask id. Preserve the Ask ownership preflight for the other ingest branches.
-  const existing = body.event === 'listen' || body.event === 'recap' ? null : await store.getAsk(id)
+  const existing =
+    body.event === 'listen' || body.event === 'recap' || body.event === 'voice_action' ? null : await store.getAsk(id)
   if (existing && existing.device_id !== deviceId) return json({ ok: false, error: 'forbidden' }, 403)
   if (body.event === 'rating') {
     if (existing) await store.updateAskRating(id, String(body.rating || ''))
@@ -723,6 +724,23 @@ async function ingest(
       device_id: deviceId,
       country: geo.country,
       detail: safeEventDetail(minutes != null ? `${minutes}m` : String(body.event))
+    })
+    await store.upsertSeat(seat)
+    return json({ ok: true, id })
+  }
+  if (body.event === 'voice_action') {
+    // Metadata only (V08): the projection already reduced the record to closed sets, so the detail is an action id
+    // and an outcome. Scoped to the signed device so a retry dedupes and another device's id cannot replace it.
+    const seat = seatFromBody(deviceId, body, now, geo)
+    const activityId = `voice-${await sha256Hex(JSON.stringify([deviceId, id]))}`
+    await store.insertEvent({
+      id: activityId,
+      ts: now,
+      kind: 'voice_action',
+      actor: seat.sso_email,
+      device_id: deviceId,
+      country: geo.country,
+      detail: safeEventDetail(`${str(body.actionId) ?? 'unknown'}:${str(body.outcome) ?? 'unknown'}`)
     })
     await store.upsertSeat(seat)
     return json({ ok: true, id })

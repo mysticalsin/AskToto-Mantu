@@ -239,7 +239,7 @@ const readSettingsSummary = (page) =>
     }
   })
 
-async function openSettingsTab(page, tabId) {
+export async function openSettingsTab(page, tabId) {
   await page.locator(`#settings-tab-${tabId}`).click({ timeout: 10_000 })
   await waitFor(
     async () => (await page.locator(`#settings-tab-${tabId}`).getAttribute('aria-selected')) === 'true',
@@ -593,7 +593,7 @@ export async function togglePersistedAfterRelaunch(session, ctx) {
 // Scenario
 
 /** Clean quit through the app's own IPC, as in the meeting scenario. */
-async function cleanQuit(session) {
+export async function cleanQuit(session) {
   const quit = await session.quit()
   if (!quit.cleanShutdown) throw new Error(`the app did not exit cleanly (request ${quit.request}, exit ${quit.exit})`)
   if (!quit.cleanShutdownRecord) throw new Error('the app exited but wrote no app.shutdown.clean audit record')

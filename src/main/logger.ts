@@ -350,6 +350,11 @@ export type AuditEvent =
   // M2-0494: the packaged QA build is feeding a WAV from its isolated profile as the microphone
   // (main/qa-capture-source.ts). { active: true } only — never the path or file name.
   | 'qa.capture.file_source'
+  // V08: the packaged QA build's voice-actions hooks (main/qa-voice-hooks.ts). The chord FIFO source reports
+  // a state (open, closed or refused) and an optional reason, and the recording desktop sink reports the action id,
+  // outcome and args hash per dispatch. Never a path, an argument, a title or any speech.
+  | 'qa.chord_fifo'
+  | 'qa.desktop_action.dispatched'
   // M2-0482: the packaged, isolated-profile QA gate (qa-hk-m.ts qaHostFloorOverride) first lifted a RAM floor in this
   // process. Once per floor: { floor: "prewarm-available-ram" | "advertised-ram", hostTotalBytes, hostAvailableBytes }.
   | 'local.host-floor-override'

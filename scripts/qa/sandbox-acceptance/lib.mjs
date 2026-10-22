@@ -3,7 +3,7 @@
 // here spawns an app. Imports are limited to modules that are safe to load in a unit test.
 import { createHash } from 'node:crypto'
 import { readFileSync, readdirSync } from 'node:fs'
-import { basename, join } from 'node:path'
+import { basename, isAbsolute, join, relative } from 'node:path'
 import { strictLaunchEnvironment } from '../lib/app-driver.mjs'
 
 export const REPORT_SCHEMA = 'sandbox-acceptance/1'
@@ -122,13 +122,25 @@ export function checkSocketBudget(tmpDir) {
 }
 
 /**
+ * The only extra variables a scenario may add to the child environment, each a QA-identity hook that is inert in any other
+ * build: the voice-actions chord FIFO and recording desktop sink (src/main/qa-voice-hooks.ts), and the one switch that lets
+ * the app trust the throwaway TLS certificate of the local mock LLM. Never taken from the parent environment.
+ */
+export const QA_EXTRA_ENV_KEYS = Object.freeze([
+  'METIS_QA_CHORD_FIFO',
+  'METIS_QA_DESKTOP_SINK',
+  'NODE_TLS_REJECT_UNAUTHORIZED'
+])
+
+/**
  * The only environment the QA app receives. Built from app-driver's strict allow-list (PATH, LANG, LC_*), never a copy
  * of the harness environment, then pinned to the sandbox. Credentials, OneDrive and inherited Métis overrides cannot
  * leak through. METIS_QA_CAPTURE_FILE is set only when a synthetic WAV is supplied (qa-capture-source.ts honours it
- * only for a packaged QA-identity build whose ASKTOTO_USERDATA contains the file).
- * @param {{ parentEnv: Record<string, string | undefined>, layout: ReturnType<typeof sandboxLayout>, captureFile?: string | null, platform?: string }} args
+ * only for a packaged QA-identity build whose ASKTOTO_USERDATA contains the file). `extraEnv` may name only QA_EXTRA_ENV_KEYS,
+ * and a chord FIFO must sit inside the profile.
+ * @param {{ parentEnv: Record<string, string | undefined>, layout: ReturnType<typeof sandboxLayout>, captureFile?: string | null, platform?: string, extraEnv?: Record<string, string> }} args
  */
-export function buildChildEnv({ parentEnv, layout, captureFile = null, platform = process.platform }) {
+export function buildChildEnv({ parentEnv, layout, captureFile = null, platform = process.platform, extraEnv = {} }) {
   const env = strictLaunchEnvironment(
     parentEnv,
     {
@@ -143,6 +155,15 @@ export function buildChildEnv({ parentEnv, layout, captureFile = null, platform 
   )
   env.ASKTOTO_LOCAL_KEYSTORE = '1'
   if (captureFile) env.METIS_QA_CAPTURE_FILE = captureFile
+  for (const [key, value] of Object.entries(extraEnv)) {
+    if (!QA_EXTRA_ENV_KEYS.includes(key)) throw new Error(`${key} is not an allowed extra variable for the QA app`)
+    if (key === 'METIS_QA_CHORD_FIFO') {
+      const inside = isAbsolute(value) ? relative(layout.userData, value) : '..'
+      if (!inside || inside === '..' || inside.startsWith('../') || inside.startsWith('..\\') || isAbsolute(inside))
+        throw new Error('the chord FIFO must be inside the profile (ASKTOTO_USERDATA)')
+    }
+    env[key] = String(value)
+  }
   return env
 }
 

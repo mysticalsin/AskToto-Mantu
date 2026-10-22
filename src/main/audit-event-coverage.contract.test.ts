@@ -40,7 +40,9 @@ const unionStart = loggerSrc.indexOf('export type AuditEvent =')
 const unionEnd = loggerSrc.indexOf('\n\n// Lazy actor resolver', unionStart)
 if (unionStart === -1) throw new Error('logger.ts no longer declares `export type AuditEvent =` — update this test')
 if (unionEnd === -1 || unionEnd <= unionStart) {
-  throw new Error("logger.ts's AuditEvent union no longer ends before the '// Lazy actor resolver' comment — update this test's slice")
+  throw new Error(
+    "logger.ts's AuditEvent union no longer ends before the '// Lazy actor resolver' comment — update this test's slice"
+  )
 }
 const unionBlock = loggerSrc.slice(unionStart, unionEnd)
 
@@ -64,9 +66,7 @@ const KNOWN_EXCEPTIONS = new Set<string>([
 /** Tracked, non-test TypeScript source under src/main — the surface this scan checks for call sites. */
 function mainSourceFiles(): string[] {
   const git = execSync('git ls-files -- src/main', { cwd: root, encoding: 'utf8' })
-  return git
-    .split('\n')
-    .filter((f) => f.endsWith('.ts') && !f.endsWith('.test.ts'))
+  return git.split('\n').filter((f) => f.endsWith('.ts') && !f.endsWith('.test.ts'))
 }
 
 const combinedSource = mainSourceFiles()
@@ -92,18 +92,29 @@ describe('AuditEvent coverage — every declared event has a real call site', ()
     expect(hasCallSite('qa.capture.file_source')).toBe(true)
   })
 
+  // qa-voice-hooks.test.ts proves both events fire with their content-free details.
+  it('V08: the QA voice hook events are declared, have real call sites and are never excepted', () => {
+    for (const event of ['qa.chord_fifo', 'qa.desktop_action.dispatched']) {
+      expect(DECLARED_EVENTS).toContain(event)
+      expect(KNOWN_EXCEPTIONS.has(event)).toBe(false)
+      expect(hasCallSite(event)).toBe(true)
+    }
+  })
+
   it('every KNOWN_EXCEPTIONS entry is actually declared (no stale entries)', () => {
     for (const ev of KNOWN_EXCEPTIONS) {
       expect(DECLARED_EVENTS, `KNOWN_EXCEPTIONS lists '${ev}', which is not in AuditEvent any more`).toContain(ev)
     }
   })
 
-  it.each(DECLARED_EVENTS.filter((ev) => !KNOWN_EXCEPTIONS.has(ev)))(
-    "'%s' is fired from a real auditLog-shaped call site in src/main",
-    (event) => {
-      expect(hasCallSite(event), `'${event}' is declared in AuditEvent but no call site fires it — add a call site or move it to KNOWN_EXCEPTIONS with a reason`).toBe(true)
-    }
-  )
+  it.each(
+    DECLARED_EVENTS.filter((ev) => !KNOWN_EXCEPTIONS.has(ev))
+  )("'%s' is fired from a real auditLog-shaped call site in src/main", (event) => {
+    expect(
+      hasCallSite(event),
+      `'${event}' is declared in AuditEvent but no call site fires it — add a call site or move it to KNOWN_EXCEPTIONS with a reason`
+    ).toBe(true)
+  })
 
   // M2-0482: the QA host-floor override's once-per-floor record is declared and fired (qa-hk-m.ts hostFloorOverridden).
   it("declares and fires 'local.host-floor-override'", () => {

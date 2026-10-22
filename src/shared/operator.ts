@@ -3,6 +3,8 @@
  * Pure. Main and renderer agree on the same mapping so a missing provider field never becomes $0.
  */
 
+import { DESKTOP_ADAPTER_IDS } from './desktop-actions'
+
 export type CacheBadge = 'hit' | 'write' | 'n/a' | 'not-reported'
 export type CacheTtl = '1h' | '5m' | '30m'
 export type AskOutcome = 'answered' | 'error' | 'thumbs-down'
@@ -161,7 +163,17 @@ export function shouldSendAskText(
   return false
 }
 
-const OPERATOR_EVENT_TYPES = new Set(['ask', 'rating', 'listen', 'recap', 'crm'])
+const OPERATOR_EVENT_TYPES = new Set(['ask', 'rating', 'listen', 'recap', 'crm', 'voice_action'])
+/**
+ * Voice action telemetry (V08, design section 9) is metadata only. Every field is a closed set, so no transcript,
+ * title, query or app name has a serialization path: the action is its catalog id (`apps.open` carries no app name).
+ */
+const VOICE_ACTION_SOURCES = new Set(['hold', 'wake', 'panel'])
+const VOICE_ACTION_IDS = new Set<string>([...DESKTOP_ADAPTER_IDS, 'apps.open', 'apps.focus', 'apps.quit'])
+const VOICE_ACTION_CLASSES = new Set(['read', 'reversible', 'create', 'send', 'type', 'delete'])
+const VOICE_ACTION_OUTCOMES = new Set(['done', 'failed', 'uncertain', 'cancelled', 'refused'])
+export const VOICE_ACTION_LATENCY_BUCKETS = ['under_1s', '1_2s', '2_5s', 'over_5s'] as const
+const VOICE_ACTION_LATENCY = new Set<string>(VOICE_ACTION_LATENCY_BUCKETS)
 const ASK_MODES = new Set(['answer', 'vision', 'suggest', 'summary', 'recap'])
 const ASK_OUTCOMES = new Set(['answered', 'error', 'thumbs-down'])
 const QUESTION_TYPES = new Set([
@@ -262,6 +274,14 @@ export function projectOperatorIngestMetadata(raw: unknown): Record<string, unkn
     projected.rating = source.rating
   } else if (event === 'listen' || event === 'recap') {
     putDefined(projected, 'minutes', finiteNonNegative(source.minutes))
+  } else if (event === 'voice_action') {
+    const closed = (raw: unknown, allowed: ReadonlySet<string>): string | undefined =>
+      typeof raw === 'string' && allowed.has(raw) ? raw : undefined
+    putDefined(projected, 'source', closed(source.source, VOICE_ACTION_SOURCES))
+    putDefined(projected, 'actionId', closed(source.actionId, VOICE_ACTION_IDS))
+    putDefined(projected, 'class', closed(source.class, VOICE_ACTION_CLASSES))
+    putDefined(projected, 'outcome', closed(source.outcome, VOICE_ACTION_OUTCOMES))
+    putDefined(projected, 'latencyBucket', closed(source.latencyBucket, VOICE_ACTION_LATENCY))
   } else if (event === 'crm') {
     if (typeof source.status !== 'string' || !CRM_STATUSES.has(source.status)) return null
     projected.status = source.status

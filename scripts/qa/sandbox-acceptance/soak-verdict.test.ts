@@ -1,7 +1,7 @@
 import { join, resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { COUNTED_EVENTS } from '../census/audit-counts.mjs'
-import { parsePsResourceRows, parsePsTime, sampleTree, totalRss } from './sampler.mjs'
+import { isChordHelperCommand, parsePsResourceRows, parsePsTime, sampleTree, totalRss } from './sampler.mjs'
 import { MIB, MINUTE_MS, THRESHOLDS, evaluateSoak, planPhases, renderSummary } from './soak-verdict.mjs'
 import { auditCountsByPhase, resolveSoakConfig, summarizeQueue } from './soak.mjs'
 
@@ -303,6 +303,45 @@ describe('sampler', () => {
     expect(totalRss(sample)).toBe(3000 * 1024)
     const gone = sampleTree({ mainPid: 4242, installRoot: root, platform: 'darwin', table: [table[2]], ps, nowMs: 5 })
     expect(gone).toMatchObject({ mainAlive: false, processes: [] })
+  })
+
+  it('tells the chord helper apart so its CPU can be judged on its own (V08 va-idle-cost)', () => {
+    const root = '/s/Applications/Metis QA.app'
+    const table = [
+      { pid: 100, ppid: 1, startedMs: 1000, exe: `${root}/Contents/MacOS/Metis QA`, role: 'Metis QA' },
+      {
+        pid: 102,
+        ppid: 100,
+        startedMs: 1200,
+        exe: `${root}/Contents/Resources/mac-helper/metis-mac-helper`,
+        role: 'metis-mac-helper'
+      },
+      {
+        pid: 103,
+        ppid: 100,
+        startedMs: 1300,
+        exe: `${root}/Contents/Resources/mac-helper/metis-mac-helper`,
+        role: 'metis-mac-helper'
+      }
+    ]
+    const ps = (pids: number[]) =>
+      [
+        pids.includes(100) ? ' 100 1000 0:01.00 Metis QA' : '',
+        pids.includes(102)
+          ? ` 102 500 0:00.50 ${root}/Contents/Resources/mac-helper/metis-mac-helper watch-modifiers --interval-ms 40`
+          : '',
+        pids.includes(103)
+          ? ` 103 500 0:00.50 ${root}/Contents/Resources/mac-helper/metis-mac-helper watch-frontmost`
+          : ''
+      ].join('\n')
+    const sample = sampleTree({ mainPid: 100, installRoot: root, platform: 'darwin', table, ps, nowMs: 5 })
+    expect(sample.processes.map((process) => [process.pid, process.kind])).toEqual([
+      [100, 'main'],
+      [102, 'chord-helper'],
+      [103, 'other']
+    ])
+    expect(isChordHelperCommand('metis-keywatch.exe --interval-ms 40')).toBe(true)
+    expect(isChordHelperCommand('metis-mac-helper supervise watch-modifiers')).toBe(false)
   })
 
   it('never sums a sample with a missing RSS reading', () => {

@@ -5,6 +5,8 @@ import { createProductionDesktopAdapterDeps } from '../desktop-adapter-deps'
 import { executeDesktopAction } from '../desktop-adapters'
 import { authSessionGeneration } from '../auth'
 import { auditLog, mainLog } from '../logger'
+import { QA_IDENTITY_BUILD } from '../qa-identity'
+import { createQaDesktopSink, qaDesktopSinkEnabled } from '../qa-voice-hooks'
 import { atomicSavedWrite } from '../infra/storage/atomic-saved-write'
 import { decryptSecret, encryptSecret } from '../secrets'
 import type { CommandConfirmationDeps } from '../command-confirmation'
@@ -35,10 +37,19 @@ function createAcknowledgementStore(file: () => string): NonNullable<DesktopActi
  * atomically. Paths resolve lazily because userData can be redirected after this module loads.
  */
 export function createDesktopActionTaskBridge(): DesktopActionTaskBridge {
+  // QA-identity builds only (V08, compiled out of shipping bytes): the acceptance run records dispatches in a sink so
+  // the sandbox never opens the owner's real Notes, browser or camera. Everything above the executor stays real.
+  const qaSink =
+    QA_IDENTITY_BUILD &&
+    qaDesktopSinkEnabled({ qaIdentity: QA_IDENTITY_BUILD, packaged: app.isPackaged, env: process.env })
+      ? createQaDesktopSink((event, detail) => auditLog(event, detail))
+      : null
   return new DesktopActionTaskBridge({
     // The envelope main derived rides along so a verified outcome can carry a receipt bound to this dispatch.
     execute: (request, envelope) =>
-      executeDesktopAction(request, { envelope, deps: createProductionDesktopAdapterDeps() }),
+      qaSink
+        ? qaSink(request, envelope)
+        : executeDesktopAction(request, { envelope, deps: createProductionDesktopAdapterDeps() }),
     store: createEncryptedTaskFileStore({
       file: () => join(app.getPath('userData'), 'desktop-action-tasks.bin'),
       encrypt: encryptSecret,

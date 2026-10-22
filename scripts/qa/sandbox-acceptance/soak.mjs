@@ -31,6 +31,7 @@ import { countByKind, sampleTree, totalRss } from './sampler.mjs'
 import { guardReport, launchApp, prepareProfile, readAudit } from './session.mjs'
 import { readQueue, startSyntheticMeeting, stopAndSave } from './scenario.mjs'
 import { MINUTE_MS, evaluateSoak, planPhases, renderSummary } from './soak-verdict.mjs'
+import { summarizeHelperCpu } from './voice-actions-lib.mjs'
 
 /** Overlay layouts a soak profile can be seeded with. The product default is 'hide'; the soak has always seeded 'bar'. */
 export const OVERLAY_LAYOUTS = Object.freeze(['bar', 'hide', 'island'])
@@ -351,6 +352,8 @@ async function main(argv) {
     overall,
     growth: verdict,
     queue,
+    // V08: the chord helper's idle CPU against the voice-actions budget. Advisory here; absent helper reads null.
+    helperCpu: summarizeHelperCpu(samples, actualPhases),
     auditCountsByPhase: auditCounts,
     phases: actualPhases,
     samples: samples.map((sample) => ({

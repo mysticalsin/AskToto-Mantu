@@ -11,6 +11,8 @@
 // --scenario upgrade (upgrade.mjs, needs --previous-zip and --candidate-zip) runs update, single-instance and rollback on one
 // shared profile. --scenario settings-hig swaps it for the Apple HIG Settings scenario (settings-hig.mjs): Command-Comma, instant-apply toggle,
 // confirmation sheet, no mic request, inline endpoint validation, persistence and last pane across a relaunch.
+// --scenario voice-actions (voice-actions.mjs, V08) drives hold-to-talk voice actions with no real keyboard, microphone or desktop:
+// a chord FIFO, per-utterance synthetic WAVs, a recording desktop sink and a local mock LLM; --va-* flags tune it.
 // Exit codes: 0 PASS or PASS_WITH_GAPS, 1 FAIL or INCOMPLETE, 2 PRECONDITION (a guard refused, or a bad argument).
 // --dry-run validates arguments and every guard, prints the plan and touches nothing.
 import { existsSync, mkdirSync, statSync, writeFileSync } from 'node:fs'
@@ -37,6 +39,8 @@ import {
 import { guardReport, launchApp, planLaunch, prepareProfile } from './session.mjs'
 import { DEFAULT_CANDIDATE_VERSION, runUpgradeScenario, UPGRADE_STEPS } from './upgrade.mjs'
 import { HIG_SEED_SETTINGS, SETTINGS_HIG_STEPS, runSettingsHigScenario } from './settings-hig.mjs'
+import { runVoiceActionsScenario, prepareVoiceActions, describePrepared, voiceExtraEnv } from './voice-actions.mjs'
+import { VOICE_ACTIONS_STEPS, reportLeaksMarkers } from './voice-actions-lib.mjs'
 import { parseCases, stressSteps } from './stress-lib.mjs'
 import { runStressScenario } from './stress.mjs'
 import {
@@ -47,7 +51,15 @@ import {
   verifyMeetingPreserved
 } from './scenario.mjs'
 
-export const SCENARIOS = Object.freeze(['meeting', 'settings-hig', 'upgrade', 'stress'])
+export const SCENARIOS = Object.freeze(['meeting', 'settings-hig', 'upgrade', 'stress', 'voice-actions'])
+
+/** Flags only `--scenario voice-actions` accepts. */
+const VOICE_ACTIONS_FLAGS = Object.freeze([
+  'va-idle-seconds',
+  'va-runs',
+  'va-idle-cost-minutes',
+  'va-relaunch-per-utterance'
+])
 
 export const CLI_SPEC = Object.freeze({
   scenario: { type: 'string', default: 'meeting' },
@@ -67,6 +79,10 @@ export const CLI_SPEC = Object.freeze({
   'transcript-wait-seconds': { type: 'number', default: 150, min: 10 },
   'save-wait-seconds': { type: 'number', default: 180, min: 10 },
   'ready-timeout-seconds': { type: 'number', default: 120, min: 10 },
+  'va-idle-seconds': { type: 'number', default: 60, min: 5 },
+  'va-runs': { type: 'number', default: 3, min: 1, max: 10 },
+  'va-idle-cost-minutes': { type: 'number', default: 0, min: 0, max: 120 },
+  'va-relaunch-per-utterance': { type: 'boolean', default: false },
   'dry-run': { type: 'boolean', default: false }
 })
 
@@ -93,6 +109,11 @@ export function resolveConfig(argv, env = process.env) {
   if (!/^[A-Za-z0-9-]{1,16}$/.test(runId))
     throw new CliError('--run-id must be 1-16 characters of letters, digits and -')
   const layout = sandboxLayout({ sandboxRoot, runId })
+  if (values.scenario !== 'voice-actions') {
+    for (const flag of VOICE_ACTIONS_FLAGS)
+      if (argv.some((token) => token === `--${flag}` || token.startsWith(`--${flag}=`)))
+        throw new CliError(`--${flag} is only valid with --scenario voice-actions`)
+  }
   if (values.scenario !== 'stress') {
     for (const flag of ['zip', 'long-minutes'])
       if (argv.some((token) => token === `--${flag}` || token.startsWith(`--${flag}=`)))
@@ -189,7 +210,15 @@ export function dryRunPlan(config, env = process.env, { bundleId = undefined, pl
   const guards =
     (values.scenario === 'upgrade' || values.scenario === 'stress') && !existsSync(appPath)
       ? upgradeGuardReport({ layout, env, platform })
-      : guardReport({ layout, appPath, parentEnv: env, captureFile: layout.captureWav, bundleId, platform })
+      : guardReport({
+          layout,
+          appPath,
+          parentEnv: env,
+          captureFile: layout.captureWav,
+          bundleId,
+          platform,
+          ...(values.scenario === 'voice-actions' ? { extraEnv: voiceExtraEnv(layout) } : {})
+        })
   return {
     ok: guards.ok,
     checks: guards.checks,
@@ -213,17 +242,29 @@ export function dryRunPlan(config, env = process.env, { bundleId = undefined, pl
             ? [...UPGRADE_STEPS]
             : values.scenario === 'settings-hig'
               ? [...SETTINGS_HIG_STEPS]
-              : [
-                  'launch-and-renderer-ready',
-                  'meeting-live',
-                  'transcript-observed',
-                  'stop-and-save',
-                  'review-opens-meeting',
-                  'clean-quit',
-                  'relaunch',
-                  'meeting-preserved-after-relaunch',
-                  'final-quit'
-                ],
+              : values.scenario === 'voice-actions'
+                ? [...VOICE_ACTIONS_STEPS]
+                : [
+                    'launch-and-renderer-ready',
+                    'meeting-live',
+                    'transcript-observed',
+                    'stop-and-save',
+                    'review-opens-meeting',
+                    'clean-quit',
+                    'relaunch',
+                    'meeting-preserved-after-relaunch',
+                    'final-quit'
+                  ],
+      ...(values.scenario === 'voice-actions'
+        ? {
+            voiceActions: {
+              idleSeconds: values['va-idle-seconds'],
+              runs: values['va-runs'],
+              idleCostMinutes: values['va-idle-cost-minutes'],
+              relaunchPerUtterance: values['va-relaunch-per-utterance']
+            }
+          }
+        : {}),
       childEnvKeys: guards.childEnvKeys
     }
   }
@@ -256,7 +297,6 @@ async function main(argv) {
     console.error(`[acceptance] ${error.message}`)
     return EXIT_CODES.PRECONDITION
   }
-  prepareProfile(layout, values.scenario === 'settings-hig' ? HIG_SEED_SETTINGS : {})
   let audio
   try {
     audio = prepareAudio({ kind: values.audio, layout, wavSource: values.wav })
@@ -264,6 +304,20 @@ async function main(argv) {
     console.error(`[acceptance] ${error.message}`)
     return EXIT_CODES.PRECONDITION
   }
+  // The voice-actions scenario needs its FIFO, per-utterance WAVs and mock LLM before the profile is seeded (the seed names the mock).
+  let voice = null
+  if (values.scenario === 'voice-actions') {
+    try {
+      voice = await prepareVoiceActions({ layout, audio, log: (line) => console.log(`[acceptance] ${line}`) })
+    } catch (error) {
+      console.error(`[acceptance] ${error.message}`)
+      return EXIT_CODES.PRECONDITION
+    }
+  }
+  prepareProfile(
+    layout,
+    values.scenario === 'settings-hig' ? HIG_SEED_SETTINGS : values.scenario === 'voice-actions' ? voice.seed : {}
+  )
   const report = createReport({
     tool: 'run-acceptance',
     config: {
@@ -298,6 +352,7 @@ async function main(argv) {
               mainExecutableSha256: mainExecutableSha256(appPath)
             }),
       audio,
+      ...(voice ? { voiceActions: describePrepared(voice) } : {}),
       host: { platform: osPlatform(), arch: arch(), osRelease: release(), node: process.version }
     }
   })
@@ -316,6 +371,7 @@ async function main(argv) {
   const cleanup = async () => {
     if (session) await session.kill().catch(() => {})
     for (const owned of stressSessions) await owned.kill().catch(() => {})
+    if (voice) await voice.stop().catch(() => {})
   }
   process.once('SIGINT', () => void cleanup().finally(() => process.exit(130)))
   try {
@@ -350,6 +406,26 @@ async function main(argv) {
         launch: (app) => launchApp({ ...launchArgs, appPath: app }),
         onSession: (next) => {
           session = next
+        },
+        log
+      })
+    } else if (values.scenario === 'voice-actions') {
+      await runVoiceActionsScenario({
+        report,
+        layout,
+        prepared: voice,
+        audio,
+        launch: ({ fifo }) => launchApp({ ...launchArgs, extraEnv: voice.envFor({ fifo }) }),
+        onSession: (next) => {
+          session = next
+        },
+        config: {
+          idleSeconds: values['va-idle-seconds'],
+          runs: values['va-runs'],
+          idleCostMinutes: values['va-idle-cost-minutes'],
+          relaunchPerUtterance: values['va-relaunch-per-utterance'],
+          saveWaitSeconds: values['save-wait-seconds'],
+          transcriptWaitSeconds: values['transcript-wait-seconds']
         },
         log
       })
@@ -455,7 +531,25 @@ async function main(argv) {
   } finally {
     await cleanup()
   }
-  const final = finishReport(report)
+  let final = finishReport(report)
+  // A voice report carries counts, states, timings and hashes, never what was said: refuse to write one that does.
+  const leaked = values.scenario === 'voice-actions' ? reportLeaksMarkers(final) : []
+  if (leaked.length) {
+    console.error(
+      `[acceptance] the report contained ${leaked.length} spoken marker(s); it is withheld and the run FAILS`
+    )
+    final = {
+      ...final,
+      verdict: 'FAIL',
+      withheld: true,
+      steps: final.steps.map(({ id, status }) => ({
+        id,
+        status,
+        reason: 'report withheld: it contained a spoken marker',
+        evidence: {}
+      }))
+    }
+  }
   mkdirSync(join(outPath, '..'), { recursive: true })
   writeFileSync(outPath, `${JSON.stringify(final, null, 2)}\n`)
   console.log(formatSteps(final.steps))

@@ -129,6 +129,58 @@ A post-relaunch step whose pre-quit step was NOT_SUPPORTED is NOT_SUPPORTED too;
 in its new value (the profile is a throwaway sandbox). "Replay onboarding" is used for the confirmation, so a build without the
 confirmation sheet would start onboarding and the later steps would fail visibly rather than pass.
 
+## Voice actions scenario (`--scenario voice-actions`, V08)
+
+Opt-in; needs a QA-identity build that carries the voice hooks (`src/main/qa-voice-hooks.ts`, proven by `scripts/lib/qa-fault-hook.mjs`
+in both directions: a shipping package must carry none of them, a QA package all of them). Nothing real is touched: no keyboard,
+microphone, Notes, browser or camera.
+
+- **Keyboard.** `METIS_QA_CHORD_FIFO` names a FIFO inside the profile (`<userdata>/qa-voice/chord.fifo`, made with `mkfifo`). The
+  app's chord watcher reads it instead of the helper's stdout, so the recognizer, voice session, lease and capture are the real ones.
+  The harness writes the helper's own `m <mask> <seq>` lines. If the env asks for the FIFO and any check fails (outside the profile, a
+  symlink escape, not a FIFO) the watcher gets no source at all; it never falls back to the real keyboard helper.
+- **Microphone.** One WAV per utterance (`open Notes`, `create a note called ...`, a question), made at run time with macOS `say`
+  (through a phrase file, never argv) and `afconvert`, 1 s of leading silence and 3 s of trailing silence, in `<userdata>/qa-voice/`.
+  Before each hold the harness swaps the file Chromium's fake microphone reads (ASSUMED: it reads the file when the capture stream
+  opens; the first spoken step proves it). `--va-relaunch-per-utterance` relaunches before each utterance instead.
+- **Desktop.** `METIS_QA_DESKTOP_SINK=1` makes the durable task bridge dispatch into a recording sink that audits
+  `qa.desktop_action.dispatched` (action id, outcome, args hash, never an argument). `create_note` is scripted `unknown` (the
+  uncertain path); everything else returns `verified` with a receipt bound to the dispatch.
+- **Brain.** The custom provider points at `scripts/qa/mock-llm-server.mjs`, started in-process with a throwaway certificate
+  (`openssl`), whose request log answers "how many requests carried the question" without printing it.
+
+```bash
+$ISO /bin/bash -c "cd $REPO && node scripts/qa/sandbox-acceptance/run-acceptance.mjs --scenario voice-actions --dry-run"
+$ISO /bin/bash -c "cd $REPO && node scripts/qa/sandbox-acceptance/run-acceptance.mjs --scenario voice-actions"
+# with the 10 minute idle-cost soak of the REAL chord helper (relaunches without the FIFO):
+$ISO /bin/bash -c "cd $REPO && node scripts/qa/sandbox-acceptance/run-acceptance.mjs --scenario voice-actions --va-idle-cost-minutes 10"
+```
+
+Flags: `--va-idle-seconds 60`, `--va-runs 3` (read-only runs for the release-to-done p50), `--va-idle-cost-minutes 0`,
+`--va-relaunch-per-utterance`. The report is withheld, and the run fails, if it contains any spoken word.
+
+| Step | PASS only on this evidence |
+|---|---|
+| `va-audio-prepared` | one valid 16 kHz WAV per utterance (sha256, duration), reported by id only |
+| `va-default-on` | `voiceActions.enabled` is null or true (follows the build default), effective `enabled` true, `wakeWord` false, the Speech switch "Use voice actions" is checked, and no `getUserMedia` call and no lease or voice-turn audit before any hold |
+| `va-idle-no-mic` | idle window with zero `getUserMedia`, no lease or turn audit, and a `qa.chord_fifo` open audit (the watcher source is the FIFO) |
+| `va-short-hold-ignored` | a 120 ms hold: no `[data-voice-state]` element, no card, no lease |
+| `va-read-only-immediate` | `open Notes`: pill sequence exactly `listening > thinking > executing > done`, no card, one `desktop.open_notes` in the sink, the task store changed; release-to-done p50 recorded against the assumed 1.5 s warm budget |
+| `va-confirm-escape` | an `alertdialog` titled "Create a note in Notes" with the spoken title as its argument, focus on "Create"; Escape removes it, the pill reads the cancelled copy, the sink stays at 0, `command.revoked reason=cancelled` is audited. NOT_SUPPORTED if the build proposes but mounts no card |
+| `va-return-guard` | Return about 100 ms after mount leaves the card up and the sink at 0 |
+| `va-confirm-return-uncertain` | Return after 500 ms: one `desktop.create_note`, one `task.effect_uncertain`, the uncertain pill copy; after a relaunch recovery reports one uncertain task and the sink count stays 1 |
+| `va-uncertain-reader-details` | NOT_SUPPORTED: the right-edge Reader details list takes no voice outcome in this build |
+| `va-question` | the mock LLM got exactly one request carrying the question, the answer view shows the mock answer, no sink dispatch |
+| `va-meeting-arbitration` | with a meeting live, a hold gets the refused-during-a-meeting pill, no lease or turn start, no capture disturbance audit, and the autosave draft keeps growing |
+| `va-renderer-reset-revokes` | a reload mid-listening: the lease is revoked with reason renderer-reset, the turn is cancelled, no proposal, no sink dispatch |
+| `va-toggle-off-instant` | the Settings switch off closes the FIFO source within 1 s, a hold shows no pill; on again reopens it |
+| `va-reduced-motion` | with `prefers-reduced-motion: reduce` emulated, every pill animation is zero length except the liveness pulse |
+| `va-idle-cost` | NOT_SUPPORTED unless `--va-idle-cost-minutes` is set; then the REAL chord helper's mean one-core CPU is at most 0.1 percent (the soak also reports it as `helperCpu`) |
+| `va-no-utterance-at-rest` | after the app quit, a case-insensitive scan of the profile, sandbox home and TMPDIR finds none of the spoken marker words, and the operator queue holds only allowlisted `voice_action` keys |
+
+Owner-run `LIVE_VERIFIED` items that this cannot do without touching the real session stay on the owner checklist: the physical
+chord in another app, a real Notes note, the Photo Booth Accessibility flow, VoiceOver, AltGr on real hardware, focus restore.
+
 ## Upgrade scenario (`--scenario upgrade`, C29)
 
 Opt-in. Needs `--previous-zip` and `--candidate-zip` (both `Metis-QA-*.zip`, QA identity) and optionally `--candidate-version` (default

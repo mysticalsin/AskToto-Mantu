@@ -43,6 +43,16 @@ function runPs(pids) {
 }
 
 /**
+ * The global hold-chord helper (macOS `metis-mac-helper watch-modifiers`, the Windows `metis-keywatch.exe`). It is the one
+ * process voice actions keeps alive while idle, so the voice-actions acceptance judges its CPU on its own (va-idle-cost).
+ * A sampler-only kind: census classification (classifyProcess) is left as it is.
+ */
+export function isChordHelperCommand(command) {
+  const text = String(command ?? '')
+  return /metis-mac-helper(\.exe)?\s+watch-modifiers(\s|$)/.test(text) || /metis-keywatch(\.exe)?(\s|$)/.test(text)
+}
+
+/**
  * One sample of the owned process tree. `mainAlive` is false when the main pid is no longer in the process table.
  * @param {{ mainPid: number, installRoot: string, platform?: string, table?: unknown[], ps?: (pids: number[]) => string,
  *   footprint?: boolean, nowMs?: number }} args
@@ -68,7 +78,12 @@ export function sampleTree({
     return {
       pid: entry.pid,
       startedMs: entry.startedMs,
-      kind: entry.pid === mainPid ? 'main' : classifyProcess({ ...entry, commandLine: row?.command ?? '' }),
+      kind:
+        entry.pid === mainPid
+          ? 'main'
+          : isChordHelperCommand(row?.command)
+            ? 'chord-helper'
+            : classifyProcess({ ...entry, commandLine: row?.command ?? '' }),
       rssBytes: row?.rssBytes ?? null,
       cpuSeconds: row?.cpuSeconds ?? null,
       ...(footprints ? { physFootprintBytes: footprints.get(entry.pid) ?? null } : {})

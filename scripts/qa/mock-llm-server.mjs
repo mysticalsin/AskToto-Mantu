@@ -29,13 +29,13 @@
 import http from 'node:http'
 import https from 'node:https'
 import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
 
-const PORT = Number(process.argv[2] || 8788)
 // The app's `custom` provider requires an https:// endpoint (ipc.ts customBaseUrl refine), so serve TLS
 // when a throwaway cert is supplied via env (MOCK_TLS_CERT / MOCK_TLS_KEY point at temp PEM files — never
 // committed). Launch the app under test with NODE_TLS_REJECT_UNAUTHORIZED=0 so undici accepts the self-
 // signed cert. Falls back to plain http when no cert is given.
-const TLS =
+const cliTls = () =>
   process.env.MOCK_TLS_CERT && process.env.MOCK_TLS_KEY
     ? { cert: readFileSync(process.env.MOCK_TLS_CERT), key: readFileSync(process.env.MOCK_TLS_KEY) }
     : null
@@ -65,11 +65,31 @@ function errorJson(res, status, message, headers = {}) {
   res.end(body)
 }
 
-const handler = (req, res) => {
+/**
+ * What the server received, for an in-process caller (the voice-actions acceptance): paths and lower-cased bodies, kept in
+ * memory only. `count(needle)` answers "how many requests carried this text" without the caller ever printing the text.
+ */
+function createRequestLog() {
+  const entries = []
+  return {
+    entries,
+    record: (path, body) => entries.push({ path, body: body.toLowerCase() }),
+    /** Requests whose body carries every needle (one string or a list). */
+    count: (needles) =>
+      entries.filter((entry) => [].concat(needles).every((needle) => entry.body.includes(String(needle).toLowerCase())))
+        .length,
+    total: () => entries.length,
+    clear: () => (entries.length = 0)
+  }
+}
+
+const makeHandler = (log) => (req, res) => {
   const url = req.url || ''
   // Drain the request body (the app POSTs a chat payload) before responding.
-  req.on('data', () => {})
+  const chunks = []
+  req.on('data', (chunk) => chunks.push(chunk))
   req.on('end', () => {
+    log.record(url, Buffer.concat(chunks).toString('utf8'))
     if (url.includes('/rate-limit/')) {
       return errorJson(res, 429, 'Rate limit reached for requests. Please try again in 2s.', { 'retry-after': '2' })
     }
@@ -99,7 +119,11 @@ const handler = (req, res) => {
     if (url.includes('/gateway-cred/')) {
       // The OPERATOR's Cloudflare token is bad. The Worker deliberately maps its own 401/403 to 502 so
       // the app never tells the user to re-enter a proxy key that is perfectly fine.
-      return errorJson(res, 502, '[metis-proxy-config] Cloudflare rejected this proxy account credential. The operator needs to check CLOUDFLARE_API_TOKEN and CF_ACCOUNT_ID.')
+      return errorJson(
+        res,
+        502,
+        '[metis-proxy-config] Cloudflare rejected this proxy account credential. The operator needs to check CLOUDFLARE_API_TOKEN and CF_ACCOUNT_ID.'
+      )
     }
     if (url.includes('/badbody/')) {
       // 200, but JSON instead of SSE — a misconfigured proxy that answers without streaming.
@@ -121,5 +145,16 @@ const handler = (req, res) => {
   })
 }
 
-const server = TLS ? https.createServer(TLS, handler) : http.createServer(handler)
-server.listen(PORT, '127.0.0.1', () => console.log(`listening ${TLS ? 'https' : 'http'} ${PORT}`))
+/** An unstarted mock server (https when `tls` carries a cert and key) plus its request log. The caller listens. */
+export function createMockLlmServer({ tls = null } = {}) {
+  const log = createRequestLog()
+  const handler = makeHandler(log)
+  return { server: tls ? https.createServer(tls, handler) : http.createServer(handler), log }
+}
+
+if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
+  const PORT = Number(process.argv[2] || 8788)
+  const TLS = cliTls()
+  const { server } = createMockLlmServer({ tls: TLS })
+  server.listen(PORT, '127.0.0.1', () => console.log(`listening ${TLS ? 'https' : 'http'} ${PORT}`))
+}

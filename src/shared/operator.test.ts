@@ -269,6 +269,66 @@ describe('projectOperatorIngestMetadata', () => {
     })
   })
 
+  describe('voice_action (V08): the only fields are the allowlisted metadata', () => {
+    const record = {
+      event: 'voice_action',
+      id: 'va-123',
+      ts: 456,
+      source: 'hold',
+      actionId: 'desktop.create_note',
+      class: 'create',
+      outcome: 'done',
+      latencyBucket: 'under_1s'
+    }
+
+    it('keeps exactly id, ts, source, actionId, class, outcome and latencyBucket', () => {
+      expect(projectOperatorIngestMetadata(record)).toEqual(record)
+    })
+
+    it('drops every content-bearing field: transcript, title, query, app name, arguments, hash and nested objects', () => {
+      const projected = projectOperatorIngestMetadata({
+        ...record,
+        transcript: 'create a note called groceries',
+        text: 'groceries',
+        title: 'Groceries',
+        query: 'capital of France',
+        appName: 'Notes',
+        args: { title: 'Groceries' },
+        argsHash: 'a'.repeat(64),
+        preview: { title: 'Create a note in Notes', argument: 'Groceries' },
+        error: 'could not open https://private.example/customer'
+      })
+      expect(projected).toEqual(record)
+      expect(JSON.stringify(projected)).not.toMatch(/groceries|france|private|Notes/i)
+    })
+
+    it('drops a field whose value is outside its closed set, and never lets free text stand in for an action id', () => {
+      const projected = projectOperatorIngestMetadata({
+        ...record,
+        source: 'create a note called groceries',
+        class: 'groceries',
+        outcome: 'Opened Notes',
+        latencyBucket: '1234ms',
+        actionId: 'create a note called groceries'
+      })
+      expect(projected).toEqual({ event: 'voice_action', id: 'va-123', ts: 456 })
+    })
+
+    it('accepts only catalog and application action ids', () => {
+      for (const actionId of ['desktop.open_notes', 'desktop.google_search', 'apps.open', 'apps.focus', 'apps.quit']) {
+        expect(projectOperatorIngestMetadata({ ...record, actionId })).toMatchObject({ actionId })
+      }
+      expect(projectOperatorIngestMetadata({ ...record, actionId: 'groceries' })).not.toHaveProperty('actionId')
+    })
+
+    it('needs a safe id, and a record with no event type is still an Ask, never a voice action', () => {
+      expect(projectOperatorIngestMetadata({ ...record, id: 'not safe because of spaces' })).toBeNull()
+      expect(
+        projectOperatorIngestMetadata({ id: 'a-1', source: 'hold', actionId: 'desktop.open_notes' })
+      ).not.toHaveProperty('actionId')
+    })
+  })
+
   it('drops developer-efficiency metrics from every event payload', () => {
     const devMetrics = {
       graphTokens: 1200,

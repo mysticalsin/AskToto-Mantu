@@ -1,8 +1,8 @@
 /**
- * The packaged half of the QA-only hooks — the fatal fault hook (src/main/qa-identity.ts) and the file-fed capture
- * source (src/main/qa-capture-source.ts): prove the compiled bytes match the package's declared identity, in both
- * directions. A shipping package must never carry either hook, and the QA-identity package must always carry both —
- * otherwise scripts/qa/fault-fatal-relaunch.mjs and the QA capture run cannot drive them.
+ * The packaged half of the QA-only hooks — the fatal fault hook (src/main/qa-identity.ts), the file-fed capture
+ * source (src/main/qa-capture-source.ts) and the voice-actions chord FIFO and desktop sink
+ * (src/main/qa-voice-hooks.ts): prove the compiled bytes match the package's declared identity, in both directions. A shipping package must never carry any of them, and the QA-identity package must always carry all of them —
+ * otherwise scripts/qa/fault-fatal-relaunch.mjs, the QA capture run and the voice-actions acceptance cannot drive them.
  */
 import { closeSync, openSync, readSync, statSync } from 'node:fs'
 import { getRawHeader, listPackage, uncache } from '@electron/asar'
@@ -11,10 +11,16 @@ import { getRawHeader, listPackage, uncache } from '@electron/asar'
 export const QA_FAULT_MARKER = 'METIS_QA_FAULT_HOOK'
 /** The env name only the QA capture hook (src/main/qa-capture-source.ts QA_CAPTURE_ENV) puts into a main-process bundle. */
 export const QA_CAPTURE_MARKER = 'METIS_QA_CAPTURE_FILE'
+/** The env name only the QA chord FIFO source (src/main/qa-voice-hooks.ts QA_CHORD_FIFO_ENV) puts into a main-process bundle. */
+export const QA_CHORD_MARKER = 'METIS_QA_CHORD_FIFO'
+/** The env name only the QA recording desktop sink (src/main/qa-voice-hooks.ts QA_DESKTOP_SINK_ENV) puts into a main-process bundle. */
+export const QA_DESKTOP_SINK_MARKER = 'METIS_QA_DESKTOP_SINK'
 /** Every QA-only hook whose presence must match the package identity, checked in this order. */
 const QA_HOOK_MARKERS = [
   { marker: QA_FAULT_MARKER, hook: 'QA fault hook' },
-  { marker: QA_CAPTURE_MARKER, hook: 'QA capture hook' }
+  { marker: QA_CAPTURE_MARKER, hook: 'QA capture hook' },
+  { marker: QA_CHORD_MARKER, hook: 'QA chord FIFO hook' },
+  { marker: QA_DESKTOP_SINK_MARKER, hook: 'QA desktop sink hook' }
 ]
 /** The packaged package.json name of the QA-identity variant (build/qa-identity.electron-builder.yml extraMetadata). */
 export const QA_IDENTITY_PACKAGE_NAME = 'asktoto-qa'
@@ -37,7 +43,9 @@ export function assertQaFaultHookMatchesIdentity(archive) {
     const packedFilesByPosix = new Map(listPackedFiles(header).map((entry) => [entry.path, entry.file]))
     const packageJson = packedFilesByPosix.get('/package.json')
     if (!packageJson) throw new Error('app.asar has no package.json — the packaged app identity is missing')
-    const qaIdentity = JSON.parse(readPackedFile(archive, headerSize, packageJson, 'package.json').toString('utf8')).name === QA_IDENTITY_PACKAGE_NAME
+    const qaIdentity =
+      JSON.parse(readPackedFile(archive, headerSize, packageJson, 'package.json').toString('utf8')).name ===
+      QA_IDENTITY_PACKAGE_NAME
     const mainBundles = [...rawByPosix.keys()]
       .filter((entry) => /^\/out\/main\/.+\.(?:c?js|jsc)$/.test(entry))
       .map((entry) => readPackedFile(archive, headerSize, packedFilesByPosix.get(entry), rawByPosix.get(entry)))

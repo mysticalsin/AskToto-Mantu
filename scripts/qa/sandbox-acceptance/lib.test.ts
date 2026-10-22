@@ -130,6 +130,42 @@ describe('child environment', () => {
     ).toBe(layout.captureWav)
   })
 
+  it('passes a closed list of extra QA variables (the voice-actions hooks) and nothing else, never from the parent', () => {
+    const fifo = join(layout.userData, 'qa-voice', 'chord.fifo')
+    const env = buildChildEnv({
+      parentEnv: { METIS_QA_CHORD_FIFO: '/real/fifo', METIS_QA_DESKTOP_SINK: '1' },
+      layout,
+      platform: 'darwin',
+      extraEnv: { METIS_QA_CHORD_FIFO: fifo, METIS_QA_DESKTOP_SINK: '1', NODE_TLS_REJECT_UNAUTHORIZED: '0' }
+    })
+    expect(env).toMatchObject({
+      METIS_QA_CHORD_FIFO: fifo,
+      METIS_QA_DESKTOP_SINK: '1',
+      NODE_TLS_REJECT_UNAUTHORIZED: '0'
+    })
+    // Without extraEnv the parent's copies are not inherited.
+    const bare = buildChildEnv({
+      parentEnv: { METIS_QA_CHORD_FIFO: '/real/fifo', METIS_QA_DESKTOP_SINK: '1' },
+      layout,
+      platform: 'darwin'
+    })
+    expect(bare).not.toHaveProperty('METIS_QA_CHORD_FIFO')
+    expect(bare).not.toHaveProperty('METIS_QA_DESKTOP_SINK')
+    expect(() =>
+      buildChildEnv({ parentEnv: {}, layout, platform: 'darwin', extraEnv: { OPENAI_API_KEY: 'x' } })
+    ).toThrow(/not an allowed extra/)
+    expect(() => buildChildEnv({ parentEnv: {}, layout, platform: 'darwin', extraEnv: { HOME: '/real' } })).toThrow(
+      /not an allowed extra/
+    )
+  })
+
+  it('refuses a chord FIFO outside the profile', () => {
+    for (const bad of ['/real/home/chord.fifo', join(layout.userData, '..', 'chord.fifo'), 'chord.fifo'])
+      expect(() =>
+        buildChildEnv({ parentEnv: {}, layout, platform: 'darwin', extraEnv: { METIS_QA_CHORD_FIFO: bad } })
+      ).toThrow(/inside the profile/)
+  })
+
   it('names the executable after the bundle, as electron-builder does', () => {
     expect(executableForApp(join('/s', 'Applications', 'Metis QA.app'))).toBe(
       join('/s', 'Applications', 'Metis QA.app', 'Contents', 'MacOS', 'Metis QA')
