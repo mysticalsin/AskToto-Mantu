@@ -34,7 +34,7 @@ is the contract the `egressAllowlist` policy enforces. Update it in the same cha
 | Custom OpenAI-compatible endpoint | `customBaseUrl` (IT or user) | Provider = Custom | Lock `customBaseUrl` |
 | Cloudflare AI proxy (default zero-key path) | `metis-cloudflare-proxy.tony-walteur.workers.dev` | Provider = Cloudflare | `allowedProviders` |
 | Cloudflare key restore | `api.cloudflare.com` | Restoring the shipped key | Only on that button |
-| Operator fleet dashboard | `operatorUrl` (IT or user) | Heartbeat 60 s, after each Ask | Clear `operatorUrl` |
+| Operator fleet dashboard | `operatorUrl` (IT or user; empty = the shipped Operator) | Enrolment (`/v1/enroll`) until enrolled, then heartbeat 60 s and usage metadata after each Ask. Metadata only, never meeting content | Machine-wide admin policy `operatorReporting: false` (the per-user managed-config is ignored for this key) |
 | License server | `licenseServerUrl` (IT) | Activation, heartbeat | Compiled off in shipped builds (MQA-068) |
 | Auto-update check | `api.github.com`, `github.com`, `objects.githubusercontent.com` | Launch, then periodic | `updateFeedUrl` (private feed) or `disableAutoUpdate: true` |
 | On-device model weights | `huggingface.co` (and its CDN redirect targets) | First enable of Local AI / Best transcription | Do not enable Local AI; or pre-seed the model folder |
