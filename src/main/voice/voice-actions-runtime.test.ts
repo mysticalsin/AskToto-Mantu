@@ -315,38 +315,9 @@ describe('speech helper handling', () => {
   })
 })
 
-describe('renderer IPC', () => {
-  function ipc() {
-    const h = setup()
-    const handlers = new Map<string, (event: unknown, payload?: unknown) => unknown>()
-    const assertMainWindow = vi.fn((event: unknown) => {
-      if ((event as { trusted?: boolean }).trusted !== true) throw new Error('untrusted sender')
-    })
-    h.runtime.registerIpc(
-      {
-        handle: (channel: string, fn: (event: unknown, payload?: unknown) => unknown) => void handlers.set(channel, fn)
-      } as never,
-      assertMainWindow as never
-    )
-    const call = (channel: string, payload?: unknown, trusted = true) => handlers.get(channel)?.({ trusted }, payload)
-    return { h, handlers, call, assertMainWindow }
-  }
-
-  it('registers exactly getState and report, both behind the main-window sender check', () => {
-    const { handlers, call } = ipc()
-    expect([...handlers.keys()].sort()).toEqual([VOICE_ACTIONS_IPC.getState, VOICE_ACTIONS_IPC.report].sort())
-    expect(() => call(VOICE_ACTIONS_IPC.getState, undefined, false)).toThrow('untrusted sender')
-    expect(() => call(VOICE_ACTIONS_IPC.report, { turnId: 'x', phase: 'capturing' }, false)).toThrow('untrusted sender')
-  })
-
-  it('getState returns the current snapshot', () => {
-    const { h, call } = ipc()
-    h.runtime.refresh()
-    expect(call(VOICE_ACTIONS_IPC.getState)).toEqual(h.runtime.snapshot())
-  })
-
+describe('renderer reports and state pushes', () => {
   it('report applies a valid failure to the current turn and ignores malformed payloads', () => {
-    const { h, call } = ipc()
+    const h = setup()
     h.runtime.refresh()
     h.emit('armed')
     const turnId = (h.sent.find((s) => s.channel === VOICE_ACTIONS_IPC.begin)?.payload as { turnId: string }).turnId
@@ -358,12 +329,10 @@ describe('renderer IPC', () => {
       { turnId, phase: 'failed', reason: 'meeting_started' },
       { turnId, phase: 'capturing', extra: 1 }
     ]) {
-      expect(call(VOICE_ACTIONS_IPC.report, bad)).toEqual({ ok: false })
+      expect(h.runtime.report(bad)).toEqual({ ok: false })
     }
     expect(h.runtime.snapshot().state).toBe('listening')
-    expect(call(VOICE_ACTIONS_IPC.report, { turnId, phase: 'failed', reason: 'microphone_unavailable' })).toEqual({
-      ok: true
-    })
+    expect(h.runtime.report({ turnId, phase: 'failed', reason: 'microphone_unavailable' })).toEqual({ ok: true })
     expect(h.runtime.snapshot()).toMatchObject({ state: 'failed', reason: 'microphone_unavailable' })
   })
 

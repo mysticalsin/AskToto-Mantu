@@ -1,0 +1,52 @@
+import { describe, expect, it, vi } from 'vitest'
+import { VOICE_ACTIONS_IPC } from '@shared/voice/voice-turn'
+import { registerVoiceActionsIpc } from './voice-actions-ipc'
+
+function setup() {
+  const handlers = new Map<string, (event: unknown, payload?: unknown) => unknown>()
+  const assertMainWindow = vi.fn((event: unknown) => {
+    if ((event as { trusted?: boolean }).trusted !== true) throw new Error('untrusted sender')
+  })
+  const runtime = {
+    snapshot: vi.fn(() => ({
+      revision: 3,
+      state: 'idle' as const,
+      turnId: null,
+      reason: null,
+      message: null,
+      enabled: true,
+      shortcut: 'running' as const
+    })),
+    report: vi.fn(() => ({ ok: true }))
+  }
+  registerVoiceActionsIpc(
+    {
+      handle: (channel: string, fn: (event: unknown, payload?: unknown) => unknown) => void handlers.set(channel, fn)
+    } as never,
+    assertMainWindow as never,
+    runtime
+  )
+  const call = (channel: string, payload?: unknown, trusted = true) => handlers.get(channel)?.({ trusted }, payload)
+  return { handlers, call, runtime }
+}
+
+describe('voice actions IPC', () => {
+  it('registers exactly getState and report', () => {
+    expect([...setup().handlers.keys()].sort()).toEqual([VOICE_ACTIONS_IPC.getState, VOICE_ACTIONS_IPC.report].sort())
+  })
+
+  it('both handlers refuse a sender that is not the main window, before touching the runtime', () => {
+    const { call, runtime } = setup()
+    expect(() => call(VOICE_ACTIONS_IPC.getState, undefined, false)).toThrow('untrusted sender')
+    expect(() => call(VOICE_ACTIONS_IPC.report, { turnId: 'x', phase: 'capturing' }, false)).toThrow('untrusted sender')
+    expect(runtime.snapshot).not.toHaveBeenCalled()
+    expect(runtime.report).not.toHaveBeenCalled()
+  })
+
+  it('getState returns the snapshot and report forwards the raw payload for the runtime to validate', () => {
+    const { call, runtime } = setup()
+    expect(call(VOICE_ACTIONS_IPC.getState)).toMatchObject({ revision: 3, state: 'idle' })
+    expect(call(VOICE_ACTIONS_IPC.report, { turnId: 't1', phase: 'capturing' })).toEqual({ ok: true })
+    expect(runtime.report).toHaveBeenCalledWith({ turnId: 't1', phase: 'capturing' })
+  })
+})

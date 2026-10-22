@@ -7,7 +7,6 @@
  * renderer which turn to capture; the renderer then goes through the ordinary lease path with its own purpose.
  */
 import { randomUUID } from 'node:crypto'
-import type { IpcMain, IpcMainInvokeEvent } from 'electron'
 import type { CommandMicAvailabilityResult, CommandSpeechResult } from '@shared/command-speech'
 import { assertCloudOnlyAllowsEngine, resolveEnterpriseLiveProfile } from '@shared/enterprise-live-profile'
 import type { InputSessionLease, InputSessionStopReason } from '@shared/input-session'
@@ -68,7 +67,8 @@ export interface VoiceActionsRuntime {
   onSpeechFinished(sessionId: string, result: CommandSpeechResult): void
   onRendererReset(): void
   bindWebContents(contents: RendererContentsLike): void
-  registerIpc(ipcMain: Pick<IpcMain, 'handle'>, assertMainWindow: (event: IpcMainInvokeEvent) => void): void
+  /** A renderer report (validated here). Applies only to the current turn and only toward failure. */
+  report(raw: unknown): { ok: boolean }
   dispose(): void
 }
 
@@ -157,18 +157,11 @@ export function createVoiceActionsRuntime(deps: VoiceActionsRuntimeDeps): VoiceA
         }
       )
     },
-    registerIpc(ipcMain, assertMainWindow) {
-      ipcMain.handle(VOICE_ACTIONS_IPC.getState, (event) => {
-        assertMainWindow(event)
-        return session.snapshot()
-      })
-      ipcMain.handle(VOICE_ACTIONS_IPC.report, (event, raw: unknown) => {
-        assertMainWindow(event)
-        const parsed = VoiceReportSchema.safeParse(raw)
-        if (!parsed.success) return { ok: false as const }
-        session.report(parsed.data)
-        return { ok: true as const }
-      })
+    report(raw) {
+      const parsed = VoiceReportSchema.safeParse(raw)
+      if (!parsed.success) return { ok: false }
+      session.report(parsed.data)
+      return { ok: true }
     },
     dispose: () => session.dispose()
   }

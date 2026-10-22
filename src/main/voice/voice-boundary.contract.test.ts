@@ -19,9 +19,14 @@ describe('voice actions boundary: the activation is main-only and the meeting pi
   it('mintFromHardware is called only by the voice runtime, never from an IPC handler or the preload', () => {
     const callers = productionSources(mainDir)
       .filter(({ text }) => text.includes('mintFromHardware'))
-      .map(({ file }) => file.slice(mainDir.length + 1).replace(/\\/g, '/'))
+      .map(({ file }) =>
+        file
+          .slice(mainDir.length + 1)
+          .replace(/\\/g, '/')
+          .replace(/\.ts$/, '')
+      )
       .sort()
-    expect(callers).toEqual(['command-mic-activation-authority.ts', 'voice/voice-actions-runtime.ts'])
+    expect(callers).toEqual(['command-mic-activation-authority', 'voice/voice-actions-runtime'])
     for (const spec of [
       '../ipc/input-capture-ipc',
       '../input-session-ipc',
@@ -58,7 +63,7 @@ describe('voice actions boundary: the activation is main-only and the meeting pi
     expect(index).toMatch(/onHardStop: \(reason\) => voiceActions\?\.onHardStop\(reason\)/)
     expect(index).toMatch(/onMeetingReserved: \(\) => voiceActions\?\.onMeetingReserved\(\)/)
     expect(index).toMatch(/onFinished: \(sessionId, result\) => voiceActions\?\.onSpeechFinished\(sessionId, result\)/)
-    expect(index).toContain('voiceActions?.registerIpc(ipcMain, assertMainWindow)')
+    expect(index).toContain('registerVoiceActionsIpc(ipcMain, assertMainWindow, voiceActions)')
     expect(index).toContain('voiceActions?.bindWebContents(win.webContents)')
     expect(index).toContain('voiceActions?.dispose()')
     expect(index).toMatch(/activation: commandMicActivationAuthority/)

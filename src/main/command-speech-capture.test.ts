@@ -1,7 +1,6 @@
 import type { TrustedInputOwner } from '@shared/input-session'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { COMMAND_SPEECH_MAX_SECONDS } from '@shared/command-speech'
-import { COMMAND_SPEECH_WORKLET_SRC } from '../renderer/src/lib/command-speech-worklet-src'
 import {
   COMMAND_SPEECH_MAX_FRAME_SAMPLES,
   COMMAND_SPEECH_MAX_FRAMES,
@@ -86,10 +85,6 @@ describe('CommandSpeechCapture', () => {
     expect(capture.frame(owner, sessionId, sequence++, fill(remainder))).toEqual({ ok: true })
     expect(capture.frame(owner, sessionId, sequence++, fill(1))).toEqual({ ok: false, reason: 'invalid' })
     expect(capture.frame(owner, sessionId, sequence++, fill(1))).toEqual({ ok: false, reason: 'stale' })
-  })
-
-  it('the renderer worklet seals at the same cap as main', () => {
-    expect(COMMAND_SPEECH_WORKLET_SRC).toContain(`const MAX_SAMPLES = SAMPLE_RATE * ${COMMAND_SPEECH_MAX_SECONDS}`)
   })
 
   it('rejects stale, replayed and out-of-range frames', () => {

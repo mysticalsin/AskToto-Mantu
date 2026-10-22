@@ -608,6 +608,7 @@ import { registerQuitIpc } from './ipc/quit-ipc'
 import { QA_IDENTITY_BUILD, installQaFaultHook } from './qa-hooks'
 import { createCommandMicAvailability, createVoiceActionsRuntime } from './voice/voice-actions-runtime'
 import { createCommandMicLeaseTimer } from './command-mic-lease-timer'
+import { registerVoiceActionsIpc } from './ipc/voice-actions-ipc'
 import { installQaCaptureSource } from './qa-capture-source'
 import { resetDustConversation, prewarmDustConversation, isDustAuthError } from './llm/dust'
 import { getScreenSourcesWithRetry, isUsableScreenSource, screenCaptureUnavailableMessage } from './screen-capture'
@@ -8964,7 +8965,7 @@ function registerIpc(): void {
       commandSpeechCancel: CommandSpeechCancelSchema
     }
   })
-  voiceActions?.registerIpc(ipcMain, assertMainWindow)
+  if (voiceActions) registerVoiceActionsIpc(ipcMain, assertMainWindow, voiceActions)
   registerMeetingMicIpc({
     ipcMain,
     assertMainWindow,
