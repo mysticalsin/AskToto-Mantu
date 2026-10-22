@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
@@ -21,7 +21,7 @@ vi.mock('electron')
 // the real modules while making the few filesystem probes in the lease hot-path test spyable on every OS.
 vi.mock('node:fs', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs')>()
-  return { ...actual, readFileSync: vi.fn(actual.readFileSync) }
+  return { ...actual, readFileSync: vi.fn(actual.readFileSync), renameSync: vi.fn(actual.renameSync) }
 })
 vi.mock('node:fs/promises', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs/promises')>()
@@ -1213,5 +1213,145 @@ describe('speech auth lease (auth module authority)', () => {
     const recovered = await auth.refreshSpeechAuthLease()
     expect(recovered).not.toBeNull()
     expect(auth.isSpeechAuthLeaseCurrent(fresh)).toBe(false) // idle expiry retires the old owner before recovery
+  })
+
+  describe('Q11 — session file hygiene', () => {
+    const OTHER_TENANT_GUID = '00000000-0000-4000-8000-000000000001'
+    const DAY_MS = 24 * 60 * 60 * 1000
+
+    /** Drives the real signIn() with a synthetic MSAL result for the given tenant id. */
+    async function stubInteractiveSignIn(tid: string): Promise<typeof import('@azure/msal-node')> {
+      let callbackUrl = ''
+      let state = ''
+      const msal = createRequire(import.meta.url)('@azure/msal-node') as typeof import('@azure/msal-node')
+      vi.spyOn(msal.CryptoProvider.prototype, 'generatePkceCodes').mockResolvedValue({
+        verifier: 'verifier',
+        challenge: 'challenge'
+      })
+      vi.spyOn(msal.PublicClientApplication.prototype, 'getAuthCodeUrl').mockImplementation(async (options) => {
+        callbackUrl = options.redirectUri || ''
+        state = options.state || ''
+        return 'https://login.example.test/authorize'
+      })
+      vi.spyOn(msal.PublicClientApplication.prototype, 'acquireTokenByCode').mockResolvedValue({
+        account: { username: 'user@example.com', name: 'Fixture' },
+        idTokenClaims: { tid }
+      } as Awaited<ReturnType<typeof msal.PublicClientApplication.prototype.acquireTokenByCode>>)
+      const { shell } = await import('electron')
+      vi.spyOn(shell, 'openExternal').mockImplementation(async () => {
+        const response = await fetch(`${callbackUrl}/?code=auth-code&state=${state}`)
+        await response.text()
+      })
+      return msal
+    }
+
+    it('a session stamped in the future is evicted', async () => {
+      // D7-10: loadSession and authStatus used expiryReason, whose negative age passed the max-age check, so a
+      // session written while the clock ran ahead stayed valid until real time caught up plus seven days.
+      configureTenant()
+      await writeSessionFile(TENANT_GUID, 'user@example.com', Date.now() + 8 * DAY_MS)
+      const auth = await prepareAuth()
+      const logger = await import('./logger')
+      const audit = vi.spyOn(logger, 'auditLog').mockImplementation(() => {})
+
+      expect(auth.authStatus().signedIn).toBe(false)
+      expect(auth.requireAuth()).toBe(false)
+      expect(audit).toHaveBeenCalledWith('auth.expired', { reason: 'max_age' })
+      expect(existsSync(join(ud, 'auth-session.bin'))).toBe(false)
+    })
+
+    it('a session that is in the past but inside the window still loads', async () => {
+      configureTenant()
+      await writeSessionFile(TENANT_GUID, 'user@example.com', Date.now() - 2 * DAY_MS)
+      const auth = await prepareAuth()
+      expect(auth.authStatus().signedIn).toBe(true)
+    })
+
+    it('session is written via tmp+rename', async () => {
+      configureTenant()
+      const auth = await prepareAuth()
+      await stubInteractiveSignIn(TENANT_GUID)
+      const fs = await import('node:fs')
+      const rename = vi.mocked(fs.renameSync)
+      rename.mockClear()
+
+      expect((await auth.signIn()).ok).toBe(true)
+
+      const target = join(ud, 'auth-session.bin')
+      expect(rename).toHaveBeenCalledWith(`${target}.tmp`, target)
+      expect(readdirSync(ud).filter((name) => name.endsWith('.tmp'))).toEqual([])
+      expect(existsSync(target)).toBe(true)
+      auth.signOut()
+    })
+
+    it('the MSAL cache plugin writes through the same atomic helper, never in place', async () => {
+      const { readModuleSource } = await import('../test-helpers/module-source')
+      const { text } = readModuleSource(__dirname, './auth')
+      const plugin = text.slice(text.indexOf('function makeCachePlugin'), text.indexOf('function msal()'))
+      expect(plugin).toMatch(/afterCacheAccess/)
+      const after = plugin.slice(plugin.indexOf('afterCacheAccess'))
+      expect(after).toMatch(/writeSecretFileAtomically\(msalCachePath\(\), blob\)/)
+      expect(after).not.toMatch(/writeFileSync\(msalCachePath\(\)/)
+    })
+
+    it('a present session file that cannot be decoded is audited, never silently treated as signed out', async () => {
+      configureTenant()
+      writeFileSync(join(ud, 'auth-session.bin'), Buffer.from('not-an-encrypted-session-at-all-just-bytes'))
+      const auth = await prepareAuth()
+      const logger = await import('./logger')
+      const audit = vi.spyOn(logger, 'auditLog').mockImplementation(() => {})
+
+      expect(auth.authStatus().signedIn).toBe(false)
+
+      expect(audit).toHaveBeenCalledWith('auth.session_unreadable', expect.any(Object))
+      expect(JSON.stringify(audit.mock.calls)).not.toContain('not-an-encrypted')
+    })
+
+    it('a missing session file is the normal signed-out state and is not audited as unreadable', async () => {
+      configureTenant()
+      const auth = await prepareAuth()
+      const logger = await import('./logger')
+      const audit = vi.spyOn(logger, 'auditLog').mockImplementation(() => {})
+
+      expect(auth.authStatus().signedIn).toBe(false)
+
+      expect(audit.mock.calls.filter(([event]) => event === 'auth.session_unreadable')).toEqual([])
+    })
+
+    it('rejected sign-in keeps the cache file when removeAccount succeeds', async () => {
+      // D7-11: purgeRejected used to rmSync the whole shared MSAL cache even after removeAccount had
+      // already dropped just the rejected account, taking another account's calendar tokens with it.
+      configureTenant()
+      const auth = await prepareAuth()
+      const msal = await stubInteractiveSignIn(OTHER_TENANT_GUID)
+      const cache = join(ud, 'msal-cache.bin')
+      writeFileSync(cache, Buffer.from('synthetic-other-account-token-cache'))
+      const removeAccount = vi.fn(async () => undefined)
+      vi.spyOn(msal.PublicClientApplication.prototype, 'getTokenCache').mockReturnValue({ removeAccount } as never)
+
+      const result = await auth.signIn()
+
+      expect(result.ok).toBe(false)
+      expect(removeAccount).toHaveBeenCalledTimes(1)
+      expect(existsSync(cache)).toBe(true)
+    })
+
+    it('rejected sign-in removes the cache file only when removeAccount threw', async () => {
+      configureTenant()
+      const auth = await prepareAuth()
+      const msal = await stubInteractiveSignIn(OTHER_TENANT_GUID)
+      const cache = join(ud, 'msal-cache.bin')
+      writeFileSync(cache, Buffer.from('synthetic-token-cache'))
+      const removeAccount = vi.fn(async () => {
+        throw new Error('synthetic removeAccount failure')
+      })
+      vi.spyOn(msal.PublicClientApplication.prototype, 'getTokenCache').mockReturnValue({ removeAccount } as never)
+
+      const result = await auth.signIn()
+
+      expect(result.ok).toBe(false)
+      expect(removeAccount).toHaveBeenCalledTimes(1)
+      expect(existsSync(cache)).toBe(false)
+    })
   })
 })

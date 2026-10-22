@@ -1,6 +1,6 @@
 import { app, shell, safeStorage } from 'electron'
 import { createServer } from 'node:http'
-import { readFileSync, writeFileSync, existsSync, rmSync } from 'node:fs'
+import { readFileSync, writeFileSync, existsSync, renameSync, rmSync } from 'node:fs'
 import { randomBytes } from 'node:crypto'
 import { join } from 'node:path'
 import type { PublicClientApplication } from '@azure/msal-node'
@@ -21,7 +21,6 @@ import {
   MAX_SESSION_AGE_MS,
   coarseSignInFailure,
   createSignInBackoffController,
-  expiryReason,
   expiryReasonAt,
   tenantMatches,
   type AuthSession
@@ -178,6 +177,20 @@ function msalCachePath(): string {
   return join(app.getPath('userData'), 'msal-cache.bin')
 }
 
+/** Write a secret file via tmp+rename so a crash or full disk never leaves a truncated session or token
+ *  cache. `bestEffort` swallows the failure for the read-path migrations, which retry on the next launch. */
+function writeSecretFileAtomically(path: string, blob: Buffer, bestEffort = false): void {
+  const tmp = `${path}.tmp`
+  try {
+    writeFileSync(tmp, blob, { mode: 0o600 })
+    renameSync(tmp, path)
+  } catch (e) {
+    if (!bestEffort) throw e
+  } finally {
+    rmSync(tmp, { force: true }) // gone already after a successful rename
+  }
+}
+
 /**
  * An MSAL token cache persisted to disk, encrypted at rest (same discipline as saveSession + the
  * API-key vault). File backend is used in dev; safeStorage in prod. Migration: if the file was
@@ -211,13 +224,7 @@ function makeCachePlugin(): any {
             /* not a safeStorage blob either */
           }
           // If we read it via safeStorage while in file-backend mode, migrate now (best-effort)
-          if (json !== null && useFileBackend()) {
-            try {
-              writeFileSync(msalCachePath(), encryptSecret(json), { mode: 0o600 })
-            } catch {
-              /* best-effort */
-            }
-          }
+          if (json !== null && useFileBackend()) writeSecretFileAtomically(msalCachePath(), encryptSecret(json), true)
         }
         // Reverse migration (mirrors loadSession): the cache may have been written by a build that
         // FORCED the file keystore on a platform that no longer does. Without this the Graph token
@@ -244,7 +251,7 @@ function makeCachePlugin(): any {
           : safeStorage.isEncryptionAvailable()
             ? safeStorage.encryptString(json)
             : null
-        if (blob) writeFileSync(msalCachePath(), blob, { mode: 0o600 })
+        if (blob) writeSecretFileAtomically(msalCachePath(), blob)
       } catch {
         /* best-effort: token simply won't persist this run */
       }
@@ -462,7 +469,7 @@ async function revalidateSession(): Promise<void> {
   const owner = session
   const ownerEpoch = speechAuthSessionEpoch
   const ownerProfile = app.getPath('userData')
-  const reason = expiryReason(session, readConfig())
+  const reason = expiryReasonAt(session, readConfig(), Date.now())
   if (reason) {
     clearSession()
     auditLog('auth.expired', { reason })
@@ -544,13 +551,7 @@ function loadSession(): void {
         /* not a safeStorage blob */
       }
       // Migrate to file backend if we're now in file-backend mode (best-effort).
-      if (json !== null && useFileBackend()) {
-        try {
-          writeFileSync(sessionPath(), encryptSecret(json), { mode: 0o600 })
-        } catch {
-          /* best-effort */
-        }
-      }
+      if (json !== null && useFileBackend()) writeSecretFileAtomically(sessionPath(), encryptSecret(json), true)
     }
     // Reverse migration: this file may have been written by a build that FORCED the file keystore on a
     // platform that no longer does (Windows, once the forced local keystore became darwin-only). Without
@@ -562,22 +563,20 @@ function loadSession(): void {
       } catch {
         /* not AES-GCM either, or the file key is unrecoverable */
       }
-      if (json !== null && safeStorage.isEncryptionAvailable()) {
-        try {
-          writeFileSync(sessionPath(), safeStorage.encryptString(json), { mode: 0o600 })
-        } catch {
-          /* best-effort */
-        }
-      }
+      if (json !== null && safeStorage.isEncryptionAvailable())
+        writeSecretFileAtomically(sessionPath(), safeStorage.encryptString(json), true)
     }
-    session = json !== null ? (JSON.parse(json) as Session) : null
-  } catch {
+    if (json === null) throw new SyntaxError('undecodable session file')
+    session = JSON.parse(json) as Session
+  } catch (e) {
+    // Absent is the normal signed-out state; a PRESENT file that cannot be read is audited (class only).
+    if ((e as NodeJS.ErrnoException)?.code !== 'ENOENT') auditLog('auth.session_unreadable', {})
     session = null
   }
   // Treat the file as a CACHE: a session past the max local age is evicted on read (memory + disk),
   // forcing fresh interactive sign-in. (Config re-validation, domain and tenant, needs cfg and runs in
   // authStatus and the sweep.)
-  if (session && (typeof session.at !== 'number' || Date.now() - session.at > MAX_SESSION_AGE_MS)) {
+  if (session && expiryReasonAt(session, null, Date.now(), MAX_SESSION_AGE_MS) === 'max_age') {
     clearSession()
     auditLog('auth.expired', { reason: 'max_age' })
   }
@@ -609,7 +608,7 @@ function saveSession(s: Session): void {
       : safeStorage.isEncryptionAvailable()
         ? safeStorage.encryptString(json)
         : null
-    if (blob) writeFileSync(sessionPath(), blob, { mode: 0o600 })
+    if (blob) writeSecretFileAtomically(sessionPath(), blob)
   } catch (e) {
     // Session persisted to memory only — sign-in still works for this run, but will silently sign
     // the user out on next launch with no trace unless we log it. Never log session contents
@@ -629,7 +628,7 @@ export function authStatus(): AuthStatus {
   // stale session can't linger in auth-session.bin past the `loaded` latch. This also catches a session
   // that crosses the max-age boundary mid-run (loadSession only runs once).
   if (session) {
-    const reason = expiryReason(session, cfg)
+    const reason = expiryReasonAt(session, cfg, Date.now())
     if (reason) {
       clearSession()
       auditLog('auth.expired', { reason })
@@ -816,12 +815,12 @@ export async function signIn(): Promise<SignInResult> {
       try {
         if (result.account) await pca.getTokenCache().removeAccount(result.account)
       } catch {
-        /* fall through to the file wipe */
-      }
-      try {
-        if (existsSync(msalCachePath())) rmSync(msalCachePath())
-      } catch {
-        /* best-effort */
+        // The cache is shared with any signed-in account: wipe it only if removing this one account failed.
+        try {
+          rmSync(msalCachePath(), { force: true })
+        } catch {
+          /* best-effort */
+        }
       }
     }
 

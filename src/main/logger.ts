@@ -154,6 +154,7 @@ export type AuditEvent =
   | 'auth.signout'
   | 'auth.expired'
   | 'auth.refresh_failed'
+  | 'auth.session_unreadable'
   | 'auth.denied'
   | 'auth.state_mismatch'
   | 'auth.signin_failed'
