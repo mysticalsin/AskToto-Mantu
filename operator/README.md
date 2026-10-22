@@ -84,6 +84,7 @@ the owner's browser         --Access-> resolve identity (JWT or    --read/--   i
 | `POST /v1/ask` | Métis desktop | HMAC only. Not Access. SSE stream (`delta` / `done` / `error`). Same seat + vault rules as `/v1/use`. |
 | `GET /v1/skills/manifest` | Métis desktop | HMAC only. Not Access. Empty body, so the signed hash is `sha256Hex("")`. |
 | `GET /v1/integrations` | Métis desktop | HMAC only. Not Access. |
+| `POST /v1/enroll` | Métis desktop | Its own credential (Entra ID token, enrolment token or current licence) plus the HMAC headers. Not Access: add the Bypass rule. |
 | `GET /health` | Anyone | Open. Says whether secrets are bound, never what they are. |
 | `/assets/*` | Anyone | Open. Public console chrome (hashed JS/CSS, the world map SVG). Access must never wrap these. |
 
@@ -158,6 +159,11 @@ Every `POST` is method-checked, JSON-only, CSRF-checked, and returns `{ ok, ... 
 | `GET /v1/admin/licenses/issued`, `GET /v1/admin/licenses` | Issued and seat-facing license views. |
 | `POST /v1/admin/licenses` , `.../:id/(approve\|revoke)` | Seat approval and license revoke actions, audited. |
 
+| `GET /v1/admin/enroll-tokens` | Enrolment tokens (never the secret or its hash), enrolment settings, SSO configuration status (tenant last 4, counts only). Any admin. |
+| `POST /v1/admin/enroll-tokens` | Owner only. Body `{ label, channel: release\|qa\|staging, expiresInDays?, maxDevices?, dailyCap? }`. Returns the `METIS-ENR-1.<kid>.<secret>` token once. Tier and licence length are not inputs. |
+| `POST /v1/admin/enroll-tokens/:kid/revoke` | Owner only. Body `{ reason?, cascade? }`. `cascade: true` also revokes every licence the token minted. |
+| `POST /v1/admin/settings/enroll` | Owner only. Body `{ paused?, ssoTier?, ssoMaxDevicesPerUser? }`. `paused: true` stops all minting at once, with no deploy. |
+
 Groups, Tiers, Sessions, and Events have their own dedicated admin JSON routes per plan section
 9c; check `src/routes/registry.ts` for the exact, current set as those land, since this file is a
 snapshot and that module is the live source of truth.
@@ -172,6 +178,41 @@ snapshot and that module is the live source of truth.
 | `POST /v1/ask` | POST | HMAC SSE Ask. Portal-funded CF default `@cf/deepseek-ai/deepseek-v4-flash-0731`. Never returns the raw key. |
 | `GET /v1/skills/manifest` | GET | No body. Returns `{ ok, skills: [{ skillId, version, sha256, signed }] }`. |
 | `GET /v1/integrations` | GET | HMAC only. Not Access. Returns CRM/MCP connections the seat's tier/group is entitled to (credentials for approved/licensed seats); every fetch audited. Cloudflare Access must Bypass this path (same as heartbeat). |
+
+#### `POST /v1/enroll` (zero-config enrolment)
+
+A device with no licence asks for one. Body (at most 8 KiB, `content-type: application/json`) is
+`{ method: "sso" | "token" | "renew", idToken?, appVersion?, os? }`, with the usual `x-metis-ts`,
+`x-metis-nonce`, `x-metis-device` and `x-metis-sig` headers. The HMAC key is the credential the request
+presents, so the signature gives integrity, freshness and replay protection, not secrecy.
+
+| `method` | Credential | HMAC key | Mints |
+| --- | --- | --- | --- |
+| `sso` | body `idToken`, a Microsoft Entra v2 ID token | the `idToken` | 90-day licence, origin `sso-enroll`, tier = setting `enroll.sso_tier` (default `reporting`), member = the Worker-verified e-mail |
+| `token` | header `x-metis-enroll: METIS-ENR-1.<kid>.<secret>` | the token | licence of at most 30 days, origin `token-enroll`, tier `reporting` always; the seat is labelled "Unverified" in the console |
+| `renew` | header `x-metis-license` (the current licence) | the licence | same origin and tier as the presented licence, superseding it |
+
+An SSO enrolment that also presents the device's current licence header upgrades a token seat: the new
+licence supersedes the token one. A superseded licence is revoked only after the new one binds through a
+heartbeat, so a lost response never strands a device.
+
+Success: `{ ok: true, license, jti, last4, exp, origin: "sso" | "token", tier }`. The licence string is
+returned once and never stored (only its hash and last4). Failure: `{ ok: false, code, error, retryAfterMs? }`
+with `code` one of `enroll-paused`, `enroll-unconfigured`, `enroll-unavailable`, `sso-invalid`, `sso-tenant`,
+`sso-domain`, `sso-stale`, `sso-replay`, `token-invalid`, `token-revoked`, `token-expired`, `token-cap`,
+`seat-revoked`, `admin-licensed`, `rate`, `bad-request`, `too-large`, `signature`, `license-*`.
+
+SSO verification checks, server side only against the Worker's own allowlist, never anything the device says:
+RS256 signature from the tenant JWKS (cached 1 h, one throttled refetch for an unknown `kid`), `alg` exactly
+`RS256`, `iss`, `tid`, `aud`, `exp`, `nbf`, `iat` no older than 10 minutes, `oid` present, e-mail domain
+allowed, and the token's `uti` is single use. Per user, at most `enroll.sso_max_devices_per_user` (default 10)
+active SSO devices. A device an administrator approved, or one holding an administrator-issued licence, answers
+`admin-licensed` and is never downgraded; a revoked seat answers `seat-revoked` across reinstalls.
+
+Worker secrets (names only; none is in git): `ENROLL_SSO_TENANT_ID`, `ENROLL_SSO_CLIENT_IDS`
+(comma-separated), `ENROLL_SSO_ALLOWED_DOMAINS` (comma-separated). If any is missing, `method: "sso"` answers
+`enroll-unconfigured` (503) and the token path is unaffected. Optional binding `ENROLL_IP_LIMITER` (Workers Rate
+Limiting, keyed by client IP, never stored). Console: Settings, Enrolment.
 
 `GET /health` (open, no auth): `{ ok, service: "metis-operator", configured }` today.
 `configured` is true once both `OPERATOR_INGEST_SECRET` and `OPERATOR_PROMPT_KEY` are bound. A
@@ -244,6 +285,8 @@ Never put these in git, logs, PR bodies, or `wrangler.jsonc`.
 | `OPERATOR_VAULT_KEY` | 32-byte AES-GCM key, base64. Encrypts LLM API keys and the Cloudflare account token in D1. Separate from `OPERATOR_PROMPT_KEY`. |
 | `ADMIN_EMAILS` | Comma-separated allowlist for the owner's two Access emails. Missing or empty fails every admin check closed. |
 | `POLICY_AUD` | The Access application's audience tag, once the owner creates the Zero Trust app. |
+| `OWNER_EMAILS` | Comma-separated owners, a subset of `ADMIN_EMAILS`. Needed to create or revoke enrolment tokens, change enrolment settings, or change the fleet model policy. Unset means nobody can. |
+| `ENROLL_SSO_TENANT_ID` / `ENROLL_SSO_CLIENT_IDS` / `ENROLL_SSO_ALLOWED_DOMAINS` | Zero-config SSO enrolment allowlist (tenant GUID; comma-separated app client GUIDs; comma-separated e-mail domains). All three required; any missing turns `method: "sso"` off. Set for production (no `--env`) and for staging. |
 | `CF_OAUTH_CLIENT_ID` / `CF_OAUTH_CLIENT_SECRET` | Optional. Only needed for the Keys page's Cloudflare account connect flow. |
 
 Generate locally, then `secret put` (hidden prompt, not a shell argument):

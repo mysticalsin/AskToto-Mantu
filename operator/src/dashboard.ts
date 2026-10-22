@@ -1,3 +1,4 @@
+import { licenseSource, seatSource, type SourceKind } from './enroll/source'
 import {
   aggregateCacheSlice,
   estimateCacheCost,
@@ -206,8 +207,18 @@ export interface DashboardPayload {
       approval: SeatApproval
       lastSeen: number
       keysAuthorized: boolean
+      /** O05: where the seat's active licence came from. `email` is Worker-verified, `sso` only. */
+      source: { kind: SourceKind; email: string | null }
     }[]
-    issued: { jti: string; last4: string; days: number; exp: number; revoked: number; createdAt: number }[]
+    issued: {
+      jti: string
+      last4: string
+      days: number
+      exp: number
+      revoked: number
+      createdAt: number
+      source: { kind: SourceKind; email: string | null }
+    }[]
   }
   roi: {
     costToday: string | null
@@ -248,6 +259,46 @@ export interface DashboardPayload {
   geoRegions: GeoRegionRow[]
   questions: QuestionsPayload
   modelPolicy: DashboardModelPolicy
+  /** O05: the Settings > Enrolment panel. Never carries a token secret or hash. */
+  enrollment: DashboardEnrollment
+}
+
+/** The Settings > Enrolment slice. Computed by the route (it needs `env` for the SSO status), same convention
+ *  as `modelPolicy`/`valueSettings`: `buildDashboard` never reaches into `ctx.env` itself. */
+export interface DashboardEnrollment {
+  isOwner: boolean
+  /** `release` | `qa` | `staging`: the channel this Worker honours. */
+  channel: string
+  settings: { paused: boolean; ssoTier: string; ssoMaxDevicesPerUser: number }
+  tierIds: string[]
+  /** Configuration status only, never a configured value (the tenant is shown as its last 4 characters). */
+  sso: { configured: boolean; tenantLast4: string | null; clientIdCount: number; domainCount: number }
+  tokens: {
+    kid: string
+    label: string
+    channel: string
+    tier: string
+    licenseDays: number
+    maxDevices: number
+    dailyCap: number
+    enrolledCount: number
+    enrolledToday: number
+    createdAt: number
+    createdBy: string
+    expiresAt: number
+    status: 'active' | 'revoked' | 'expired'
+    revokedAt: number | null
+    revokedBy: string | null
+    revokeReason: string | null
+  }[]
+}
+export const NO_ENROLLMENT: DashboardEnrollment = {
+  isOwner: false,
+  channel: 'release',
+  settings: { paused: false, ssoTier: 'reporting', ssoMaxDevicesPerUser: 10 },
+  tierIds: [],
+  sso: { configured: false, tenantLast4: null, clientIdCount: 0, domainCount: 0 },
+  tokens: []
 }
 
 /** M2-0412: the fleet model policy slice for the Models page. `isOwner` gates the edit form
@@ -336,9 +387,7 @@ function mix(values: string[]): MixBar[] {
     const key = v || 'unknown'
     m.set(key, (m.get(key) ?? 0) + 1)
   }
-  return [...m.entries()]
-    .map(([label, value]) => ({ label, value }))
-    .sort((a, b) => b.value - a.value)
+  return [...m.entries()].map(([label, value]) => ({ label, value })).sort((a, b) => b.value - a.value)
 }
 
 function askLine(a: {
@@ -395,9 +444,7 @@ function costForAsks(
       a.model || '',
       a.provider || undefined
     )
-    const list = est
-      ? null
-      : estimateListPrice(a.model || '', a.input_tokens, a.output_tokens, a.cache_read)
+    const list = est ? null : estimateListPrice(a.model || '', a.input_tokens, a.output_tokens, a.cache_read)
     const hit = est ?? list
     if (hit) {
       any = true
@@ -653,7 +700,21 @@ function buildOverviewOps(args: {
   crmFailRate: number | null
   vault: VaultKeyMeta[]
 }): DashboardOps {
-  const { now, wau, dau, live, live30, hourStarts, dayStarts, hours24, pulses, weekAsks, storedEvents, crmFailRate, vault } = args
+  const {
+    now,
+    wau,
+    dau,
+    live,
+    live30,
+    hourStarts,
+    dayStarts,
+    hours24,
+    pulses,
+    weekAsks,
+    storedEvents,
+    crmFailRate,
+    vault
+  } = args
   const dailyUnique = uniqueDevicesPerBucket(pulses, dayStarts, DAY, now)
   const recapEvents = storedEvents.filter((e) => e.kind === 'recap')
   const fundedProviders = new Set(vault.filter((v) => v.status === 'active').map((v) => v.provider))
@@ -743,21 +804,23 @@ export async function buildDashboard(
   },
   cloudflare: CloudflareOverview = missingCloudflareOverview(),
   valueSettings: DashboardValueSettings = NO_VALUE_SETTINGS,
-  modelPolicy: DashboardModelPolicyInput = NO_MODEL_POLICY
+  modelPolicy: DashboardModelPolicyInput = NO_MODEL_POLICY,
+  enrollment: DashboardEnrollment = NO_ENROLLMENT
 ): Promise<DashboardPayload> {
-  const [seatsRaw, asksRaw, pulses, proposals, audit, crmRaw, packs, storedEventsRaw, vault, issued, sessionsPage] = await Promise.all([
-    store.listSeats(),
-    store.listAsks(2000),
-    store.listPulses(now - 7 * DAY),
-    store.listProposals(100),
-    store.listAudit(80),
-    store.listCrm(200),
-    store.listPacks(),
-    store.listEvents(80),
-    store.listVaultMeta(),
-    store.listIssuedLicenses(200),
-    store.listSessions({ since: now - 7 * DAY, limit: 1000 })
-  ])
+  const [seatsRaw, asksRaw, pulses, proposals, audit, crmRaw, packs, storedEventsRaw, vault, issued, sessionsPage] =
+    await Promise.all([
+      store.listSeats(),
+      store.listAsks(2000),
+      store.listPulses(now - 7 * DAY),
+      store.listProposals(100),
+      store.listAudit(80),
+      store.listCrm(200),
+      store.listPacks(),
+      store.listEvents(80),
+      store.listVaultMeta(),
+      store.listIssuedLicenses(200),
+      store.listSessions({ since: now - 7 * DAY, limit: 1000 })
+    ])
   const asks = asksRaw.map(projectAskTelemetry)
   const crm = crmRaw.map(normalizeCrmRow)
   const storedEvents = storedEventsRaw.map(projectEventTelemetry)
@@ -1064,7 +1127,8 @@ export async function buildDashboard(
           license: licenseLabel(s),
           approval: approvalOf(s),
           lastSeen: s.last_seen,
-          keysAuthorized: keysOn(s)
+          keysAuthorized: keysOn(s),
+          source: seatSource(s)
         }))
       return {
         empty: rows.length === 0,
@@ -1076,7 +1140,8 @@ export async function buildDashboard(
           days: r.days,
           exp: r.exp,
           revoked: r.revoked,
-          createdAt: r.created_at
+          createdAt: r.created_at,
+          source: licenseSource(r)
         }))
       }
     })(),
@@ -1180,6 +1245,7 @@ export async function buildDashboard(
     geo: realtimeGeoRows(seats, sessions),
     geoRegions: geoRegionRows(seats),
     questions: buildQuestionsPayload(weekAsks),
+    enrollment,
     modelPolicy: {
       ...modelPolicy,
       history: audit
@@ -1205,11 +1271,7 @@ function buildQuestionsPayload(asks: AskRow[]): QuestionsPayload {
 }
 
 /** Bounded, dependency-free notice builder shared by the full dashboard and the live poll snapshot. */
-function buildNotices(
-  seats: SeatRow[],
-  crm: CrmSendRow[],
-  proposals: ProposalRow[]
-): DashboardPayload['notices'] {
+function buildNotices(seats: SeatRow[], crm: CrmSendRow[], proposals: ProposalRow[]): DashboardPayload['notices'] {
   const seatsById = new Map(seats.map((s) => [s.device_id, s]))
   return [
     ...seats
@@ -1361,17 +1423,22 @@ function isExpiringSoon(row: IssuedLicenseRow, now: number): boolean {
  * lookback window), so polling every 5 s never scales with total fleet history. No prompt text, no
  * secrets: only the fields the Realtime/Overview live strip needs.
  */
-export async function buildLiveSnapshot(store: OperatorStore, now: number, opts: LiveSnapshotOpts = {}): Promise<LiveSnapshot> {
-  const [seatsRaw, sessionsPage, eventsRaw, todayAsksRaw, crmRaw, proposals, integrations, issuedLicenses] = await Promise.all([
-    store.listSeats(),
-    store.listSessions({ since: now - DAY, limit: 500 }),
-    store.listEvents(40),
-    store.listAsks(500, now - DAY),
-    store.listCrm(50),
-    store.listProposals(50),
-    store.listIntegrationRows(),
-    store.listIssuedLicenses()
-  ])
+export async function buildLiveSnapshot(
+  store: OperatorStore,
+  now: number,
+  opts: LiveSnapshotOpts = {}
+): Promise<LiveSnapshot> {
+  const [seatsRaw, sessionsPage, eventsRaw, todayAsksRaw, crmRaw, proposals, integrations, issuedLicenses] =
+    await Promise.all([
+      store.listSeats(),
+      store.listSessions({ since: now - DAY, limit: 500 }),
+      store.listEvents(40),
+      store.listAsks(500, now - DAY),
+      store.listCrm(50),
+      store.listProposals(50),
+      store.listIntegrationRows(),
+      store.listIssuedLicenses()
+    ])
   const events = eventsRaw.map(projectEventTelemetry)
   const todayAsks = todayAsksRaw.map(projectAskTelemetry)
   const crm = crmRaw.map(normalizeCrmRow)

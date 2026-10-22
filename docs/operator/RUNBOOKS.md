@@ -147,7 +147,7 @@ they are visible in the dashboard and in `wrangler deploy` output by design.
   from mint time regardless of activity, re-minted only once the current one is over an hour old.
 - Bypass policies (Access must not wrap these, or every seat and every automated check breaks):
   `/health`, `/v1/ingest`, `/v1/heartbeat`, `/v1/use`, `/v1/ask`, `/v1/skills/manifest`, `/v1/integrations`,
-  `/assets/*` (mirror `ACCESS_BYPASS_PATHS` in `operator/src/access.ts`). The Worker's own JSON
+  `/v1/enroll`, `/assets/*` (mirror `ACCESS_BYPASS_PATHS` in `operator/src/access.ts`). The Worker's own JSON
   401 already gates `/v1/admin/*`; do not add a second Access application over it.
 - Never enable **Protect this Worker**. That setting Access-wraps every path including the HMAC
   and public asset routes above, which locks out every desktop seat and every smoke check at once.

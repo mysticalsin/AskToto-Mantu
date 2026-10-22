@@ -5,8 +5,9 @@
  */
 import type { DashboardPayload } from '../../dashboard'
 import { pageHeader, type RenderCtx } from '../index'
+import { renderEnrollmentPanel } from './enrollment-panel'
 
-export function renderSettings(_data: DashboardPayload, _ctx: RenderCtx): string {
+export function renderSettings(data: DashboardPayload, _ctx: RenderCtx): string {
   return `${pageHeader({ title: 'Settings', subtitle: 'Operator configuration.' })}
     <article class="card pad-b10">
       <p class="eyebrow">Settings</p>
@@ -14,5 +15,6 @@ export function renderSettings(_data: DashboardPayload, _ctx: RenderCtx): string
       <div class="rule"><h3>Generate license</h3><p>Licenses → duration → Generate license. Paste the once-string into Métis → Settings → Operator → Operator license. last4 after reload.</p></div>
       <div class="rule"><h3>Geo</h3><p>City / region / country come from request.cf on heartbeat. Never client GPS. Never IP.</p></div>
       <p id="key-msg-settings" class="muted"></p>
-    </article>`
+    </article>
+    ${renderEnrollmentPanel(data)}`
 }

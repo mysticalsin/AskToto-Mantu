@@ -29,6 +29,7 @@ Worker code already treats `/v1/integrations` as HMAC device auth. Cloudflare Ac
 - `/v1/ask`  ← add this in Zero Trust (same Bypass as `/v1/use`)
 - `/v1/skills/manifest`
 - `/v1/integrations`  ← add this in Zero Trust
+- `/v1/enroll`  ← add this in Zero Trust (zero-config enrolment; Worker auth is its own credential plus HMAC). Without it Access answers a 302 HTML login page instead of a JSON 401, and no new install can enrol.
 - `/assets/*`
 
 Also documented in `operator/README.md` (Cloudflare Access section) and `docs/operator/RUNBOOKS.md` §5.

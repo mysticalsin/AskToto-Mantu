@@ -6,7 +6,23 @@
  */
 import type { DashboardPayload } from '../../dashboard'
 import { esc, pageHeader, type RenderCtx } from '../index'
+import { sourceLabel, SOURCE_KINDS, type SourceInfo } from '../../enroll/source'
 import { approvalPill, field, when } from './_shared'
+
+/** Source pill: Admin, SSO (with the Worker-verified e-mail) or "Token · Unverified". */
+function sourceCell(source: SourceInfo): string {
+  const label = `<span class="pill" data-source-pill="${source.kind}">${esc(sourceLabel(source.kind))}</span>`
+  return source.kind === 'sso' && source.email ? `${label} <span class="muted">${esc(source.email)}</span>` : label
+}
+
+function renderSourceFilter(): string {
+  return `<div class="row source-filter"><label>Source
+      <select data-source-filter>
+        <option value="">All sources</option>
+        ${SOURCE_KINDS.map((k) => `<option value="${k}">${esc(sourceLabel(k))}</option>`).join('')}
+      </select></label></div>
+    <div class="empty" data-source-filter-empty hidden>No seats from this source.</div>`
+}
 
 function renderLicenseGenerateForm(): string {
   return `<form class="key-form license-gen" data-license-generate method="post" action="/v1/admin/licenses/generate" autocomplete="off">
@@ -40,6 +56,7 @@ function renderLicenseGenerate(data: DashboardPayload): string {
         <td class="muted" data-license-last4="${esc(r.last4)}">··${esc(r.last4)}</td>
         <td class="muted">${r.days}d</td>
         <td class="muted">${esc(when(r.exp * 1000))}</td>
+        <td data-license-source="${r.source.kind}">${sourceCell(r.source)}</td>
         <td>${r.revoked ? '<span class="pill">revoked</span>' : active ? '<span class="pill up">active</span>' : '<span class="muted">expired</span>'}</td>
       </tr>`
     })
@@ -47,7 +64,7 @@ function renderLicenseGenerate(data: DashboardPayload): string {
   return `${renderLicenseGenerateForm()}
     ${
       issued
-        ? `<table data-issued-licenses><thead><tr><th>Last4</th><th>Duration</th><th>Expires</th><th></th></tr></thead><tbody>${issued}</tbody></table>`
+        ? `<table data-issued-licenses><thead><tr><th>Last4</th><th>Duration</th><th>Expires</th><th>Source</th><th></th></tr></thead><tbody>${issued}</tbody></table>`
         : '<div class="empty">No Operator licenses generated yet.</div>'
     }`
 }
@@ -64,10 +81,16 @@ function renderLicensesTable(data: DashboardPayload): string {
         r.approval === 'approved'
           ? `<button class="danger" data-license-revoke="${id}">Revoke</button>`
           : `<button class="primary" data-license-approve="${id}">Approve</button>`
-      return `<tr data-device="${id}" data-approval="${esc(r.approval)}">
+      // A token-enrolled seat has not proven who it is, so any e-mail the device claims is marked as such.
+      const emailCell =
+        r.source.kind === 'token' && r.email
+          ? `${field(r.email)} <span class="muted">(unverified)</span>`
+          : field(r.email)
+      return `<tr data-device="${id}" data-approval="${esc(r.approval)}" data-source="${r.source.kind}">
         <td>${field(r.hostname)}</td>
-        <td>${field(r.email)}</td>
+        <td>${emailCell}</td>
         <td>${field(r.license)}</td>
+        <td>${sourceCell(r.source)}</td>
         <td>${approvalPill(r.approval)}</td>
         <td class="muted">${esc(r.os)}</td>
         <td class="muted">${esc(r.appVersion)}</td>
@@ -75,7 +98,8 @@ function renderLicensesTable(data: DashboardPayload): string {
       </tr>`
     })
     .join('')
-  return `<table><thead><tr><th>Computer</th><th>SSO email</th><th>License</th><th>Approval</th><th>OS</th><th>Version</th><th></th></tr></thead><tbody>${body}</tbody></table>
+  return `${renderSourceFilter()}
+    <table><thead><tr><th>Computer</th><th>SSO email</th><th>License</th><th>Source</th><th>Approval</th><th>OS</th><th>Version</th><th></th></tr></thead><tbody>${body}</tbody></table>
     <div class="sub muted pad-b8">The owner approves a seat or the seat activates an Operator license. Revoke still stops platform keys. last4 only. Never a raw key.</div>`
 }
 
