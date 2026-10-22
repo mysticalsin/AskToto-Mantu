@@ -104,7 +104,7 @@ import {
   retireRecapWriteKeys
 } from './lib/recap-write-coordinator'
 import { type RetiringMeeting, retiringMeeting } from './lib/retiring-meeting'
-import { runQuitFlush } from './lib/quit-flush'
+import { QUIT_DRAIN_CAP_MS, drainWithCap, runQuitFlush } from './lib/quit-flush'
 import { fetchSpotlightWinsFrom } from './lib/spotlight-wins'
 import { useConversationMemory } from './lib/conversation-memory'
 import { useAppSoundCues } from './lib/app-sound-cues'
@@ -566,7 +566,6 @@ export function App(): JSX.Element {
   const persistLiveMeetingOnExitRef = useRef<
     ((snapshot: AnswerState | null, maxAttempts?: number, retiring?: RetiringMeeting) => Promise<void>) | null
   >(null)
-  // New meeting clicked while Stop's drain runs: the new meeting starts only after the old one is saved.
   const newMeetingWaitRef = useRef(false)
   const savedRef = useRef('')
   // Explicit Disregard owns this meeting until reset completes; exit effects must not recreate its save.
@@ -2611,8 +2610,7 @@ export function App(): JSX.Element {
   const newMeeting = useCallback(() => {
     cancelledRef.current = true
     if (listen.listening && stoppingRef.current) {
-      // Stop's drain is still committing windows. Starting now would abort it and drop that tail, so the
-      // old meeting is saved from the drain's own callback and only then does the new one start.
+      // Starting now would abort the drain and drop its tail: save from the drain callback, then start.
       if (newMeetingWaitRef.current) return
       newMeetingWaitRef.current = true
       const owner = meetingStartRef.current
@@ -2641,14 +2639,17 @@ export function App(): JSX.Element {
     listen.stop
   ])
 
-  // Quit / Log out (from Settings) must first persist any in-flight meeting — a single best-effort save
-  // (maxAttempts=0) so app teardown is never blocked on the retry loop. Covers the "every started meeting
-  // is saved" rule for the exit paths the user actually clicks. (Reset / New meeting use the durable path.)
+  // Quit / Log out / quit-flush: stop a running capture, wait for its drain (capped), then one best-effort
+  // save (maxAttempts=0) so teardown never blocks on the retry loop. (Reset / New meeting use the durable path.)
   const flushLiveMeeting = useCallback(async (): Promise<void> => {
     if (meetingStartRef.current <= 0) return
-    const snapshot = ask.cancel()
-    await persistAndRetireLiveMeeting(snapshot, 0)
-  }, [ask.cancel, persistAndRetireLiveMeeting])
+    const retiring = retiringMeeting(meetingStartRef.current, liveRecapTargetRef.current, listen.lines, listen.getLines)
+    if (listen.listening) {
+      stoppingRef.current = true
+      await drainWithCap(listen.stop, QUIT_DRAIN_CAP_MS)
+    }
+    await persistAndRetireLiveMeeting(ask.cancel(), 0, retiring)
+  }, [ask.cancel, persistAndRetireLiveMeeting, listen.listening, listen.lines, listen.getLines, listen.stop])
 
   const quitApp = useCallback(async (): Promise<void> => {
     await flushLiveMeeting()
@@ -3184,8 +3185,7 @@ export function App(): JSX.Element {
 
   const handlersRef = useRef<(a: HotkeyAction | 'quit-flush') => void>(() => {})
   handlersRef.current = (a: HotkeyAction | 'quit-flush'): void => {
-    // Quit with a live meeting (Q02): main waits for this ack. Before the gates and the pill expansion, so
-    // it always answers, and without guardReviewNav, which could open a sheet instead of saving.
+    // Quit with a live meeting: main waits for this ack, so answer before the gates and without guardReviewNav.
     if (a === 'quit-flush') {
       void runQuitFlush(flushLiveMeeting, () => window.toto.quitFlushDone())
       return

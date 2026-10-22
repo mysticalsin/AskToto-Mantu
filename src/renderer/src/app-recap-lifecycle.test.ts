@@ -9,6 +9,7 @@ import { recapPersistAction } from './lib/transcript'
 import { startDraftAutosave } from './lib/draft-autosave'
 import { errorWithSavedNote, saveRevokedMeeting } from './lib/revoked-meeting-save'
 import { retiringMeeting } from './lib/retiring-meeting'
+import { QUIT_DRAIN_CAP_MS, drainWithCap } from './lib/quit-flush'
 import {
   OwnedOperationGate,
   RecapWriteCoordinator,
@@ -1852,6 +1853,8 @@ describe('meeting exit while the stop drain is in flight', () => {
       listen,
       stoppingRef,
       retiringMeeting,
+      drainWithCap,
+      QUIT_DRAIN_CAP_MS,
       view: options.view ?? 'review',
       persistLiveMeetingOnExitRef: ref(h.context.persistAndRetireLiveMeeting),
       suggest: { cancel: vi.fn(), clear: vi.fn() },
@@ -1881,7 +1884,8 @@ describe('meeting exit while the stop drain is in flight', () => {
       stops,
       stoppingRef,
       reset: callback<() => void>('reset', h.context),
-      newMeeting: callback<() => void>('newMeeting', h.context)
+      newMeeting: callback<() => void>('newMeeting', h.context),
+      flushLiveMeeting: callback<() => Promise<void>>('flushLiveMeeting', h.context)
     }
   }
 
@@ -1959,6 +1963,49 @@ describe('meeting exit while the stop drain is in flight', () => {
     for (const settle of stops) settle('drained')
     await Promise.all(h.exitPromises)
     expect(h.startListen).toHaveBeenCalledTimes(1)
+  })
+
+  it('quit flush waits for the stop drain and saves the drained tail lines', async () => {
+    const { h, live, listen, stops, flushLiveMeeting } = drainHost()
+    const flushed = flushLiveMeeting()
+    await Promise.resolve()
+    // Capture is stopped through the same drain path; nothing is saved before it settles.
+    expect(listen.stop).toHaveBeenCalledTimes(1)
+    expect(h.saveTranscript).not.toHaveBeenCalled()
+    const tail: TranscriptLine = { speaker: 'them', text: 'Synthetic tail committed during the quit drain.', t: 9 }
+    live.push(tail)
+    stops[0]!('drained')
+    await flushed
+    await Promise.all(h.exitPromises)
+    expect(h.saveTranscript).toHaveBeenCalledTimes(1)
+    const payload = h.saveTranscript.mock.calls[0]![0] as SaveMeeting
+    expect(payload.startedAt).toBe(100)
+    expect(payload.lines).toEqual([...lines, tail])
+  })
+
+  it('quit flush stops waiting at the drain cap and saves what it has', async () => {
+    vi.useFakeTimers()
+    try {
+      const { h, flushLiveMeeting } = drainHost()
+      const flushed = flushLiveMeeting() // the drain never settles
+      await vi.advanceTimersByTimeAsync(QUIT_DRAIN_CAP_MS - 1)
+      expect(h.saveTranscript).not.toHaveBeenCalled()
+      await vi.advanceTimersByTimeAsync(1)
+      await flushed
+      await Promise.all(h.exitPromises)
+      expect(h.saveTranscript).toHaveBeenCalledTimes(1)
+      expect((h.saveTranscript.mock.calls[0]![0] as SaveMeeting).lines).toEqual(lines)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('quit flush with no drain running saves at once without stopping capture again', async () => {
+    const { h, listen, flushLiveMeeting } = drainHost({ listening: false })
+    await flushLiveMeeting()
+    await Promise.all(h.exitPromises)
+    expect(listen.stop).not.toHaveBeenCalled()
+    expect(h.saveTranscript).toHaveBeenCalledTimes(1)
   })
 
   it('New meeting with no drain running keeps the immediate save and start', async () => {
