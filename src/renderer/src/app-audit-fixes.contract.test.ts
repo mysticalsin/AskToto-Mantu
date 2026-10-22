@@ -18,7 +18,8 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, it, expect } from 'vitest'
 import { sourceIndexOf, sourceSnippet } from '../../../scripts/lib/source-layout'
-import { meetingSaveIsRedundant, tapProfileMismatch } from './App'
+import { meetingSaveIsRedundant } from './App'
+import { tapProfileMismatch } from './lib/tap/tap-profile'
 
 // Normalize CRLF → LF: this is a Windows checkout, so any anchor whose newline sits mid-string would
 // never match against \r\n.
