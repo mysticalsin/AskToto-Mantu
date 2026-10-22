@@ -34,7 +34,8 @@ const NAMES = {
   truncated: '2026-01-01_000002-synthetic-truncated.md',
   oversized: '2026-01-01_000003-synthetic-oversized.md',
   dataless: '2026-01-01_000004-synthetic-cloud-only.md',
-  directory: '2026-01-01_000005-synthetic-directory.md'
+  directory: '2026-01-01_000005-synthetic-directory.md',
+  empty: '2026-01-01_000006-synthetic-empty.md'
 } as const
 const BAD = Object.values(NAMES)
 
@@ -115,6 +116,7 @@ describe('brain ingest isolates unusable meeting files (GATE-05, R-14)', () => {
     writeFileSync(dataless, '---\ntype: meeting-transcript\ntitle: Synthetic cloud only\n---\nCLOUDONLY-CONTENT\n')
     cloudOnly.add(dataless)
     mkdirSync(join(meetingsFolder, NAMES.directory))
+    writeFileSync(join(meetingsFolder, NAMES.empty), '')
     for (const name of BAD) if (name !== NAMES.directory) digests.set(name, sha(name))
   })
 
@@ -147,7 +149,10 @@ describe('brain ingest isolates unusable meeting files (GATE-05, R-14)', () => {
 
     // A bad file is never recorded as ingested, and its failure names a reason without a path.
     for (const name of BAD) expect(idx.ingested[name]?.ok ?? false).toBe(false)
+    // An empty file is not a meeting (History drops it too): no record at all, so no "Failed to index" item.
+    expect(idx.ingested[NAMES.empty]).toBeUndefined()
     const details = ingestFailureDetails(idx)
+    expect(details.map((d) => d.file)).not.toContain(NAMES.empty)
     for (const d of details) {
       expect(BAD).toContain(d.file)
       expect(d.error).not.toContain(meetingsFolder)
@@ -193,6 +198,21 @@ describe('brain ingest isolates unusable meeting files (GATE-05, R-14)', () => {
     const second = readIndex(getSettings())
     for (const name of good) expect(second.ingested[name]).toEqual(firstIndex.ingested[name])
     expect(brainBackfillProgress().running).toBe(false)
+  })
+
+  it('an empty file is skipped silently, and ingested once it gains content', async () => {
+    await startBackfill()
+    await waitForIdle()
+    expect(readIndex(getSettings()).ingested[NAMES.empty]).toBeUndefined()
+    expect(sent()).not.toContain(NAMES.empty)
+
+    writeFileSync(
+      join(meetingsFolder, NAMES.empty),
+      '---\ntype: meeting-transcript\ntitle: Synthetic filled\ndate: 2026-01-01T00:00:06.000Z\n---\nFilled synthetic body.\n'
+    )
+    await startBackfill(undefined, { trigger: 'user' })
+    await waitForIdle()
+    expect(readIndex(getSettings()).ingested[NAMES.empty]).toMatchObject({ ok: true })
   })
 
   it('a bad file that is repaired later is ingested on the next pass while the good ones are left alone', async () => {

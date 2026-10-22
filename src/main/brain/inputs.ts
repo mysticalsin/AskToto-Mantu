@@ -92,6 +92,9 @@ async function scanFolder(root: string, source: 'meetings' | 'team', label?: str
   for (const name of names) {
     const fileClass = classes.get(name)
     if (!fileClass || fileClass.status === 'missing') continue
+    // A zero-byte file is not a meeting (History drops it the same way), so it is neither queued nor counted
+    // as a failure. Once it gains content its size changes and the next scan picks it up.
+    if (fileClass.status === 'ok' && fileClass.version.size === 0) continue
     const key = source === 'meetings' ? name : `team/${label ?? 'team'}/${name}`
     const observation = 'version' in fileClass ? observationOf(fileClass.version) : {}
     sources.push({
