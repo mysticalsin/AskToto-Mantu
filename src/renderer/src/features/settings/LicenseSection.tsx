@@ -168,8 +168,8 @@ export function LicenseSection({
         <div className="flex items-start gap-1.5 text-[11px] text-[color:var(--cl-muted-foreground)]">
           <Timer size={13} className="mt-px shrink-0" />
           <span>
-            Trial · {status.trialDaysRemaining} day{status.trialDaysRemaining === 1 ? '' : 's'} left. Paste a
-            license key above anytime to activate.
+            Trial · {status.trialDaysRemaining} day{status.trialDaysRemaining === 1 ? '' : 's'} left. Paste a license
+            key above anytime to activate.
           </span>
         </div>
       )}
@@ -185,6 +185,7 @@ export function LicenseSection({
       </button>
 
       <ToggleRow
+        disabled={settings.managedKeys.includes('licenseGateEnabled')}
         label="Require a license to run"
         desc="When on, Métis requires an active license to run. Leave off until you've deployed a license server and confirmed activation works: turning this on with no valid activation will lock this device out at next launch."
         on={settings.licenseGateEnabled}
@@ -193,5 +194,3 @@ export function LicenseSection({
     </div>
   )
 }
-
-

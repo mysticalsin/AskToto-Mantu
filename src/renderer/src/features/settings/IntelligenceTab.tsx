@@ -1,5 +1,18 @@
 import { useEffect, useState } from 'react'
-import { AlertCircle, CircleCheck, Cpu, ExternalLink, FileText, FolderOpen, Link2, Lock, MessageSquare, Network, RefreshCw, Timer } from 'lucide-react'
+import {
+  AlertCircle,
+  CircleCheck,
+  Cpu,
+  ExternalLink,
+  FileText,
+  FolderOpen,
+  Link2,
+  Lock,
+  MessageSquare,
+  Network,
+  RefreshCw,
+  Timer
+} from 'lucide-react'
 import type { GraphStatus, MeetingSummary, PublicSettings } from '@shared/ipc'
 import { timeSavedFromTotals } from '@shared/time-saved'
 import { MantuMark } from '../../components/MantuMark'
@@ -121,8 +134,8 @@ export function TimeSavedSettings({
               />
             </div>
             <div className="mt-2 text-[10.5px] text-[color:var(--cl-muted-foreground)]">
-              Currently crediting ~{saved.perMeetingAvgMin} min of write-up avoided per meeting. This is an
-              estimate, not a measured figure.{locked ? ' Managed by your organization.' : ''}
+              Currently crediting ~{saved.perMeetingAvgMin} min of write-up avoided per meeting. This is an estimate,
+              not a measured figure.{locked ? ' Managed by your organization.' : ''}
             </div>
           </>
         )}
@@ -175,7 +188,8 @@ export function IntelligenceTab({
           <div className="min-w-0 flex-1">
             <div className="text-[13px] font-medium text-[color:var(--cl-foreground)]">Intelligence dashboard</div>
             <div className="truncate text-[11px] text-[color:var(--cl-muted-foreground)]">
-              Graphs and insights from {meetings === null ? 'your' : meetings.length} indexed meeting{meetings !== null && meetings.length === 1 ? '' : 's'}.
+              Graphs and insights from {meetings === null ? 'your' : meetings.length} indexed meeting
+              {meetings !== null && meetings.length === 1 ? '' : 's'}.
             </div>
           </div>
           <button
@@ -257,6 +271,7 @@ export function IntelligenceTab({
         icon={Cpu}
       >
         <ToggleRow
+          disabled={settings.managedKeys.includes('brainConsolidation')}
           label="Batch index (1–2× / day)"
           desc={
             settings.brainConsolidation.enabled
@@ -264,9 +279,7 @@ export function IntelligenceTab({
               : 'Off: each saved meeting is indexed with an LLM extract as soon as it lands (higher token use). The named 06:00 / 12:00 / 18:00 America/Toronto index still runs.'
           }
           on={settings.brainConsolidation.enabled}
-          onChange={(v) =>
-            patch({ brainConsolidation: { ...settings.brainConsolidation, enabled: v } })
-          }
+          onChange={(v) => patch({ brainConsolidation: { ...settings.brainConsolidation, enabled: v } })}
         />
         {settings.brainConsolidation.enabled && (
           <>
@@ -292,12 +305,11 @@ export function IntelligenceTab({
               </select>
             </div>
             <ToggleRow
+              disabled={settings.managedKeys.includes('brainConsolidation')}
               label="Prefer on-device model for consolidation"
               desc="When Métis Local is ready, use it for batch extracts before burning cloud tokens."
               on={settings.brainConsolidation.preferLocal}
-              onChange={(v) =>
-                patch({ brainConsolidation: { ...settings.brainConsolidation, preferLocal: v } })
-              }
+              onChange={(v) => patch({ brainConsolidation: { ...settings.brainConsolidation, preferLocal: v } })}
             />
           </>
         )}
@@ -309,6 +321,7 @@ export function IntelligenceTab({
         icon={FileText}
       >
         <ToggleRow
+          disabled={settings.managedKeys.includes('publishBrainPages')}
           label="Publish meeting intelligence"
           desc={
             settings.encryptTranscripts
@@ -322,10 +335,16 @@ export function IntelligenceTab({
           <div className="cl-card mt-2 px-3 py-2.5">
             <div className="flex items-center gap-2">
               <FolderOpen size={15} className="shrink-0 text-[color:var(--cl-primary)]" />
-              <span className="min-w-0 flex-1 text-[12px] text-[color:var(--cl-foreground)]">Give Claude your second brain</span>
+              <span className="min-w-0 flex-1 text-[12px] text-[color:var(--cl-foreground)]">
+                Give Claude your second brain
+              </span>
             </div>
             <p className="mt-1 text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
-              The published folder includes a <span className="font-medium text-[color:var(--cl-foreground)]">CLAUDE.md</span> entry doc that orients Claude. Point Claude at this folder (add it to a Claude Project, open it in Claude Desktop, or sync it via a connector) and Claude reads your meetings, people, and deals directly and surfaces your next steps. Nothing here is a raw transcript.
+              The published folder includes a{' '}
+              <span className="font-medium text-[color:var(--cl-foreground)]">CLAUDE.md</span> entry doc that orients
+              Claude. Point Claude at this folder (add it to a Claude Project, open it in Claude Desktop, or sync it via
+              a connector) and Claude reads your meetings, people, and deals directly and surfaces your next steps.
+              Nothing here is a raw transcript.
             </p>
             <div className="mt-2">
               <button
@@ -409,7 +428,10 @@ export function OperatorMcpServersSection(): JSX.Element | null {
     >
       <div className="flex flex-col gap-2">
         {servers.map((s) => (
-          <div key={s.id} className="flex flex-col gap-1 rounded-[10px] border border-[var(--cl-border)] bg-white/[0.02] p-3">
+          <div
+            key={s.id}
+            className="flex flex-col gap-1 rounded-[10px] border border-[var(--cl-border)] bg-white/[0.02] p-3"
+          >
             <div className="flex items-center justify-between gap-2">
               <span className="text-[12px] font-medium text-[color:var(--cl-foreground)]">{s.label}</span>
               <span className={activePillStyle}>
@@ -460,6 +482,7 @@ export function GraphSection({
       icon={Network}
     >
       <ToggleRow
+        disabled={settings.managedKeys.includes('graphifyEnabled')}
         label="Build a knowledge graph of my notes"
         desc="Links the people, deals, and topics across your saved meetings. Connections show up in Meeting history (the network icon on each note)."
         on={settings.graphifyEnabled}
@@ -470,7 +493,9 @@ export function GraphSection({
           <div className="cl-card flex items-center gap-2 px-3 py-2.5 text-[12px]">
             <Network
               size={15}
-              className={status?.installed ? 'text-[color:var(--cl-primary)]' : 'text-[color:var(--cl-muted-foreground)]'}
+              className={
+                status?.installed ? 'text-[color:var(--cl-primary)]' : 'text-[color:var(--cl-muted-foreground)]'
+              }
             />
             {!status ? (
               <AgentStatus kind="loading" size="inline" caption />
@@ -491,10 +516,13 @@ export function GraphSection({
                 {status.nodes ?? 0} nodes · {status.edges ?? 0} links
               </span>
             ) : (
-              <span className="text-[color:var(--cl-muted-foreground)]">No graph yet. Select Rebuild now to create one.</span>
+              <span className="text-[color:var(--cl-muted-foreground)]">
+                No graph yet. Select Rebuild now to create one.
+              </span>
             )}
           </div>
           <ToggleRow
+            disabled={settings.managedKeys.includes('graphifyAutoRebuild')}
             label="Auto-rebuild after each note"
             desc="Refresh the graph automatically (incremental) when a meeting or note is saved."
             on={settings.graphifyAutoRebuild}
@@ -542,5 +570,3 @@ export function GraphSection({
     </Section>
   )
 }
-
-

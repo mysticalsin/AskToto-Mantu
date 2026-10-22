@@ -12,8 +12,7 @@ import { formatResetPhrase } from './reset-time'
 const clock = (y: number, m: number, d: number, h: number, min: number): number =>
   new Date(y, m - 1, d, h, min, 0, 0).getTime()
 
-const timeOf = (t: number): string =>
-  new Date(t).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
+const timeOf = (t: number): string => new Date(t).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
 
 describe('formatResetPhrase (MQA-203)', () => {
   const now = clock(2026, 8, 17, 9, 14) // a Monday morning
@@ -58,7 +57,10 @@ describe('formatResetPhrase (MQA-203)', () => {
   })
 })
 
-const settingsSrc = readFileSync(join(__dirname, '..', 'renderer', 'src', 'features', 'settings', 'AiSection.tsx'), 'utf8')
+const settingsSrc = readFileSync(
+  join(__dirname, '..', 'renderer', 'src', 'features', 'settings', 'ai-section-labels.ts'),
+  'utf8'
+)
 const mainSrc = readFileSync(join(__dirname, '..', 'main', 'index.ts'), 'utf8')
 
 describe('both reset surfaces use the day-aware phrasing (MQA-203)', () => {

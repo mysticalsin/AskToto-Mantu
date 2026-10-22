@@ -26,7 +26,6 @@ import type {
   PublicSettings,
   TestKeyResponse
 } from '@shared/ipc'
-import { formatResetPhrase } from '@shared/reset-time'
 import { MODEL_POLICY_CAPABILITY_LABELS } from '@shared/model-policy'
 import {
   PROVIDERS,
@@ -50,6 +49,7 @@ import { ToggleRow } from '../../ui/Toggle'
 import { CustomEndpointField } from './CustomEndpointField'
 import { DustSetup } from './DustSetup'
 import { PROFILE_CREDENTIAL_STORE, isProfileUnlockError } from './credential-store'
+import { prettyModel, providerLimitLabel } from './ai-section-labels'
 import { pickReadyProvider } from './provider-readiness'
 
 // Providers excluded from generic provider tiles because they have dedicated setup cards.
@@ -65,21 +65,6 @@ function recommendedProvider(settings: PublicSettings): ProviderId {
     (p) => p !== 'dust' && (PROVIDERS[p].kind === 'cli' ? !!settings.cliConnected?.[p] : !!settings.hasKeys[p])
   )
   return ready ?? 'anthropic'
-}
-
-/** Friendly name for a routed model in the thinking-mode explainer. */
-function prettyModel(m: string, provider: ProviderId, tier: 'base' | 'think' | 'deep'): string {
-  if (provider === 'dust') {
-    // Dust has no distinct deep agent; deep shares the thinking caption.
-    return tier === 'base' ? 'your base agent' : 'your thinking agent'
-  }
-  if (m) {
-    if (/haiku/i.test(m)) return 'Haiku'
-    if (/sonnet/i.test(m)) return 'Sonnet'
-    if (/opus/i.test(m)) return 'Opus'
-    if (/gpt-4o|gpt-4\.1|gpt-5/i.test(m)) return 'GPT'
-  }
-  return tier === 'think' ? 'the deeper model' : 'the fast model'
 }
 
 /** One selectable provider tile shared by both provider grids. */
@@ -1037,22 +1022,6 @@ export function AiSection({
 // replace, or remove the model at runtime.
 // ---------------------------------------------------------------------------
 
-/** Human phrase for a currently-demoted provider, from its cooldown reason + reset instant. */
-function providerLimitLabel(u: { reason: string; until: number }): string {
-  const mins = Math.max(0, Math.round((u.until - Date.now()) / 60000))
-  const when = mins >= 60 ? formatResetPhrase(u.until) : mins >= 1 ? `retry in ${mins}m` : 'retry shortly'
-  switch (u.reason) {
-    case 'rate-limit':
-      return `rate-limited, ${when}`
-    case 'quota-exhausted':
-      return 'out of credit. Add credit or switch providers'
-    case 'usage-cap':
-      return `usage limit reached, ${when}`
-    default:
-      return 'key rejected. Re-enter it below'
-  }
-}
-
 /**
  * Backups & limits — the resilience layer (main/llm/exhaustion.ts + provider-health.ts). Shows any provider
  * currently demoted because it ran out (rate limit / credit / usage-cap) with its reset, and exposes the two
@@ -1140,6 +1109,7 @@ function ResilienceSection({
         <FallbackOrderEditor settings={settings} patch={patch} />
 
         <ToggleRow
+          disabled={settings.managedKeys.includes('resilience')}
           label="Prefer a free backup when a paid provider runs out"
           desc="Route to a provider with a free tier (or the on-device model) before another paid one, once the paid primary is spent."
           on={settings.resilience.preferFreeOnExhaustion}
@@ -1147,6 +1117,7 @@ function ResilienceSection({
         />
 
         <ToggleRow
+          disabled={settings.managedKeys.includes('resilience')}
           label="Switch before hitting a limit"
           desc="Read each provider's remaining allowance and move to a backup just before it would be rate-limited, instead of after."
           on={settings.resilience.budgetPreempt}
@@ -1154,6 +1125,7 @@ function ResilienceSection({
         />
 
         <ToggleRow
+          disabled={settings.managedKeys.includes('resilience')}
           label="Race a backup provider on a slow answer"
           desc="For a quick question, start a second provider if the first hasn't answered within 3 seconds. Whichever answers first wins, the other is cancelled. Can occasionally use both."
           on={settings.resilience.hedge}
@@ -1502,6 +1474,7 @@ export function LocalAiSection({
     >
       <div className="flex flex-col gap-3">
         <ToggleRow
+          disabled={settings.managedKeys.includes('localLlm')}
           label="Enable Métis Local"
           desc="Use the on-device model for suggestions, summaries, and screenshot reads. The included compact model needs no separate download. An optional model that is not included downloads after you enable it or select Retry. Cloudflare and your other API providers stay available."
           on={settings.localLlm.enabled}
@@ -1641,6 +1614,7 @@ export function LocalAiSection({
         <div className="flex flex-col gap-0.5">
           <span className="text-[12px] font-medium text-[color:var(--cl-foreground)]">Use for</span>
           <ToggleRow
+            disabled={settings.managedKeys.includes('localLlm')}
             label="Live suggestions"
             desc="What-to-say-next suggestions during a meeting."
             on={settings.localLlm.useFor.suggest}
@@ -1649,6 +1623,7 @@ export function LocalAiSection({
             }
           />
           <ToggleRow
+            disabled={settings.managedKeys.includes('localLlm')}
             label="Summaries"
             desc="Mid-meeting summaries and Mantu Intelligence extraction."
             on={settings.localLlm.useFor.summary}
@@ -1657,6 +1632,7 @@ export function LocalAiSection({
             }
           />
           <ToggleRow
+            disabled={settings.managedKeys.includes('localLlm')}
             label="Screenshots"
             desc="Reading what's on your screen."
             on={settings.localLlm.useFor.vision}
@@ -1669,6 +1645,7 @@ export function LocalAiSection({
         <div className="flex flex-col gap-0.5 pt-1">
           <span className="text-[12px] font-medium text-[color:var(--cl-foreground)]">Fallback</span>
           <ToggleRow
+            disabled={settings.managedKeys.includes('localLlm')}
             label="Use as a fallback when cloud AI is unavailable"
             desc="If every configured cloud provider is unreachable or none is set up, run meeting indexing, live suggestions, summaries and screenshot analysis on-device as a last resort instead of failing. Cloud providers are always preferred when they work."
             on={settings.localLlm.fallback}
@@ -1678,6 +1655,7 @@ export function LocalAiSection({
 
         <div className="flex flex-col gap-0.5">
           <ToggleRow
+            disabled={settings.managedKeys.includes('speakerId')}
             label="Speaker identification (beta)"
             desc="Label who's speaking in meetings using on-device voice recognition. Voice data never leaves this device."
             on={settings.speakerId.enabled}
@@ -1685,6 +1663,7 @@ export function LocalAiSection({
           />
           {settings.speakerId.enabled && (
             <ToggleRow
+              disabled={settings.managedKeys.includes('speakerId')}
               label="Save voiceprints"
               desc="Keep voiceprints on this device so Métis can name people in later meetings. Voiceprints saved by earlier versions are kept and still used."
               on={settings.speakerId.saveVoiceprints}
