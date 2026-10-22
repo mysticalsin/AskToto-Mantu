@@ -13,9 +13,8 @@ export type { PermissionStatus, PlatformPermissions }
 
 /** Which OS prompts one permissions:requestUpfront call may raise (Apple HIG: request only what the feature
  *  needs, at the moment of need). An onboarding row's Continue names its own permission, so it raises only that
- *  prompt; no argument keeps the combined pass older callers use; anything else raises nothing. */
-export function permissionAskTargets(kind: unknown): { microphone: boolean; screenRecording: boolean } {
-  if (kind === undefined) return { microphone: true, screenRecording: true }
+ *  prompt; no argument, or anything else, raises nothing (D1-12: a call can never raise both prompts at once). */
+export function permissionAskTargets(kind?: unknown): { microphone: boolean; screenRecording: boolean } {
   return { microphone: kind === 'microphone', screenRecording: kind === 'screenRecording' }
 }
 
@@ -84,7 +83,9 @@ function macStatus(accessType: 'microphone' | 'camera' | 'screen'): PermissionSt
   if (systemPreferences.getMediaAccessStatus) {
     const s = systemPreferences.getMediaAccessStatus(accessType)
     if (s === 'granted') return 'granted'
-    if (s === 'denied') return 'denied'
+    // 'restricted' is a profile or parental control the person cannot lift from here: it reads as blocked, never
+    // as a prompt that would do nothing (D1-5).
+    if (s === 'denied' || s === 'restricted') return 'denied'
   }
   return 'unknown'
 }

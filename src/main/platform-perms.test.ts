@@ -122,7 +122,7 @@ describe('getPlatformPermissions — Windows microphone', () => {
     expect(getPlatformPermissions().microphone).toBe('denied')
   })
 
-  it('reports unknown for any other status (not-determined, restricted)', () => {
+  it('reports unknown while the OS has not decided (not-determined)', () => {
     setPlatform('win32')
     vi.mocked(systemPreferences.getMediaAccessStatus).mockReturnValue('not-determined')
     expect(getPlatformPermissions().microphone).toBe('unknown')
@@ -276,13 +276,37 @@ describe('C26 (HIG) — one setup row raises only its own OS prompt', () => {
     expect(permissionAskTargets('screenRecording')).toEqual({ microphone: false, screenRecording: true })
   })
 
-  it('no argument keeps the combined pass the Settings and QA callers already use', () => {
-    expect(permissionAskTargets(undefined)).toEqual({ microphone: true, screenRecording: true })
+  it('a no-argument call asks for nothing (D1-12: one prompt per row, never both at once)', () => {
+    expect(permissionAskTargets(undefined)).toEqual({ microphone: false, screenRecording: false })
+    expect(permissionAskTargets()).toEqual({ microphone: false, screenRecording: false })
   })
 
   it('an unrecognised argument raises no prompt at all', () => {
     for (const raw of ['camera', 'accessibility', '', 0, null, {}, ['microphone']]) {
       expect(permissionAskTargets(raw)).toEqual({ microphone: false, screenRecording: false })
     }
+  })
+})
+
+describe('D1-5 — a macOS-restricted permission reads as denied, not unknown', () => {
+  it('maps restricted microphone and screen to denied on every status path', () => {
+    setPlatform('darwin')
+    vi.mocked(systemPreferences.getMediaAccessStatus).mockReturnValue('restricted')
+    expect(getPlatformPermissions()).toMatchObject({ microphone: 'denied', screenRecording: 'denied' })
+    expect(getNativeSpeechPermissions()).toEqual({ microphone: 'denied', screenRecording: 'denied' })
+  })
+
+  it('not-determined still reads as unknown (the row may ask), and restricted never reads as granted', () => {
+    setPlatform('darwin')
+    vi.mocked(systemPreferences.getMediaAccessStatus).mockReturnValue('not-determined')
+    expect(getPlatformPermissions()).toMatchObject({ microphone: 'unknown', screenRecording: 'unknown' })
+    vi.mocked(systemPreferences.getMediaAccessStatus).mockReturnValue('restricted')
+    expect(getPlatformPermissions().microphone).not.toBe('granted')
+  })
+
+  it('Windows microphone shares the mapping', () => {
+    setPlatform('win32')
+    vi.mocked(systemPreferences.getMediaAccessStatus).mockReturnValue('restricted')
+    expect(getPlatformPermissions().microphone).toBe('denied')
   })
 })
