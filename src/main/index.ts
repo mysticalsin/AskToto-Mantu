@@ -966,7 +966,7 @@ import {
   type ProviderId,
   type ProviderDef
 } from '@shared/providers'
-import { routeTier } from '@shared/routing'
+import { askMetrics, planAsk } from './ask-route'
 import { HedgeRace, HEDGE_DELAY_MS, HEDGE_DELAY_SUGGEST_MS, type HedgeLeg } from './llm/hedge'
 import { ThinkStripper } from './llm/think-strip'
 import { redactSecrets } from '@shared/redact'
@@ -7458,7 +7458,11 @@ function registerIpc(): void {
   // Fresh-question boundary state (module scope, shared with IPC.listeningState / IPC.askResetContext). A plain
   // question OUTSIDE a live meeting must not inherit the previous Q&A, which rode in TWO carriers: the renderer's
   // history array and the server-side Dust conversation (reused up to 2h). Enforced at this single ask choke point.
-  const askTurns = createAskTurns({ send: (channel, payload) => win?.webContents.send(channel, payload), streams })
+  const askTurns = createAskTurns({
+    send: (channel, payload) => win?.webContents.send(channel, payload),
+    streams,
+    metrics: askMetrics
+  })
   ipcMain.handle(IPC.askStart, async (e, raw) => {
     assertMainWindow(e)
     const id = raw && typeof raw === 'object' && 'id' in (raw as object) ? String((raw as { id: unknown }).id) : ''
@@ -7554,7 +7558,7 @@ function registerIpc(): void {
       )
       if (contextRefusal) return void win?.webContents.send(IPC.streamError, { id: req.id, message: contextRefusal })
       // G14: a live-meeting ask takes its turn on the meeting's SessionQueue; `turn.send` drops stale output.
-      const turn = await askTurns.begin({ id: req.id, mode: req.mode, handle: contextGate.handle() })
+      const turn = await askTurns.begin({ id: req.id, mode: req.mode, handle: contextGate.handle(), ask: req })
       if (!turn) return
       // screenContext is a MAIN-ONLY field (like brainContext): never trust a value the renderer sent. Clear
       // it unconditionally after parse, then set it below strictly from main's own on-device screen cache.
@@ -7631,6 +7635,11 @@ function registerIpc(): void {
       // M2-0412: the fleet model policy narrows the org allowlist for ask/chat; CLI providers and 'local'
       // are governed by their own connect/routing toggles and never narrowed.
       const allowed = narrowAllowedForCapability(s, getAllowedProviders(), 'askChat', [...CLI_PROVIDER_IDS, 'local'])
+      // G29: the capability, cost and deadline router picks the tier and whether the on-device model goes first, and
+      // refuses (with copy) what nothing may serve. Hedge, failover order and Private View read its result unchanged.
+      const orgAllowed = getAllowedProviders()
+      const route = planAsk({ req, settings: s, allowed, orgAllowed, policy: getActiveModelPolicy(s) })
+      if (route.unavailable) return askTurns.fail(req.id, route.unavailable)
 
       // Screen-vision capability. Static per provider, EXCEPT Dust: its ability to read a screenshot depends
       // on the selected agent's underlying model (it uploads the shot as a content fragment), so consult the
@@ -7640,13 +7649,7 @@ function registerIpc(): void {
         if (!getApiKey(p) && operatorFundedProviders().includes(p)) {
           return !!operatorVisionModel(
             p,
-            resolveModelTier(
-              p,
-              s.providerModels,
-              s.providerModelsThinking,
-              routeTier(req, s.thinkingMode),
-              s.providerModelsDeep
-            )
+            resolveModelTier(p, s.providerModels, s.providerModelsThinking, route.tier, s.providerModelsDeep)
           )
         }
         return PROVIDERS[p].vision
@@ -7685,7 +7688,7 @@ function registerIpc(): void {
         // failover at BOTH seams that consult pickFailover (the retry-budget sizing and the pre-token
         // failover line), letting the flow fall through to the reconnect-Dust message instead.
         if (!allowCrossProviderFailover(req)) return null
-        const tier = routeTier(req, s.thinkingMode)
+        const tier = route.tier
         // MQA-269: a user-authored chain IS the priority. When present it replaces both sort keys —
         // providerPriority's CLI bucket-swap and preferFree's free-tier float — because both exist to GUESS
         // an order the user has now stated outright. Silently re-sorting a chain the user typed is the
@@ -7892,7 +7895,7 @@ function registerIpc(): void {
         const viaOperator =
           provider !== 'local' && def.kind !== 'cli' && !key && operatorFundedProviders().includes(provider)
         const operatorTransport = viaOperator ? operatorAskTransport(s) : null
-        const tier = routeTier(req, s.thinkingMode)
+        const tier = route.tier
         // Métis Local's "model" is the local-models.ts manifest id the sidecar loads — settings.localLlm.
         // modelId, NOT the generic per-provider tier resolution (which would otherwise fall back to
         // PROVIDERS.local.fastModel regardless of the installer-owned model selected in settings).
@@ -8428,13 +8431,9 @@ function registerIpc(): void {
         !cliPrimary && operatorRoute.tier === 'operator' && operatorRoute.provider in PROVIDERS
           ? (operatorRoute.provider as ProviderId)
           : s.provider
-      // Métis Local outranks cliPrimary (but never providerOverride): an in-scope suggest/summary/vision ask
-      // routes to the on-device model first whenever it's eligible right now (PLAN.md §4.3 "Routing
-      // precedence, explicit") — see local-routing.ts's pickPrimaryProvider for the exact precedence rule.
-      // localPrimaryEligibleFor (not the bare localEligibleFor) layers Wave 2's routingMode on top: 'api'
-      // forces this false so local can never win the first-attempt pick, 'local' relaxes the per-mode
-      // useFor toggle, 'auto' is byte-identical to the old localEligibleFor call.
-      const localPrimaryEligible = localPrimaryEligibleFor(req, s, routeTier(req, s.thinkingMode), allowed)
+      // Métis Local outranks cliPrimary (never providerOverride) when eligible: see pickPrimaryProvider. The router
+      // evaluates localPrimaryEligibleFor (routingMode-aware) at the tier the request really runs at.
+      const localPrimaryEligible = route.localPrimaryEligible
       const localVisionRequired = localVisionPrivacyRequired(req, s)
       const primary = pickPrimaryProvider(
         req.providerOverride,
@@ -8467,7 +8466,7 @@ function registerIpc(): void {
         // in-scope local suggest. Without a race, the local leg's own terminals run un-suppressed, so the
         // "Nothing was sent to a cloud provider" message is actually delivered rather than markDead-swallowed.
         primary !== 'local' &&
-        routeTier(req, s.thinkingMode) === 'base' &&
+        route.tier === 'base' &&
         (req.mode === 'answer' || req.mode === 'vision' || req.mode === 'suggest') &&
         allowCrossProviderFailover(req)
       if (hedgeEligible) {
