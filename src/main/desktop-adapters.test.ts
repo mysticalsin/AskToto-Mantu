@@ -533,6 +533,7 @@ describe('the real command path keeps adapter uncertainty', () => {
     exec.mockResolvedValueOnce(OK)
     const audit = vi.fn()
     const controller = new CommandControl({
+      platform: 'darwin',
       execute: (request, context) =>
         executeDesktopAction(request, { platform: 'darwin', envelope: context, deps: all }),
       policyAllows: () => true,
@@ -554,6 +555,7 @@ describe('the real command path keeps adapter uncertainty', () => {
     const { all } = deps()
     const seen = frontmost()
     const controller = new CommandControl({
+      platform: 'darwin',
       execute: (request, context) =>
         executeDesktopAction(request, {
           platform: 'darwin',

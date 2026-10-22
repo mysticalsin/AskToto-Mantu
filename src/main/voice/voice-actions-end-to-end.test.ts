@@ -55,7 +55,7 @@ function rig(platform: 'darwin' | 'win32' = 'darwin') {
     store: new MemoryStore(),
     authSessionGeneration: () => 1
   })
-  const control = new CommandControl({ execute: bridge.execute, policyAllows: () => true })
+  const control = new CommandControl({ platform: 'darwin', execute: bridge.execute, policyAllows: () => true })
   const outcomes: VoiceTurnOutcome[] = []
   const pipeline = createVoiceTurnPipeline({
     router: { providerReady: () => false },
@@ -243,7 +243,7 @@ describe('path traversal on Windows', () => {
       store: new MemoryStore(),
       authSessionGeneration: () => 1
     })
-    const control = new CommandControl({ execute: bridge.execute, policyAllows: () => true })
+    const control = new CommandControl({ platform: 'darwin', execute: bridge.execute, policyAllows: () => true })
     const pipeline = createVoiceTurnPipeline({
       router: { providerReady: () => false },
       executor: {

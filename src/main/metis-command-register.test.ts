@@ -23,7 +23,7 @@ async function createHarness() {
     ok: true,
     outcome: 'verified' as const
   }))
-  const controller = new CommandControl({ execute, policyAllows: () => true })
+  const controller = new CommandControl({ platform: 'darwin', execute, policyAllows: () => true })
   let owner: { webContentsId: number } | null = { webContentsId: 11 }
   runtime = ensureMetisCommandRuntime({
     getSettings: () => ({}),

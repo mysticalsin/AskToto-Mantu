@@ -37,6 +37,8 @@ export type CommandConfirmationDeps = {
   preflight?: (request: Parameters<CommandExecutor>[0], stage: CommandPreflightStage) => Promise<CommandPreflightResult>
   /** The card's window life (focus exception and restore). See voice/confirm-focus.ts. */
   card?: CommandCardLifecycle
+  /** The platform the card previews are written for. Defaults to the host; tests pin it. */
+  platform?: NodeJS.Platform
   /** Earliest a confirmation can land after its card appeared. Defaults to the 300 ms Return guard. */
   minConfirmDelayMs?: number
   audit: (event: 'command.confirmed' | 'command.revoked', metadata: Record<string, string>) => void
@@ -79,6 +81,7 @@ export class CommandConfirmation extends CommandControl {
       preflight: deps.preflight,
       card: deps.card,
       minConfirmDelayMs: deps.minConfirmDelayMs ?? COMMAND_RETURN_GUARD_MS,
+      platform: deps.platform,
       onState: (state) => {
         const owner = deps.getOwner()
         if (owner && !owner.isDestroyed()) owner.webContents.send(IPC.metisCommandState, state)

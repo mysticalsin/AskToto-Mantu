@@ -6,6 +6,7 @@ import { CommandConfirmation } from './command-confirmation'
 function make(overrides: Record<string, unknown> = {}) {
   const send = vi.fn()
   const confirmation = new CommandConfirmation({
+    platform: 'darwin',
     execute: vi.fn(async () => ({ id: 'desktop.create_note' as const, ok: true, outcome: 'unknown' as const })),
     isAuthenticated: () => true,
     hasListenEntitlement: () => true,

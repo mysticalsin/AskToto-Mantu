@@ -53,6 +53,7 @@ function createConfirmation() {
   })
   const audit = vi.fn()
   const confirmation = new CommandConfirmation({
+    platform: 'darwin',
     execute,
     isAuthenticated: () => state.authenticated,
     hasListenEntitlement: () => state.listenEntitled,
@@ -259,6 +260,7 @@ describe('CommandConfirmation task recovery', () => {
   function withRecovery(recoverTasks: () => Promise<unknown>) {
     const logger = { warn: vi.fn(), error: vi.fn() }
     const confirmation = new CommandConfirmation({
+      platform: 'darwin',
       execute: vi.fn(async () => ({ id: 'desktop.open_notes' as const, ok: true, outcome: 'verified' as const })),
       recoverTasks,
       isAuthenticated: () => true,
@@ -337,6 +339,7 @@ describe('CommandConfirmation immediate-run gate (V03: the confirmation inputs m
   it('names the owner window id only when the window exposes one', () => {
     const state = { id: 17 as number | undefined }
     const confirmation = new CommandConfirmation({
+      platform: 'darwin',
       execute: vi.fn(),
       isAuthenticated: () => true,
       hasListenEntitlement: () => true,

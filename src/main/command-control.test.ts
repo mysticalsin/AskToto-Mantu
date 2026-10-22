@@ -44,7 +44,7 @@ describe('command confirmation policy', () => {
 describe('CommandControl', () => {
   it('rejects confirmation from a different renderer owner without executing', async () => {
     const execute = vi.fn(async () => ({ id: 'desktop.open_notes' as const, ok: true, outcome: 'unknown' as const }))
-    const controller = new CommandControl({ execute, policyAllows: allowCommandPolicy })
+    const controller = new CommandControl({ platform: 'darwin', execute, policyAllows: allowCommandPolicy })
     const proposal = controller.propose({ webContentsId: 11, revision: 3 }, { id: 'desktop.open_notes', args: {} })
 
     expect(await controller.confirm({ ...proposal, webContentsId: 12 })).toEqual({
@@ -63,7 +63,7 @@ describe('CommandControl', () => {
             resolve({ id: 'desktop.open_notes', ok: true, outcome: 'verified', receipt: receiptFor(context) })
         })
     )
-    const controller = new CommandControl({ execute, policyAllows: allowCommandPolicy })
+    const controller = new CommandControl({ platform: 'darwin', execute, policyAllows: allowCommandPolicy })
     const proposal = controller.propose({ webContentsId: 11, revision: 3 }, { id: 'desktop.open_notes', args: {} })
 
     const first = controller.confirm({ ...proposal, webContentsId: 11 })
@@ -79,6 +79,7 @@ describe('CommandControl', () => {
   it('does not report success when the adapter accepted a request but cannot verify its outcome', async () => {
     const audit = vi.fn()
     const controller = new CommandControl({
+      platform: 'darwin',
       execute: async () => ({ id: 'desktop.open_notes', ok: true, outcome: 'unknown' }),
       policyAllows: allowCommandPolicy,
       audit
@@ -98,6 +99,7 @@ describe('CommandControl', () => {
   it('preserves an unknown result with ok false as outcome_unverified after auditing', async () => {
     const audit = vi.fn()
     const controller = new CommandControl({
+      platform: 'darwin',
       execute: async () => ({
         id: 'desktop.open_notes',
         ok: false,
@@ -122,6 +124,7 @@ describe('CommandControl', () => {
   it('keeps a mismatched unknown result id as adapter_failed before uncertainty mapping', async () => {
     const audit = vi.fn()
     const controller = new CommandControl({
+      platform: 'darwin',
       execute: async () => ({ id: 'desktop.open_arc', ok: false, outcome: 'unknown' }),
       policyAllows: allowCommandPolicy,
       audit
@@ -144,6 +147,7 @@ describe('CommandControl', () => {
     'unsupported'
   ] as const)('keeps a matching known %s result as adapter_failed', async (outcome) => {
     const controller = new CommandControl({
+      platform: 'darwin',
       execute: async () => ({ id: 'desktop.open_notes', ok: false, outcome }),
       policyAllows: allowCommandPolicy
     })
@@ -158,6 +162,7 @@ describe('CommandControl', () => {
   it('reports a dispatch that rejects as unverified, because the effect may already have happened', async () => {
     const audit = vi.fn()
     const controller = new CommandControl({
+      platform: 'darwin',
       execute: async () => {
         throw new Error('adapter connection lost after launch')
       },
@@ -178,7 +183,7 @@ describe('CommandControl', () => {
 
   it('hands the executor the confirmed proposal identity and the sender-derived owner', async () => {
     const execute = vi.fn(async () => ({ id: 'desktop.open_notes' as const, ok: true, outcome: 'unknown' as const }))
-    const controller = new CommandControl({ execute, policyAllows: allowCommandPolicy })
+    const controller = new CommandControl({ platform: 'darwin', execute, policyAllows: allowCommandPolicy })
     const proposal = controller.propose({ webContentsId: 11, revision: 3 }, { id: 'desktop.open_notes', args: {} })
 
     await controller.confirm({ ...proposal, webContentsId: 11 })
@@ -198,6 +203,7 @@ describe('CommandControl', () => {
   it('does not attribute a verified result for another action to the confirmed action', async () => {
     const audit = vi.fn()
     const controller = new CommandControl({
+      platform: 'darwin',
       execute: async () => ({ id: 'desktop.open_arc', ok: true, outcome: 'verified' }),
       policyAllows: allowCommandPolicy,
       audit
@@ -217,7 +223,13 @@ describe('CommandControl', () => {
   it('rejects an expired, replaced, cancelled, or nonce-mismatched proposal', async () => {
     let now = 100
     const execute = vi.fn(async () => ({ id: 'desktop.open_notes' as const, ok: true, outcome: 'unknown' as const }))
-    const controller = new CommandControl({ execute, policyAllows: allowCommandPolicy, now: () => now, ttlMs: 10 })
+    const controller = new CommandControl({
+      platform: 'darwin',
+      execute,
+      policyAllows: allowCommandPolicy,
+      now: () => now,
+      ttlMs: 10
+    })
     const expired = controller.propose({ webContentsId: 11, revision: 1 }, { id: 'desktop.open_notes', args: {} })
     now = 110
     expect(await controller.confirm({ ...expired, webContentsId: 11 })).toEqual({ ok: false, reason: 'expired' })
@@ -243,11 +255,7 @@ describe('CommandControl', () => {
   it('revokes lifecycle-owned authority and audits action metadata only', async () => {
     const audit = vi.fn()
     const execute = vi.fn(async () => ({ id: 'desktop.open_notes' as const, ok: true, outcome: 'unknown' as const }))
-    const controller = new CommandControl({
-      execute,
-      policyAllows: allowCommandPolicy,
-      audit
-    })
+    const controller = new CommandControl({ platform: 'darwin', execute, policyAllows: allowCommandPolicy, audit })
     const proposal = controller.propose({ webContentsId: 11, revision: 4 }, { id: 'desktop.open_notes', args: {} })
     controller.revokeForLifecycleEvent('renderer_replaced')
     expect(controller.getState()).toEqual({ proposalId: null })
@@ -266,6 +274,7 @@ describe('CommandControl', () => {
     vi.useFakeTimers()
     try {
       const controller = new CommandControl({
+        platform: 'darwin',
         execute: async () => ({ id: 'desktop.open_notes', ok: true, outcome: 'unknown' }),
         policyAllows: allowCommandPolicy,
         ttlMs: 25
@@ -281,7 +290,7 @@ describe('CommandControl', () => {
   it('rechecks policy at confirmation time before invoking the static adapter', async () => {
     let allowed = true
     const execute = vi.fn(async () => ({ id: 'desktop.open_notes' as const, ok: true, outcome: 'unknown' as const }))
-    const controller = new CommandControl({ execute, policyAllows: () => allowed })
+    const controller = new CommandControl({ platform: 'darwin', execute, policyAllows: () => allowed })
     const proposal = controller.propose({ webContentsId: 11, revision: 4 }, { id: 'desktop.open_notes', args: {} })
 
     // Entitlement/foreground state can change while the proposal is displayed.
@@ -294,6 +303,7 @@ describe('CommandControl', () => {
   it('fails closed when the confirmation policy throws', async () => {
     const execute = vi.fn(async () => ({ id: 'desktop.open_notes' as const, ok: true, outcome: 'verified' as const }))
     const controller = new CommandControl({
+      platform: 'darwin',
       execute,
       policyAllows: () => {
         throw new Error('policy unavailable')
@@ -313,7 +323,7 @@ describe('CommandControl', () => {
       outcome: 'verified' as const,
       receipt: receiptFor(context)
     }))
-    const controller = new CommandControl({ execute, policyAllows: allowCommandPolicy })
+    const controller = new CommandControl({ platform: 'darwin', execute, policyAllows: allowCommandPolicy })
     const request = { id: 'desktop.create_note' as const, args: { title: 'hello' } }
     const proposal = controller.propose({ webContentsId: 11, revision: 4 }, request)
     request.args.title = 'changed after propose'
@@ -333,7 +343,7 @@ describe('CommandControl', () => {
     const NOTES = { id: 'desktop.open_notes' as const, args: {} }
 
     it('exposes the args hash in the proposal and the renderer state, never the arguments', () => {
-      const controller = new CommandControl({ execute: vi.fn(), policyAllows: allowCommandPolicy })
+      const controller = new CommandControl({ platform: 'darwin', execute: vi.fn(), policyAllows: allowCommandPolicy })
       const proposal = controller.propose(owner, { id: 'desktop.create_note', args: { title: 'private title' } })
       expect(proposal.argsHash).toBe(actionArgsHash({ id: 'desktop.create_note', args: { title: 'private title' } }))
       expect(controller.getState()).toMatchObject({ argsHash: proposal.argsHash })
@@ -354,7 +364,7 @@ describe('CommandControl', () => {
         outcome: 'verified' as const,
         receipt: receiptFor(context)
       }))
-      const controller = new CommandControl({ execute, policyAllows: allowCommandPolicy })
+      const controller = new CommandControl({ platform: 'darwin', execute, policyAllows: allowCommandPolicy })
       const proposal = controller.propose(owner, NOTES)
 
       expect(await controller.confirm({ ...proposal, argsHash: bad(proposal.argsHash), webContentsId: 11 })).toEqual({
@@ -366,7 +376,7 @@ describe('CommandControl', () => {
     })
 
     it('lets a cancel through on the id and nonce alone', async () => {
-      const controller = new CommandControl({ execute: vi.fn(), policyAllows: allowCommandPolicy })
+      const controller = new CommandControl({ platform: 'darwin', execute: vi.fn(), policyAllows: allowCommandPolicy })
       const proposal = controller.propose(owner, NOTES)
       expect(
         await controller.cancel({ proposalId: proposal.proposalId, nonce: proposal.nonce, webContentsId: 11 })
@@ -376,6 +386,7 @@ describe('CommandControl', () => {
     it('treats a verified result with no bound receipt as unverified', async () => {
       const audit = vi.fn()
       const controller = new CommandControl({
+        platform: 'darwin',
         execute: async () => ({ id: 'desktop.open_notes', ok: true, outcome: 'verified' }),
         policyAllows: allowCommandPolicy,
         audit
@@ -394,6 +405,7 @@ describe('CommandControl', () => {
       ['an empty observation', (c: CommandExecutionContext) => receiptFor(c, '')]
     ])('treats a receipt bound to %s as unverified', async (_name, receipt) => {
       const controller = new CommandControl({
+        platform: 'darwin',
         execute: async (_request, context) => ({
           id: 'desktop.open_notes',
           ok: true,
@@ -412,6 +424,7 @@ describe('CommandControl', () => {
     it('hands the executor a distinct idempotency key per proposal of the same action', async () => {
       const keys: string[] = []
       const controller = new CommandControl({
+        platform: 'darwin',
         execute: async (_request, context) => {
           keys.push(context.idempotencyKey)
           return { id: 'desktop.open_notes', ok: true, outcome: 'unknown' }
@@ -428,7 +441,7 @@ describe('CommandControl', () => {
 
     it('passes validated dependencies to the executor and rejects malformed ones at propose time', async () => {
       const execute = vi.fn(async () => ({ id: 'desktop.open_notes' as const, ok: false, outcome: 'unknown' as const }))
-      const controller = new CommandControl({ execute, policyAllows: allowCommandPolicy })
+      const controller = new CommandControl({ platform: 'darwin', execute, policyAllows: allowCommandPolicy })
       const dep = 'd'.repeat(32)
       const proposal = controller.propose(owner, NOTES, { dependsOn: [dep] })
       await controller.confirm({ ...proposal, webContentsId: 11 })
