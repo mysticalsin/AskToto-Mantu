@@ -21,6 +21,15 @@ export const DEFAULT_OPERATOR_URL = 'https://metis-operator.tony-walteur.workers
 
 export const CF_CONNECT_PATH = '/cloudflare/connect'
 
+/** Owner-approved disclosure (2026-10-21), shown verbatim in onboarding and Settings › Privacy. Reporting has no
+ *  user opt-out; IT turns it off with the machine-wide `operatorReporting: false` policy key. */
+export const OPERATOR_REPORTING_DISCLOSURE =
+  "Métis reports usage and health, never meeting content, to your organisation's Métis Operator."
+
+/** Settings › Privacy detail under the disclosure: names the identity and location fields the payload carries. */
+export const OPERATOR_REPORTING_DETAIL =
+  "This includes your work email when you're signed in, this computer's name, the app version and an approximate city. Audio, transcripts, notes and questions are never sent."
+
 /** Narrow view of Node's `process.env`, read through `globalThis` so this file compiles under a
  *  WebWorker-lib tsconfig (the Operator Worker) without pulling @types/node into that project. */
 type NodeLikeGlobal = { process?: { env?: Record<string, string | undefined> } }
@@ -113,7 +122,7 @@ export function cloudflareConnectHref(
 /**
  * HTTPS Operator base for heartbeat / ingest / skills / Open Operator.
  * Settings → METIS_OPERATOR_URL → DEFAULT_OPERATOR_URL. Whitespace-only values are empty.
- * Empty Settings still phones home to the live Worker once an ingest secret is present.
+ * Empty Settings resolves to the shipped Worker, which every install reports to once it has enrolled.
  * Non-https overrides stay empty.
  */
 export function resolveOperatorBaseUrl(

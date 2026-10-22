@@ -23,7 +23,6 @@ import {
   Calendar,
   Camera,
   Cpu,
-  ExternalLink,
   Eye,
   FileSearch,
   FolderOpen,
@@ -68,7 +67,6 @@ import {
   isDustReady,
   type ProviderId
 } from '@shared/providers'
-import { operatorUrlConfigured } from '@shared/operator'
 import { LANGUAGE_OPTIONS } from '@shared/lang-id'
 import { MantuMark } from '../../components/MantuMark'
 import { MetisMark } from '../../components/MetisMark'
@@ -77,9 +75,8 @@ import { ToggleRow } from '../../ui/Toggle'
 import { LazyTextarea } from '../../ui/LazyText'
 import { ManagedChip } from '../../ui/ManagedChip'
 import { ctl } from '../../ui/ctl'
-import { primaryBtnStyle } from './ProductConnections'
 import { DustSetup } from './DustSetup'
-import { OperatorUrlField } from './OperatorUrlField'
+import { OperatorReportingSection, OperatorSourceLine } from './OperatorReportingSection'
 import { ReplayHint, SaveErrorLine } from './SettingsNotices'
 import { CalendarTab } from './CalendarTab'
 import { AboutTab } from './AboutTab'
@@ -318,6 +315,8 @@ const TABS: {
       'redact',
       'permissions',
       'usage',
+      'organisation reporting',
+      'Organisation reporting',
       'operator',
       'Operator',
       'operator url',
@@ -436,27 +435,12 @@ export function Settings({
   const reportedPatch = useMemo(() => reportingPatch(patch, setSaveError), [patch])
   const replayHintId = useId()
   const opacityStatus = overlayOpacityStatus(settings.overlayOpacity)
-  const [operatorSecretDraft, setOperatorSecretDraft] = useState('')
-  const [operatorSecretSaving, setOperatorSecretSaving] = useState(false)
-  const [operatorSecretError, setOperatorSecretError] = useState<string | null>(null)
   const [replayState, setReplayState] = useState<{ busy: boolean; error: string | null }>({ busy: false, error: null })
   const [overlayPlacementSave, setOverlayPlacementSave] = useState<{ busy: boolean; error: string | null }>({
     busy: false,
     error: null
   })
   const overlayPlacementSaveInFlight = useRef(false)
-  const saveOperatorSecret = async (): Promise<void> => {
-    setOperatorSecretSaving(true)
-    setOperatorSecretError(null)
-    try {
-      await patch({ operatorIngestSecret: operatorSecretDraft.trim() })
-      setOperatorSecretDraft('')
-    } catch {
-      setOperatorSecretError('Could not save the connection. Try again.')
-    } finally {
-      setOperatorSecretSaving(false)
-    }
-  }
   const searchMatches = useMemo(() => searchSettingsTabs(query), [query])
   const jumpTo = (id: TabId): void => {
     setTab(id)
@@ -937,71 +921,16 @@ export function Settings({
                   <SupportBundleSection />
                 </Section>
                 <Section
-                  title="Operator"
-                  desc="Your Métis licence securely connects this device to managed AI. You do not need a personal API key or a shared connection secret."
+                  title="Organisation reporting"
+                  desc="What this device reports to your organisation."
                   icon={Settings2}
                 >
-                  <OperatorUrlField
-                    value={settings.operatorUrl || ''}
-                    disabled={settings.managedKeys.includes('operatorUrl')}
-                    patch={reportedPatch}
+                  <OperatorReportingSection
+                    settings={settings}
+                    patch={patch}
+                    reportedPatch={reportedPatch}
+                    refreshSettings={refreshSettings}
                   />
-                  <details className="px-1 py-2">
-                    <summary className="text-[11px] text-[color:var(--cl-muted-foreground)]">
-                      Legacy administrator connection
-                    </summary>
-                    <label className="mt-2 flex flex-col gap-1">
-                      <span className="text-[11px] font-medium text-[color:var(--cl-muted-foreground)]">
-                        Legacy ingest secret
-                      </span>
-                      <input
-                        type="password"
-                        value={operatorSecretDraft}
-                        spellCheck={false}
-                        autoComplete="off"
-                        placeholder={
-                          settings.operatorLegacyCredentialConfigured
-                            ? 'Connection saved. Enter a replacement to change it.'
-                            : 'Administrator-provided secret (not needed with a licence)'
-                        }
-                        disabled={operatorSecretSaving || settings.managedKeys.includes('operatorIngestSecret')}
-                        onChange={(e) => setOperatorSecretDraft(e.target.value)}
-                        className={`${ctl} w-full`}
-                      />
-                    </label>
-                    <button
-                      type="button"
-                      className={`${primaryBtnStyle} mt-2`}
-                      disabled={
-                        !operatorSecretDraft.trim() ||
-                        operatorSecretSaving ||
-                        settings.managedKeys.includes('operatorIngestSecret')
-                      }
-                      onClick={() => void saveOperatorSecret()}
-                    >
-                      {operatorSecretSaving ? 'Saving…' : 'Save connection'}
-                    </button>
-                    {operatorSecretError && (
-                      <p role="alert" className="mt-1 text-[11px] text-[color:var(--cl-destructive)]">
-                        {operatorSecretError}
-                      </p>
-                    )}
-                  </details>
-                  <p className="px-1 py-2 text-[11px] leading-relaxed text-[color:var(--cl-muted-foreground)]">
-                    Operator telemetry sends only operational metadata: event types, status, timing and usage counts,
-                    plus device and license health. Content is not included in telemetry. Provider inference and
-                    user-approved destination writes are separate.
-                  </p>
-                  {operatorUrlConfigured(settings) && (
-                    <button
-                      type="button"
-                      onClick={() => void window.toto.operatorOpen()}
-                      className="no-drag cl-focus mt-1 flex items-center gap-1 rounded-lg bg-white/[0.05] px-2.5 py-1.5 text-[12px] text-[color:var(--cl-foreground)] hover:bg-white/[0.1]"
-                    >
-                      <ExternalLink size={12} /> Open Operator
-                    </button>
-                  )}
-                  {operatorUrlConfigured(settings) && <OperatorLicenseCard refreshSettings={refreshSettings} />}
                 </Section>
               </div>
             )}
@@ -1023,6 +952,7 @@ export function Settings({
             {tab === 'profile' && (
               <div className="flex flex-col gap-6">
                 <OperatorLicenseCard refreshSettings={refreshSettings} showIdentity />
+                <OperatorSourceLine />
                 <Section
                   title="About you"
                   desc="Used for interview and sales modes. The more detail, the better the answers."

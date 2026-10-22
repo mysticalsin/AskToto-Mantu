@@ -58,7 +58,7 @@
     "src/renderer/src/components/Review.tsx": 1895,
     "src/renderer/src/features/settings/AiSection.tsx": 2278,
     "src/renderer/src/features/settings/DustSetup.tsx": 928,
-    "src/renderer/src/features/settings/SettingsRoot.tsx": 1119,
+    "src/renderer/src/features/settings/SettingsRoot.tsx": 1049,
     "src/renderer/src/lib/listen.ts": 2992,
     "src/shared/ipc.ts": 2251
   },

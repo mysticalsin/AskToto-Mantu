@@ -653,26 +653,26 @@ describe('Settings scroll root clips sideways overflow (Win Audio / AI)', () => 
 })
 
 describe('Operator control plane lives on Cloudflare, not in Settings', () => {
-  it('offers licence-first setup, an explicit legacy-secret replacement, and truthful privacy copy', () => {
+  it('discloses reporting in one sentence with no opt-out, and keeps the licence, address and legacy secret for IT', () => {
+    // O12 (owner decision 2026-10-21): every install reports usage and health to the organisation's Operator.
+    expect(source).toMatch(/title="Organisation reporting"/)
+    expect(source).toMatch(/\{OPERATOR_REPORTING_DISCLOSURE\}/)
+    expect(source).toMatch(/\{OPERATOR_REPORTING_DETAIL\}/)
+    expect(source).toMatch(/operatorReportingStatusLine\(settings\.operatorReporting\)/)
+    expect(source).not.toMatch(/reportingOptOut|Turn off reporting|Stop reporting/i)
+    expect(source).toMatch(/Advanced: use a licence from IT/)
     expect(source).toMatch(/Operator URL/)
-    expect(source).toMatch(/Your Métis licence securely connects this device to managed AI/)
-    expect(source).toMatch(/You do not need a personal API key or a shared connection secret/)
-    expect(source).toMatch(/Legacy administrator connection/)
+    expect(source).toMatch(/settings\.operatorLegacyCredentialConfigured && \(/)
     expect(source).toMatch(/Legacy ingest secret/)
-    expect(source).toMatch(/value=\{operatorSecretDraft\}/)
+    expect(source).toMatch(/value=\{secretDraft\}/)
     expect(source).toMatch(/onClick=\{\(\) => void saveOperatorSecret\(\)\}/)
     expect(source).not.toMatch(/value=\{settings\.operatorIngestSecret/)
     expect(source).not.toMatch(/Send Ask text for skill improvement/)
     expect(source).not.toMatch(/settings\.sendAskText/)
     expect(source).not.toMatch(/Only operational metadata leaves this device/)
-    expect(source).toMatch(/Operator telemetry sends only operational metadata/)
-    expect(source).toMatch(/Content is not included in telemetry/)
-    expect(source).toMatch(/Provider inference and\s+user-approved\s+destination writes are separate/)
-    expect(source).toMatch(/Open Operator/)
-    expect(source).toMatch(/operatorOpen/)
+    // Open Operator is for managed seats only: an automatic reporting seat has nothing to open.
+    expect(source).toMatch(/\{settings\.operatorConfigured && \(\s*<button[\s\S]{0,240}operatorOpen/)
     expect(source).toMatch(/DEFAULT_OPERATOR_URL/)
-    expect(source).toMatch(/operatorUrlConfigured/)
-    expect(source).toMatch(/operatorUrlConfigured\(settings\) && <OperatorLicenseCard/)
     expect(source).toMatch(/Leave empty to use \{DEFAULT_OPERATOR_URL\}/)
     // The sentence now lives in OperatorUrlField, so its line breaks differ; only whitespace is tolerant here.
     expect(source).toMatch(
@@ -688,7 +688,7 @@ describe('Operator control plane lives on Cloudflare, not in Settings', () => {
     expect(source).not.toMatch(/local analytics page that pretends/)
     expect(source).not.toMatch(/DAU/)
     expect(source).not.toMatch(/cache hit rate/)
-    const operator = blockAfter('title="Operator"', "\n            {tab === 'meetings'")
+    const operator = blockAfter('export function OperatorReportingSection(', '\n}\n')
     expect(operator).not.toMatch(/—/)
     expect(operator).not.toMatch(/I am an AI|as an AI|AI assistant/i)
   })
