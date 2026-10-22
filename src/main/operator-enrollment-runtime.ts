@@ -8,7 +8,7 @@ import { join } from 'node:path'
 import { app, powerMonitor } from 'electron'
 import { authStatus } from './auth'
 import { getEnrollmentIdToken } from './auth-enrollment-token'
-import { readEmbeddedOperatorEnrollToken } from './embedded-operator-enroll'
+import { primeEmbeddedOperatorEnroll, readEmbeddedOperatorEnrollToken } from './embedded-operator-enroll'
 import { getDurableMachineId } from './license'
 import { auditLog, mainLog } from './logger'
 import {
@@ -90,7 +90,9 @@ export function startOperatorEnrollment(opts: OperatorEnrollmentRuntimeOptions):
     opts.restartRuntime()
     opts.notifyChanged()
   })
-  const boot = setTimeout(() => void enrollmentTick('boot'), BOOT_ENROLL_DELAY_MS)
+  // Decrypt the packaged enrolment blob (if the build carries one) before the first tick. Never rejects.
+  const primed = primeEmbeddedOperatorEnroll()
+  const boot = setTimeout(() => void primed.then(() => enrollmentTick('boot')), BOOT_ENROLL_DELAY_MS)
   boot.unref()
   try {
     powerMonitor.on('resume', enrollmentOnResume)
