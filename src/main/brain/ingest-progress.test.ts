@@ -438,7 +438,7 @@ describe('backfill progress bookkeeping across runs', () => {
     })
   })
 
-  it('rebuilds changed indexed sources so facts removed from a meeting cannot remain in Intelligence', async () => {
+  it('re-ingests a changed indexed source in place instead of rebuilding the whole brain (Q04 / D8-1)', async () => {
     const file = 'source-edited.md'
     const path = join(meetingsFolder, file)
     const original = '---\ndate: 2026-01-07\n---\nAcme discussed the original scope.'
@@ -451,22 +451,25 @@ describe('backfill progress bookkeeping across runs', () => {
       original
     )
     expect(readAccount(getSettings(), slugify('Acme'))).not.toBeNull()
+    const staleVersion = readIndex(getSettings()).ingested[file]?.sourceVersion
 
-    // Same filename, materially different source. A normal incremental merge cannot remove Acme's old
-    // entity, so the background scan must perform a clean rebuild before presenting current Intelligence.
+    // Same filename, materially different source. Only this meeting is extracted again: the tick no longer
+    // wipes the whole brain for one edit. Known limit (accepted in the Q04 design): entities the old version
+    // contributed are not subtracted, so Acme stays until a full rebuild. A deletion still rebuilds (below).
     writeFileSync(path, '---\ndate: 2026-01-07\n---\nA different topic replaced the original scope entirely.', 'utf8')
     reconcileMeetingsInBackground()
 
     await vi.waitFor(
       () => {
         const idx = readIndex(getSettings())
-        expect(idx.sourceRefreshRequested).toBe(false)
         expect(idx.ingested[file]?.ok).toBe(true)
-        expect(readAccount(getSettings(), slugify('Acme'))).toBeNull()
+        expect(idx.ingested[file]?.sourceVersion).not.toBe(staleVersion)
         expect(idx.revision).toBeGreaterThan(1)
       },
       { timeout: 10_000 }
     )
+    expect(readIndex(getSettings()).sourceRefreshRequested).toBe(false)
+    expect(readAccount(getSettings(), slugify('Acme'))).not.toBeNull()
     await waitForIdle() // same reason: don't hand a still-running pump to the next test
   })
 
