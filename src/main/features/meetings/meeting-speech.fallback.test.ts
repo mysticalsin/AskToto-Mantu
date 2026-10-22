@@ -194,8 +194,10 @@ describe('inline fallback of the async meeting speech wrappers', () => {
     })
     configureMeetingSpeechPersistence(failingService('WORKER_FAILED'))
     await expect(publicMeetingTextAsync(framed)).resolves.toEqual(expect.any(String))
+    // Bytes the deterministic projector refuses too are named UNPROJECTABLE: History caches that verdict.
     await expect(publicMeetingTextAsync('<!-- /metis-speech-provenance -->')).rejects.toMatchObject({
-      name: 'Error'
+      name: 'UNPROJECTABLE',
+      message: 'Meeting text could not be projected safely.'
     })
   })
 

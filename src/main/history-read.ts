@@ -155,10 +155,10 @@ function unprojectableRow(file: string): Read | null {
   return stub ? { text: '', sum: { ...stub, unavailable: true } } : null
 }
 
-/** A thrown projection error is permanent for these bytes, except a resource refusal (the worker was busy or
- *  over budget), which a later listing may well get past. */
+/** A thrown projection error is permanent for these bytes only when the deterministic projector itself refuses
+ *  them (UNPROJECTABLE). A worker refusal, crash or resource limit is transient: not cached, retried next listing. */
 export function isTransientProjectionError(error: unknown): boolean {
-  return error instanceof Error && error.name === 'RESOURCE_LIMIT'
+  return !(error instanceof Error && error.name === 'UNPROJECTABLE')
 }
 
 /** Read + decode one file (async), parse its frontmatter. Null if it isn't a saved meeting.

@@ -144,16 +144,26 @@ export function rewriteStoredSpeechTranscriptAsync(text: string, lines: Transcri
   )
 }
 
+function inlineProjects(text: string): boolean {
+  try {
+    publicMeetingText(text)
+    return true
+  } catch {
+    return false
+  }
+}
+
 export function publicMeetingTextAsync(text: string): Promise<string> {
   if (!persistence && !text.includes('metis-speech-')) return Promise.resolve(text)
   return workerOrInline(
     (service) => service.project(text),
     () => publicMeetingText(text)
   ).catch((error: unknown) => {
-    // The message stays generic, but a resource refusal keeps its name so History can tell it (retry later) from
-    // bytes that can never project.
+    // The message stays generic. Only bytes the deterministic inline projector also refuses are named
+    // UNPROJECTABLE (History caches that verdict); a worker refusal, crash or resource limit stays transient.
     const refused = new Error('Meeting text could not be projected safely.')
     if (error instanceof Error && error.name === 'RESOURCE_LIMIT') refused.name = 'RESOURCE_LIMIT'
+    else if (!inlineProjects(text)) refused.name = 'UNPROJECTABLE'
     return Promise.reject(refused)
   })
 }

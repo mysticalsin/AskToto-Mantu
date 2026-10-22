@@ -79,9 +79,10 @@ describe('History read cache budget', () => {
 })
 
 describe('History projection errors', () => {
-  it('treats only a resource-limit refusal as transient', () => {
+  it('caches only bytes the deterministic projector refuses; worker refusals and resource limits are retried', () => {
+    expect(isTransientProjectionError(Object.assign(new Error('x'), { name: 'UNPROJECTABLE' }))).toBe(false)
     expect(isTransientProjectionError(Object.assign(new Error('x'), { name: 'RESOURCE_LIMIT' }))).toBe(true)
-    expect(isTransientProjectionError(new Error('Meeting text could not be projected safely.'))).toBe(false)
-    expect(isTransientProjectionError('RESOURCE_LIMIT')).toBe(false)
+    expect(isTransientProjectionError(new Error('Meeting text could not be projected safely.'))).toBe(true)
+    expect(isTransientProjectionError('UNPROJECTABLE')).toBe(true)
   })
 })
