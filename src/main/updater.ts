@@ -115,7 +115,11 @@ const CHECK_TIMEOUT_MS = 8000
  *  Prerelease suffixes are ignored on purpose — the releases feed only ever carries plain x.y.z tags. */
 export function isNewerVersion(latest: string, current: string): boolean {
   const norm = (v: string): number[] =>
-    v.trim().replace(/^v/i, '').split('.').map((p) => Number.parseInt(p, 10) || 0)
+    v
+      .trim()
+      .replace(/^v/i, '')
+      .split('.')
+      .map((p) => Number.parseInt(p, 10) || 0)
   const a = norm(latest)
   const b = norm(current)
   for (let i = 0; i < Math.max(a.length, b.length); i++) {
@@ -158,8 +162,9 @@ export function latestReleaseHasApprovedInstallers(
 ): boolean {
   const names = releaseAssetNames(payload)
   if (platform === 'darwin') {
-    return [`Metis-${version}.dmg`, `Metis-${version}.zip`, 'latest-mac.yml']
-      .every((required) => names.includes(required))
+    return [`Metis-${version}.dmg`, `Metis-${version}.zip`, 'latest-mac.yml'].every((required) =>
+      names.includes(required)
+    )
   }
   if (platform === 'win32') {
     return [`Metis-Setup-${version}.exe`, 'latest.yml'].every((required) => names.includes(required))
@@ -186,7 +191,8 @@ export function parseLatestRelease(payload: unknown, current: string): UpdateChe
     return {
       ok: false,
       current,
-      error: 'The latest release is not yet fully published for this platform. Please try again after the next release upload.'
+      error:
+        'The latest release is not yet fully published for this platform. Please try again after the next release upload.'
     }
   }
   return {
@@ -224,7 +230,8 @@ export async function checkForUpdateNow(): Promise<UpdateCheckResult> {
       return {
         ok: false,
         current,
-        error: resp.status === 404 ? 'No published release found yet.' : `The release feed answered HTTP ${resp.status}.`
+        error:
+          resp.status === 404 ? 'No published release found yet.' : `The release feed answered HTTP ${resp.status}.`
       }
     }
     return parseLatestRelease(await resp.json(), current)
@@ -262,7 +269,10 @@ export async function startUpdateDownload(): Promise<UpdateDownloadStart> {
   const blocked = blockedUpdateChannel()
   if (blocked) return { started: false, reason: BLOCKED_MESSAGE[blocked] }
   if (process.platform === 'win32' && process.env.PORTABLE_EXECUTABLE_FILE) {
-    return { started: false, reason: 'This portable build cannot self-install — use the installer from the releases page.' }
+    return {
+      started: false,
+      reason: 'This portable build cannot self-install — use the installer from the releases page.'
+    }
   }
   if (!app.isPackaged) return { started: false, reason: 'In-app update is only available in the installed app.' }
   if ((process as NodeJS.Process & { mas?: boolean }).mas) {
@@ -390,7 +400,11 @@ export function initAutoUpdate(getWin: () => BrowserWindow | null): void {
           typeof raw === 'string'
             ? raw.trim() || undefined
             : Array.isArray(raw)
-              ? raw.map((x) => String(x?.note ?? '')).filter(Boolean).join('\n\n').trim() || undefined
+              ? raw
+                  .map((x) => String(x?.note ?? ''))
+                  .filter(Boolean)
+                  .join('\n\n')
+                  .trim() || undefined
               : undefined
         getWin()?.webContents.send(IPC.updateDownloaded, { version: i?.version, notes })
         // The OS notification checkForUpdatesAndNotify used to raise (see check() below for why it is

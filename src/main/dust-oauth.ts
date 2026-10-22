@@ -79,7 +79,10 @@ function decodeJwtPayload(jwt: string): Record<string, unknown> | null {
   try {
     const part = jwt.split('.')[1]
     if (!part) return null
-    const padded = part.replace(/-/g, '+').replace(/_/g, '/').padEnd(part.length + ((4 - (part.length % 4)) % 4), '=')
+    const padded = part
+      .replace(/-/g, '+')
+      .replace(/_/g, '/')
+      .padEnd(part.length + ((4 - (part.length % 4)) % 4), '=')
     return JSON.parse(Buffer.from(padded, 'base64').toString('utf8')) as Record<string, unknown>
   } catch {
     return null

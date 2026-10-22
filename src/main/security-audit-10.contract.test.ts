@@ -683,6 +683,7 @@ describe('Q11 — account and credential hygiene in index.ts', () => {
     const read = body.indexOf("getApiKey('dust')")
     expect(read).toBeGreaterThan(-1)
     expect(read).toBeLessThan(body.indexOf('clearApiKey(parsed.provider)'))
+    expect(body).toMatch(/seededDustTokenForDisconnect\(getSettings\(\)\.dustSessionOrigin, getApiKey\('dust'\)\)/)
     expect(body).toMatch(/clearSeededDustCliSession\(/)
     expect(body).toMatch(/retireDustOAuthSession\(\)/)
   })

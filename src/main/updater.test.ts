@@ -162,10 +162,7 @@ describe('parseLatestRelease — GitHub latest-release payload → UpdateCheckRe
       latestReleaseHasApprovedInstallers(
         {
           tag_name: 'v1.8.4',
-          assets: [
-            { name: 'Metis-1.8.4.dmg' },
-            { name: 'Metis-Setup-1.8.4.exe' }
-          ]
+          assets: [{ name: 'Metis-1.8.4.dmg' }, { name: 'Metis-Setup-1.8.4.exe' }]
         },
         '1.8.4',
         'linux'
@@ -196,13 +193,20 @@ describe('parseLatestRelease — GitHub latest-release payload → UpdateCheckRe
     { platform: 'win32', assets: ['Metis-Setup-1.8.4.exe'], ready: false },
     { platform: 'win32', assets: ['Metis-Setup-1.8.3.exe', 'latest.yml'], ready: false },
     { platform: 'win32', assets: ['Metis-1.8.4.dmg', 'Metis-1.8.4.zip', 'latest-mac.yml'], ready: false }
-  ] as const)('offers updates on $platform only when its versioned files are ready: $assets', ({ platform, assets, ready }) => {
+  ] as const)('offers updates on $platform only when its versioned files are ready: $assets', ({
+    platform,
+    assets,
+    ready
+  }) => {
     const restore = pinPlatform(platform)
     try {
-      const result = parseLatestRelease({
-        tag_name: 'v1.8.4',
-        assets: assets.map((name) => ({ name }))
-      }, '1.8.3')
+      const result = parseLatestRelease(
+        {
+          tag_name: 'v1.8.4',
+          assets: assets.map((name) => ({ name }))
+        },
+        '1.8.3'
+      )
       expect(result.ok).toBe(ready)
       if (ready) {
         expect(result.available).toBe(true)
@@ -371,18 +375,19 @@ describe('startUpdateDownload — Settings "Update now" in-app download guard', 
         tag_name: 'v99.0.0',
         draft: false,
         prerelease: false,
-        assets: [
-          { name: 'Metis-99.0.0.dmg' },
-          { name: 'Metis-99.0.0.zip' },
-          { name: 'latest-mac.yml' }
-        ]
+        assets: [{ name: 'Metis-99.0.0.dmg' }, { name: 'Metis-99.0.0.zip' }, { name: 'latest-mac.yml' }]
       })
     } as unknown as Response)
     const fake = new FakeAutoUpdater()
     fake.checkForUpdates.mockResolvedValue({ downloadPromise: Promise.resolve() })
     const moduleId = require.resolve('electron-updater')
     const previous = require.cache[moduleId]
-    require.cache[moduleId] = { id: moduleId, filename: moduleId, loaded: true, exports: { autoUpdater: fake } } as never
+    require.cache[moduleId] = {
+      id: moduleId,
+      filename: moduleId,
+      loaded: true,
+      exports: { autoUpdater: fake }
+    } as never
     try {
       const r = await startUpdateDownload()
       expect(r).toEqual({ started: true })
@@ -409,7 +414,12 @@ describe('startUpdateDownload — Settings "Update now" in-app download guard', 
     fake.checkForUpdates.mockResolvedValue({ downloadPromise: Promise.resolve() })
     const moduleId = require.resolve('electron-updater')
     const previous = require.cache[moduleId]
-    require.cache[moduleId] = { id: moduleId, filename: moduleId, loaded: true, exports: { autoUpdater: fake } } as never
+    require.cache[moduleId] = {
+      id: moduleId,
+      filename: moduleId,
+      loaded: true,
+      exports: { autoUpdater: fake }
+    } as never
     try {
       const r = await startUpdateDownload()
       expect(r).toEqual({ started: true })
@@ -443,7 +453,11 @@ describe('startUpdateDownload — Settings "Update now" in-app download guard', 
     try {
       vi.mocked(net.fetch).mockResolvedValueOnce({
         ok: true,
-        json: async () => ({ tag_name: 'v99.0.0', draft: true, html_url: 'https://github.com/mysticalsin/Metis-Releases/releases/tag/v99.0.0' })
+        json: async () => ({
+          tag_name: 'v99.0.0',
+          draft: true,
+          html_url: 'https://github.com/mysticalsin/Metis-Releases/releases/tag/v99.0.0'
+        })
       } as unknown as Response)
       const draft = await startUpdateDownload()
       expect(draft.started).toBe(false)
@@ -451,7 +465,11 @@ describe('startUpdateDownload — Settings "Update now" in-app download guard', 
 
       vi.mocked(net.fetch).mockResolvedValueOnce({
         ok: true,
-        json: async () => ({ tag_name: 'v99.0.0', prerelease: true, html_url: 'https://github.com/mysticalsin/Metis-Releases/releases/tag/v99.0.0' })
+        json: async () => ({
+          tag_name: 'v99.0.0',
+          prerelease: true,
+          html_url: 'https://github.com/mysticalsin/Metis-Releases/releases/tag/v99.0.0'
+        })
       } as unknown as Response)
       const pre = await startUpdateDownload()
       expect(pre.started).toBe(false)
@@ -501,7 +519,12 @@ describe('MQA-164 — a failed update download reaches the renderer', () => {
     // CJS cache with a fake AppUpdater instead, so both entry points get the same event emitter we drive.
     fake = new FakeAutoUpdater()
     moduleId = require.resolve('electron-updater')
-    require.cache[moduleId] = { id: moduleId, filename: moduleId, loaded: true, exports: { autoUpdater: fake } } as never
+    require.cache[moduleId] = {
+      id: moduleId,
+      filename: moduleId,
+      loaded: true,
+      exports: { autoUpdater: fake }
+    } as never
     // Both entry points bail early on darwin (see pinPlatform above), which would make every
     // assertion below vacuous on a Mac.
     restorePlatform = pinPlatform('linux')

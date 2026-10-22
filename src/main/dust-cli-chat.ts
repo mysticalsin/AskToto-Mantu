@@ -217,6 +217,16 @@ export async function ensureManagedDustCli(
 }
 
 /**
+ * The token Disconnect may clean out of the shared dust-cli keychain, or '' when it must not touch it. Only a
+ * session Métis minted itself (OAuth) was seeded by Métis. A session imported from the user's own CLI
+ * ("Import CLI session") holds the user's own login, so it is never cleaned, even though the tokens match.
+ * Read the origin BEFORE the disconnect resets it.
+ */
+export function seededDustTokenForDisconnect(origin: string | undefined, token: string): string {
+  return origin === 'oauth' ? token : ''
+}
+
+/**
  * Disconnect cleanup (D9-3): the Spotlight seed copies Métis's Dust token into the global `dust-cli`
  * keychain service, which survives a disconnect. Remove those items, but only while they still hold
  * `token` (Métis's token as it was before the key was cleared). Never throws and tolerates a missing CLI:

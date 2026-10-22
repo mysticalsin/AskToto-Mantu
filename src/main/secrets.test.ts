@@ -23,9 +23,7 @@ describe('secrets — AES-256-GCM file keystore', () => {
 
   beforeEach(() => {
     userData = mkdtempSync(join(tmpdir(), 'asktoto-secrets-test-'))
-    mockGetPath.mockImplementation((name: string) =>
-      name === 'userData' ? userData : join(userData, name)
-    )
+    mockGetPath.mockImplementation((name: string) => (name === 'userData' ? userData : join(userData, name)))
   })
 
   afterEach(() => {
@@ -104,16 +102,16 @@ describe('secrets — AES-256-GCM file keystore', () => {
       expect(readFileSync(keyFile())).toHaveLength(32)
     })
 
-    it.each(['key-openai.bin', 'auth-session.bin'])(
-      'D7-8 a write refuses to mint a new key while %s exists without a key file',
-      (existingFile) => {
-        // Minting here would silently orphan every secret already encrypted under the lost key.
-        writeFileSync(join(userData, existingFile), randomBytes(48))
-        expect(() => encryptSecret('another-secret')).toThrow(KeychainKeyRecoveryError)
-        expect(() => prepareFileKeyForWrite()).toThrow(KeychainKeyRecoveryError)
-        expect(readdirSync(userData)).toEqual([existingFile])
-      }
-    )
+    it.each([
+      'key-openai.bin',
+      'auth-session.bin'
+    ])('D7-8 a write refuses to mint a new key while %s exists without a key file', (existingFile) => {
+      // Minting here would silently orphan every secret already encrypted under the lost key.
+      writeFileSync(join(userData, existingFile), randomBytes(48))
+      expect(() => encryptSecret('another-secret')).toThrow(KeychainKeyRecoveryError)
+      expect(() => prepareFileKeyForWrite()).toThrow(KeychainKeyRecoveryError)
+      expect(readdirSync(userData)).toEqual([existingFile])
+    })
 
     it('D7-8 a plaintext settings.json alone never blocks the first key', () => {
       writeFileSync(join(userData, 'settings.json'), '{"onboarded":true}')

@@ -34,7 +34,8 @@ const mockOpenExternal = shell.openExternal as ReturnType<typeof vi.fn>
 /** header.payload.signature with only the payload meaningful — regionFromAccessToken never checks the
  *  signature (same trust boundary dust-cli itself uses: the token just arrived from WorkOS over TLS). */
 function fakeJwt(payload: Record<string, unknown>): string {
-  const b64url = (s: string): string => Buffer.from(s).toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
+  const b64url = (s: string): string =>
+    Buffer.from(s).toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
   return `${b64url(JSON.stringify({ alg: 'none' }))}.${b64url(JSON.stringify(payload))}.sig`
 }
 
@@ -85,7 +86,10 @@ describe('dust-oauth', () => {
     })
 
     it('reports a clean error on a non-ok HTTP response, never throws', async () => {
-      vi.stubGlobal('fetch', vi.fn(async () => new Response('nope', { status: 500 })))
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(async () => new Response('nope', { status: 500 }))
+      )
       const r = await beginDustDeviceLogin()
       expect(r.ok).toBe(false)
       expect(r.error).toMatch(/500/)
@@ -93,14 +97,22 @@ describe('dust-oauth', () => {
     })
 
     it('reports a clean error on a malformed response (missing device_code)', async () => {
-      vi.stubGlobal('fetch', vi.fn(async () => jsonResponse({ user_code: 'X' })))
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(async () => jsonResponse({ user_code: 'X' }))
+      )
       const r = await beginDustDeviceLogin()
       expect(r.ok).toBe(false)
       expect(mockOpenExternal).not.toHaveBeenCalled()
     })
 
     it('reports a clean error on a network failure, never throws', async () => {
-      vi.stubGlobal('fetch', vi.fn(async () => { throw new Error('offline') }))
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(async () => {
+          throw new Error('offline')
+        })
+      )
       const r = await beginDustDeviceLogin()
       expect(r.ok).toBe(false)
       expect(r.error).toMatch(/offline/)
@@ -109,42 +121,65 @@ describe('dust-oauth', () => {
 
   describe('pollDustDeviceLoginOnce', () => {
     it('resolves pending on authorization_pending', async () => {
-      vi.stubGlobal('fetch', vi.fn(async () => jsonResponse({ error: 'authorization_pending' })))
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(async () => jsonResponse({ error: 'authorization_pending' }))
+      )
       expect(await pollDustDeviceLoginOnce('dc-1')).toEqual({ status: 'pending' })
     })
 
     it('resolves slow_down on slow_down', async () => {
-      vi.stubGlobal('fetch', vi.fn(async () => jsonResponse({ error: 'slow_down' })))
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(async () => jsonResponse({ error: 'slow_down' }))
+      )
       expect(await pollDustDeviceLoginOnce('dc-1')).toEqual({ status: 'slow_down' })
     })
 
     it('resolves expired on expired_token', async () => {
-      vi.stubGlobal('fetch', vi.fn(async () => jsonResponse({ error: 'expired_token' })))
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(async () => jsonResponse({ error: 'expired_token' }))
+      )
       expect(await pollDustDeviceLoginOnce('dc-1')).toEqual({ status: 'expired' })
     })
 
     it('resolves error with the description on any other error code', async () => {
-      vi.stubGlobal('fetch', vi.fn(async () => jsonResponse({ error: 'access_denied', error_description: 'user declined' })))
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(async () => jsonResponse({ error: 'access_denied', error_description: 'user declined' }))
+      )
       expect(await pollDustDeviceLoginOnce('dc-1')).toEqual({ status: 'error', error: 'user declined' })
     })
 
     it('resolves ok with the tokens and the region decoded from the access token', async () => {
       const accessToken = fakeJwt({ sub: 'user-1', 'https://dust.tt/region': 'europe-west1' })
-      vi.stubGlobal('fetch', vi.fn(async () => jsonResponse({ access_token: accessToken, refresh_token: 'rt-1' })))
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(async () => jsonResponse({ access_token: accessToken, refresh_token: 'rt-1' }))
+      )
       const r = await pollDustDeviceLoginOnce('dc-1')
       expect(r).toEqual({ status: 'ok', accessToken, refreshToken: 'rt-1', region: 'europe-west1' })
     })
 
     it('defaults to us-central1 when the access token carries no region claim', async () => {
       const accessToken = fakeJwt({ sub: 'user-1' })
-      vi.stubGlobal('fetch', vi.fn(async () => jsonResponse({ access_token: accessToken, refresh_token: 'rt-1' })))
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(async () => jsonResponse({ access_token: accessToken, refresh_token: 'rt-1' }))
+      )
       const r = await pollDustDeviceLoginOnce('dc-1')
       expect(r.status).toBe('ok')
       expect((r as { region: string }).region).toBe('us-central1')
     })
 
     it('never throws on a network failure', async () => {
-      vi.stubGlobal('fetch', vi.fn(async () => { throw new Error('offline') }))
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(async () => {
+          throw new Error('offline')
+        })
+      )
       const r = await pollDustDeviceLoginOnce('dc-1')
       expect(r.status).toBe('error')
     })
@@ -193,7 +228,12 @@ describe('dust-oauth', () => {
   describe('retireDustOAuthSession', () => {
     it('a hand-pasted key leaves the OAuth refresh branch and is never replaced by a re-minted token', async () => {
       resetDustOAuthRefreshCacheForTests()
-      completeDustOAuthLogin({ accessToken: 'oauth-at', refreshToken: 'oauth-rt', region: 'us-central1', workspaceId: 'ws-1' })
+      completeDustOAuthLogin({
+        accessToken: 'oauth-at',
+        refreshToken: 'oauth-rt',
+        region: 'us-central1',
+        workspaceId: 'ws-1'
+      })
       setApiKey('dust', 'qa-only-pasted-key') // what the setApiKey IPC does with the pasted value
       const fetchSpy = vi.fn(async () => jsonResponse({ access_token: 'should-not-win', refresh_token: 'x' }))
       vi.stubGlobal('fetch', fetchSpy)
@@ -222,8 +262,16 @@ describe('dust-oauth', () => {
     })
 
     it('rotates the refresh token BEFORE reporting success, and returns the new access token', async () => {
-      completeDustOAuthLogin({ accessToken: 'old-at', refreshToken: 'old-rt', region: 'us-central1', workspaceId: 'ws-1' })
-      vi.stubGlobal('fetch', vi.fn(async () => jsonResponse({ access_token: 'new-at', refresh_token: 'new-rt' })))
+      completeDustOAuthLogin({
+        accessToken: 'old-at',
+        refreshToken: 'old-rt',
+        region: 'us-central1',
+        workspaceId: 'ws-1'
+      })
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(async () => jsonResponse({ access_token: 'new-at', refresh_token: 'new-rt' }))
+      )
       const r = await refreshDustOAuthSession()
       expect(r).toEqual({ ok: true, token: 'new-at' })
       expect(getApiKey('dust')).toBe('new-at')
@@ -236,8 +284,16 @@ describe('dust-oauth', () => {
     // reported as a failure, the new access token was never stored, and the old (already burned) refresh
     // token stayed on disk — leaving the session unrecoverable until a full re-login.
     it('MQA-136: succeeds when the server rotates no refresh token, keeping the existing one', async () => {
-      completeDustOAuthLogin({ accessToken: 'old-at', refreshToken: 'old-rt', region: 'us-central1', workspaceId: 'ws-1' })
-      vi.stubGlobal('fetch', vi.fn(async () => jsonResponse({ access_token: 'new-at' })))
+      completeDustOAuthLogin({
+        accessToken: 'old-at',
+        refreshToken: 'old-rt',
+        region: 'us-central1',
+        workspaceId: 'ws-1'
+      })
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(async () => jsonResponse({ access_token: 'new-at' }))
+      )
       const r = await refreshDustOAuthSession()
       expect(r).toEqual({ ok: true, token: 'new-at' })
       expect(getApiKey('dust')).toBe('new-at')
@@ -245,15 +301,28 @@ describe('dust-oauth', () => {
     })
 
     it('MQA-136: treats a 200 with no access token as a failure rather than storing an empty credential', async () => {
-      completeDustOAuthLogin({ accessToken: 'old-at', refreshToken: 'old-rt', region: 'us-central1', workspaceId: 'ws-1' })
-      vi.stubGlobal('fetch', vi.fn(async () => jsonResponse({ refresh_token: 'new-rt' })))
+      completeDustOAuthLogin({
+        accessToken: 'old-at',
+        refreshToken: 'old-rt',
+        region: 'us-central1',
+        workspaceId: 'ws-1'
+      })
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(async () => jsonResponse({ refresh_token: 'new-rt' }))
+      )
       const r = await refreshDustOAuthSession()
       expect(r.ok).toBe(false)
       expect(getApiKey('dust')).toBe('old-at') // unchanged
     })
 
     it('is single-flight: two concurrent callers share one network call', async () => {
-      completeDustOAuthLogin({ accessToken: 'old-at', refreshToken: 'old-rt', region: 'us-central1', workspaceId: 'ws-1' })
+      completeDustOAuthLogin({
+        accessToken: 'old-at',
+        refreshToken: 'old-rt',
+        region: 'us-central1',
+        workspaceId: 'ws-1'
+      })
       let calls = 0
       vi.stubGlobal(
         'fetch',
@@ -269,7 +338,12 @@ describe('dust-oauth', () => {
     })
 
     it('caches a successful result for a short window instead of refreshing again immediately', async () => {
-      completeDustOAuthLogin({ accessToken: 'old-at', refreshToken: 'old-rt', region: 'us-central1', workspaceId: 'ws-1' })
+      completeDustOAuthLogin({
+        accessToken: 'old-at',
+        refreshToken: 'old-rt',
+        region: 'us-central1',
+        workspaceId: 'ws-1'
+      })
       let calls = 0
       vi.stubGlobal(
         'fetch',
@@ -284,16 +358,34 @@ describe('dust-oauth', () => {
     })
 
     it('clears the refresh token on a burned/expired (400/401) response so a dead token is never retried', async () => {
-      completeDustOAuthLogin({ accessToken: 'old-at', refreshToken: 'old-rt', region: 'us-central1', workspaceId: 'ws-1' })
-      vi.stubGlobal('fetch', vi.fn(async () => jsonResponse({ error: 'invalid_grant' }, 400)))
+      completeDustOAuthLogin({
+        accessToken: 'old-at',
+        refreshToken: 'old-rt',
+        region: 'us-central1',
+        workspaceId: 'ws-1'
+      })
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(async () => jsonResponse({ error: 'invalid_grant' }, 400))
+      )
       const r = await refreshDustOAuthSession()
       expect(r.ok).toBe(false)
       expect(getDustRefreshToken()).toBe('')
     })
 
     it('never throws on a network failure', async () => {
-      completeDustOAuthLogin({ accessToken: 'old-at', refreshToken: 'old-rt', region: 'us-central1', workspaceId: 'ws-1' })
-      vi.stubGlobal('fetch', vi.fn(async () => { throw new Error('offline') }))
+      completeDustOAuthLogin({
+        accessToken: 'old-at',
+        refreshToken: 'old-rt',
+        region: 'us-central1',
+        workspaceId: 'ws-1'
+      })
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(async () => {
+          throw new Error('offline')
+        })
+      )
       const r = await refreshDustOAuthSession()
       expect(r.ok).toBe(false)
     })

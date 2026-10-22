@@ -31,6 +31,7 @@ import {
   buildDustSpotlightChatArgv,
   classifyDustCliChatFailure,
   clearSeededDustCliSession,
+  seededDustTokenForDisconnect,
   dustChatArgvHasWithTools,
   dustChatEnv,
   messageForDustCliKind,
@@ -464,5 +465,22 @@ describe('clearSeededDustCliSession — disconnect cleanup of the shared dust-cl
       return child
     })
     await expect(clearSeededDustCliSession('qa-only-metis-token')).resolves.toEqual({ cleared: false })
+  })
+})
+
+describe('seededDustTokenForDisconnect — only Métis-seeded dust-cli items may be cleaned', () => {
+  it('returns the token only for a session Métis minted itself (OAuth origin)', () => {
+    expect(seededDustTokenForDisconnect('oauth', 'qa-only-metis-token')).toBe('qa-only-metis-token')
+  })
+
+  it("never returns a token for a session imported from the user's own CLI, even when the tokens match", () => {
+    // "Import CLI session" copies the user's dust-cli token into Métis, so the keychain items ARE the
+    // user's login. Disconnecting Métis must not log the user out of their own CLI.
+    expect(seededDustTokenForDisconnect('cli', 'qa-only-imported-cli-token')).toBe('')
+  })
+
+  it('returns nothing for an unknown origin or an empty token', () => {
+    expect(seededDustTokenForDisconnect(undefined, 'qa-only-token')).toBe('')
+    expect(seededDustTokenForDisconnect('oauth', '')).toBe('')
   })
 })

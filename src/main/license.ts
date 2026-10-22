@@ -80,7 +80,11 @@ function reclaimStaleRepairLock(lockPath: string): boolean {
   // then accidentally removing one another's new lock. An unidentifiable/active owner stays locked.
   const recoveryPath = `${lockPath}.recover`
   let recovery: number
-  try { recovery = openSync(recoveryPath, 'wx', 0o600) } catch { return false }
+  try {
+    recovery = openSync(recoveryPath, 'wx', 0o600)
+  } catch {
+    return false
+  }
   try {
     const raw = readFileSync(lockPath, 'utf8')
     const owner: unknown = JSON.parse(raw)
@@ -95,8 +99,16 @@ function reclaimStaleRepairLock(lockPath: string): boolean {
   } catch {
     return false
   } finally {
-    try { closeSync(recovery) } catch { /* best effort */ }
-    try { rmSync(recoveryPath, { force: true }) } catch { /* fail closed on a stale recovery gate */ }
+    try {
+      closeSync(recovery)
+    } catch {
+      /* best effort */
+    }
+    try {
+      rmSync(recoveryPath, { force: true })
+    } catch {
+      /* fail closed on a stale recovery gate */
+    }
   }
 }
 
@@ -115,12 +127,18 @@ function acquireRepairLock(lockPath: string): (() => void) | null {
     return () => {
       try {
         if (readFileSync(lockPath, 'utf8') === owner) rmSync(lockPath)
-      } catch { /* fail closed if ownership changed */ }
+      } catch {
+        /* fail closed if ownership changed */
+      }
     }
   } catch {
     return null
   } finally {
-    try { rmSync(staged, { force: true }) } catch { /* best effort */ }
+    try {
+      rmSync(staged, { force: true })
+    } catch {
+      /* best effort */
+    }
   }
 }
 
@@ -136,7 +154,11 @@ function repairEmptyMachineId(path: string, id: string): void {
   } catch {
     // A missing/unwritable file is not durable. Retry on the next call without using this ID online.
   } finally {
-    try { rmSync(tempPath, { force: true }) } catch { /* best effort */ }
+    try {
+      rmSync(tempPath, { force: true })
+    } catch {
+      /* best effort */
+    }
     release()
   }
 }
@@ -438,7 +460,10 @@ export async function fetchLicenseConfig(serverUrl: string): Promise<LicenseConf
   const url = normalizeServerUrl(serverUrl)
   if (!isSecureLicenseServerUrl(url)) return { ok: false, error: 'insecure_url' }
   try {
-    const res = await fetch(`${url}/license/config`, { redirect: 'error', signal: AbortSignal.timeout(CONFIG_FETCH_TIMEOUT_MS) })
+    const res = await fetch(`${url}/license/config`, {
+      redirect: 'error',
+      signal: AbortSignal.timeout(CONFIG_FETCH_TIMEOUT_MS)
+    })
     const parsed = LicenseConfigResponseSchema.safeParse(await res.json())
     if (!parsed.success) return { ok: false, error: 'network' }
     return {

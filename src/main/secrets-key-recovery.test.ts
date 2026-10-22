@@ -92,17 +92,17 @@ describe('secrets — corrupt wrapped key recovery', () => {
   })
 
   describe('D7-8 a missing key file never silently mints a new key', () => {
-    it.each(['key-anthropic.bin', 'auth-session.bin'])(
-      'a missing key file with %s present refuses to mint',
-      async (existingFile) => {
-        writeFileSync(join(userData, existingFile), randomBytes(48))
-        const { encryptSecret, resetSecretKeyCache, KeychainKeyRecoveryError } = await import('./secrets')
-        resetSecretKeyCache()
+    it.each([
+      'key-anthropic.bin',
+      'auth-session.bin'
+    ])('a missing key file with %s present refuses to mint', async (existingFile) => {
+      writeFileSync(join(userData, existingFile), randomBytes(48))
+      const { encryptSecret, resetSecretKeyCache, KeychainKeyRecoveryError } = await import('./secrets')
+      resetSecretKeyCache()
 
-        expect(() => encryptSecret('brain-data')).toThrow(KeychainKeyRecoveryError)
-        expect(existsSync(join(userData, 'secret-key.bin'))).toBe(false)
-      }
-    )
+      expect(() => encryptSecret('brain-data')).toThrow(KeychainKeyRecoveryError)
+      expect(existsSync(join(userData, 'secret-key.bin'))).toBe(false)
+    })
 
     it('a plaintext settings.json alone does not block the first key', async () => {
       writeFileSync(join(userData, 'settings.json'), '{}')

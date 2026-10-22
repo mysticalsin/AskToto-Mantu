@@ -93,9 +93,7 @@ describe('license.ts — phone-home activation', () => {
 
   beforeEach(() => {
     ud = mkdtempSync(join(tmpdir(), 'asktoto-license-test-'))
-    ;(app.getPath as ReturnType<typeof vi.fn>).mockImplementation((n: string) =>
-      n === 'userData' ? ud : join(ud, n)
-    )
+    ;(app.getPath as ReturnType<typeof vi.fn>).mockImplementation((n: string) => (n === 'userData' ? ud : join(ud, n)))
     testSettings = baseSettings()
     setSettingsSpy.mockClear()
     fetchMock = vi.fn()
@@ -221,10 +219,15 @@ describe('license.ts — phone-home activation', () => {
     })
     it('activation normalizes a scheme-less URL before fetching AND persists the normalized form', async () => {
       testSettings = baseSettings()
-      fetchMock.mockResolvedValue(jsonResponse({ ok: true, companyName: 'Acme', seatCap: 5, seatsUsed: 1, expiresAt: null }))
+      fetchMock.mockResolvedValue(
+        jsonResponse({ ok: true, companyName: 'Acme', seatCap: 5, seatsUsed: 1, expiresAt: null })
+      )
       await activateLicense('127.0.0.1:8420', ' KEY-123 ')
       expect(fetchMock).toHaveBeenCalledWith('http://127.0.0.1:8420/activate', expect.anything())
-      expect(fetchMock).toHaveBeenCalledWith('http://127.0.0.1:8420/activate', expect.objectContaining({ redirect: 'error' }))
+      expect(fetchMock).toHaveBeenCalledWith(
+        'http://127.0.0.1:8420/activate',
+        expect.objectContaining({ redirect: 'error' })
+      )
       expect(testSettings.licenseServerUrl).toBe('http://127.0.0.1:8420')
       expect(testSettings.licenseKey).toBe('KEY-123') // trimmed
     })
@@ -246,7 +249,11 @@ describe('license.ts — phone-home activation', () => {
   })
 
   it('keeps a saved licence valid without sending it to an insecure remote HTTP server', async () => {
-    testSettings = baseSettings({ licenseServerUrl: 'http://licenses.acme.test', licenseKey: 'KEY-123', licenseValid: true })
+    testSettings = baseSettings({
+      licenseServerUrl: 'http://licenses.acme.test',
+      licenseKey: 'KEY-123',
+      licenseValid: true
+    })
 
     const result = await heartbeat()
 
@@ -407,7 +414,9 @@ describe('license.ts — phone-home activation', () => {
         licenseKey: 'GOOD-KEY',
         licenseLastValidatedAt: Date.now() - 10 * DAY
       })
-      fetchMock.mockResolvedValue(jsonResponse({ ok: true, companyName: 'Acme', seatCap: 5, seatsUsed: 1, expiresAt: null }))
+      fetchMock.mockResolvedValue(
+        jsonResponse({ ok: true, companyName: 'Acme', seatCap: 5, seatsUsed: 1, expiresAt: null })
+      )
 
       const r = checkLicenseGrace()
 
@@ -483,29 +492,31 @@ describe('license.ts — phone-home activation', () => {
       expect(testSettings.licenseValid).toBe(false)
     })
 
-    it.each(['revoked', 'expired', 'not_activated', 'invalid'] as const)(
-      'a %s heartbeat clears the lease and the gate denies',
-      async (verdict) => {
-        // D7-1: the signed lease outranks the licenseValid check in checkLicenseGrace, so an un-licensed
-        // device that kept its lease stayed allowed for up to the lease TTL.
-        testSettings = baseSettings({
-          licenseGateEnabled: true,
-          licenseValid: true,
-          licenseServerUrl: 'https://license.acme.test',
-          licenseKey: 'ATK-TEST1234',
-          licenseLastValidatedAt: Date.now() - 45 * DAY,
-          licenseLease: signTestLease({ notAfter: Date.now() + 10 * DAY })
-        })
-        expect(checkLicenseGrace().allowed).toBe(true)
-        fetchMock.mockResolvedValue(jsonResponse({ ok: false, error: verdict }))
+    it.each([
+      'revoked',
+      'expired',
+      'not_activated',
+      'invalid'
+    ] as const)('a %s heartbeat clears the lease and the gate denies', async (verdict) => {
+      // D7-1: the signed lease outranks the licenseValid check in checkLicenseGrace, so an un-licensed
+      // device that kept its lease stayed allowed for up to the lease TTL.
+      testSettings = baseSettings({
+        licenseGateEnabled: true,
+        licenseValid: true,
+        licenseServerUrl: 'https://license.acme.test',
+        licenseKey: 'ATK-TEST1234',
+        licenseLastValidatedAt: Date.now() - 45 * DAY,
+        licenseLease: signTestLease({ notAfter: Date.now() + 10 * DAY })
+      })
+      expect(checkLicenseGrace().allowed).toBe(true)
+      fetchMock.mockResolvedValue(jsonResponse({ ok: false, error: verdict }))
 
-        await heartbeat()
+      await heartbeat()
 
-        expect(testSettings.licenseValid).toBe(false)
-        expect(testSettings.licenseLease).toBe('')
-        expect(checkLicenseGrace()).toEqual({ allowed: false, reason: 'not_activated' })
-      }
-    )
+      expect(testSettings.licenseValid).toBe(false)
+      expect(testSettings.licenseLease).toBe('')
+      expect(checkLicenseGrace()).toEqual({ allowed: false, reason: 'not_activated' })
+    })
 
     it('a network failure keeps the lease: connectivity noise never un-licenses a device', async () => {
       const lease = signTestLease({ notAfter: Date.now() + 10 * DAY })
@@ -834,7 +845,10 @@ describe('license.ts — phone-home activation', () => {
 
       expect(r).toEqual({ ok: true, licenseEnforcement: false, licenseUiEnabled: false, drift: false })
       expect(fetchMock).toHaveBeenCalledWith('https://license.acme.test/license/config', expect.anything())
-      expect(fetchMock).toHaveBeenCalledWith('https://license.acme.test/license/config', expect.objectContaining({ redirect: 'error' }))
+      expect(fetchMock).toHaveBeenCalledWith(
+        'https://license.acme.test/license/config',
+        expect.objectContaining({ redirect: 'error' })
+      )
     })
 
     it('normalizes a scheme-less URL before fetching, same convention as activate/heartbeat', async () => {

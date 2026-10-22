@@ -869,7 +869,7 @@ import { initAutoUpdate, checkForUpdateNow, startUpdateDownload } from './update
 import { runSelfTest, redirectSelfTestUserData } from './selftest'
 import { devEnv, devToolsEnabled } from './dev-env'
 import { importDustCliSession, refreshDustCliSession } from './dustcli'
-import { clearSeededDustCliSession, ensureManagedDustCli } from './dust-cli-chat'
+import { clearSeededDustCliSession, ensureManagedDustCli, seededDustTokenForDisconnect } from './dust-cli-chat'
 import { abortAllAskStreams, boundedAnswerAskId } from './ask-stream-registry'
 import {
   beginDustDeviceLogin,
@@ -6374,7 +6374,8 @@ function registerIpc(): void {
     assertMainWindow(e)
     if (!requireAuth()) return { hasKeys: hasKeysMap() }
     const parsed = ClearApiKeyPayloadSchema.parse(payload)
-    const seededDustToken = parsed.provider === 'dust' ? getApiKey('dust') : '' // read before it is cleared
+    const seededDustToken =
+      parsed.provider === 'dust' ? seededDustTokenForDisconnect(getSettings().dustSessionOrigin, getApiKey('dust')) : '' // read before the clear
     clearApiKey(parsed.provider)
     resetProviderHealth(parsed.provider) // same reason as setApiKey above
     resetHeadroom(parsed.provider)
