@@ -1,6 +1,6 @@
 import { useId, useState } from 'react'
 import { AlertCircle, Check, CircleCheck, FolderCog, FolderOpen, X } from 'lucide-react'
-import type { MeetingsFolderPickResult } from '@shared/contracts/settings-os-state'
+import type { MeetingsFolderPickResult, TeamFolderRefusal } from '@shared/contracts/settings-os-state'
 import type { PublicSettings } from '@shared/ipc'
 import { isWindows } from '../../lib/keys'
 import { unreportedPatch } from '../../lib/report-settings-patch'
@@ -20,6 +20,11 @@ export function meetingsFolderPickError(result: MeetingsFolderPickResult): strin
   return 'Sign in with your Mantu account first.'
 }
 
+/** Inline reason a picked team folder was refused; null for a settings snapshot (added, cancelled, signed out). */
+export function teamFolderAddError(result: PublicSettings | TeamFolderRefusal): string | null {
+  return 'ok' in result && result.ok === false ? result.message : null
+}
+
 export const FOLDER_CHANGED_NOTE =
   'Meetings already in the previous folder stay there. Métis now saves, lists and cleans up only this folder.'
 
@@ -36,6 +41,8 @@ export function MeetingsTab({
   const [meetingsFolderErr, setMeetingsFolderErr] = useState<string | null>(null)
   // HIG (Settings): a refused folder is explained next to its control and the last valid folder stays.
   const [folderPickErr, setFolderPickErr] = useState<string | null>(null)
+  const [teamFolderErr, setTeamFolderErr] = useState<string | null>(null)
+  const teamFolderErrId = useId()
   // After a successful change: old meetings are not moved, listed or cleaned up any more (multi-folder
   // management is a later release), so say so instead of leaving it to be discovered.
   const [folderChangedNote, setFolderChangedNote] = useState(false)
@@ -166,8 +173,9 @@ export function MeetingsTab({
             <button
               type="button"
               disabled={settings.managedKeys.includes('teamTranscriptFolders')}
+              aria-describedby={teamFolderErr ? teamFolderErrId : undefined}
               onClick={async () => {
-                await window.toto.addTeamTranscriptFolder()
+                setTeamFolderErr(teamFolderAddError(await window.toto.addTeamTranscriptFolder()))
                 refreshSettings()
               }}
               className={[
@@ -177,6 +185,15 @@ export function MeetingsTab({
             >
               <FolderCog size={12} /> Add shared folder
             </button>
+            {teamFolderErr && (
+              <div
+                id={teamFolderErrId}
+                role="alert"
+                className="mt-1.5 flex items-center gap-1.5 text-[11px] text-[color:var(--cl-destructive)]"
+              >
+                <AlertCircle size={12} className="shrink-0" aria-hidden="true" /> {teamFolderErr}
+              </div>
+            )}
           </div>
         </div>
         <div className="mt-2">
