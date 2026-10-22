@@ -106,6 +106,7 @@ import {
   type PreservedBrainIndexListResult
 } from '@shared/ipc'
 import type { ScreenRepairResult } from '@shared/screen-permission'
+import type { ScreenScope } from '@shared/screen-observation'
 import type { RightEdgeState, RightEdgeSurfaceState } from '@shared/right-edge-state'
 import type { ProviderId } from '@shared/providers'
 import type { RecapStatus } from '@shared/recap-status'
@@ -418,7 +419,7 @@ const api = {
   // "New chat": resets main-owned conversation state (server-side Dust conversation + follow-up-memory
   // idle clock). Callers clear the renderer-side history refs themselves.
   resetAskContext: (): Promise<void> => ipcRenderer.invoke(IPC.askResetContext),
-  capture: (): Promise<CaptureResult> => ipcRenderer.invoke(IPC.captureScreen),
+  capture: (scope?: ScreenScope): Promise<CaptureResult> => ipcRenderer.invoke(IPC.captureScreen, scope),
   prewarmCapture: (): Promise<void> => ipcRenderer.invoke(IPC.prewarmCapture),
   // Fast-path for a screen-ask: ask main whether it already has a fresh, on-device description of the
   // current screen. Non-null → skip the capture and let main inject that context into a mode:'answer' ask.

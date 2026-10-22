@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { afterEach, describe, it, expect, vi, beforeEach } from 'vitest'
 import { createScreenPreprocess, fnv1a, type ScreenPreprocessDeps } from './screen-preprocess'
 import type { ForegroundInfo, ForegroundWatcher } from './foreground-watcher'
 
@@ -20,6 +20,8 @@ function makeHarness(init?: {
   /** macOS Screen Recording (TCC) grant. Omit entirely for the Windows wiring, where index.ts leaves the
    *  dep undefined because there is no queryable screen grant and a capture raises no prompt. */
   screenCaptureGranted?: boolean
+  /** Wire the screen-observation generation, as index.ts does (G16). */
+  observation?: boolean
 }) {
   let clock = 1_000_000
   const state = {
@@ -40,7 +42,12 @@ function makeHarness(init?: {
     currentDisplayId: 1,
     displayMismatch: false,
     /** When set, every capture rejects with this message (a permission that is not in effect). */
-    captureError: null as string | null
+    captureError: null as string | null,
+    captureErrorName: 'Error',
+    /** The observation generation main reports (G16), and hooks that revoke while work is pending. */
+    generation: 0,
+    duringOcr: null as (() => void) | null,
+    duringFetch: null as (() => void) | null
   }
   const audits: { event: string; data?: Record<string, unknown> }[] = []
   let ocrCalls = 0
@@ -52,6 +59,7 @@ function makeHarness(init?: {
 
   const fetchImpl = vi.fn(async () => {
     fetchCalls++
+    state.duringFetch?.()
     return {
       ok: true,
       json: async () => ({ choices: [{ message: { content: state.describeBody } }] })
@@ -63,16 +71,22 @@ function makeHarness(init?: {
     // Recording grant is still `not-determined` is what registers the app with TCC (MQA-209).
     getScreenshot: async () => {
       shots++
-      if (state.captureError) throw new Error(state.captureError)
+      if (state.captureError) {
+        const failure = new Error(state.captureError)
+        failure.name = state.captureErrorName
+        throw failure
+      }
       return {
         image: state.image,
         width: 1280,
         height: 800,
         capturedAt: clock,
         dispId: state.dispId,
-        displayMismatch: state.displayMismatch
+        displayMismatch: state.displayMismatch,
+        ...(init?.observation ? { observation: { generation: state.generation } } : {})
       }
     },
+    observationGeneration: init?.observation ? () => state.generation : undefined,
     getSettings: () => ({
       backgroundScreenContext: state.backgroundScreenContext,
       localLlm: { enabled: true, modelId: 'qwen3.5-0.8b' }
@@ -100,13 +114,13 @@ function makeHarness(init?: {
     extractScreenText: init?.withOcr
       ? async () => {
           ocrCalls++
+          state.duringOcr?.()
           if (state.ocrThrow) throw new Error('helper died')
           return state.ocrText
         }
       : undefined,
     // Wired only when the test asks for it, mirroring index.ts: the dep exists on darwin and nowhere else.
-    screenCaptureGranted:
-      init?.screenCaptureGranted === undefined ? undefined : () => state.screenCaptureGranted,
+    screenCaptureGranted: init?.screenCaptureGranted === undefined ? undefined : () => state.screenCaptureGranted,
     fetchImpl,
     now: () => clock,
     log: () => {},
@@ -365,19 +379,22 @@ describe('createScreenPreprocess — OCR-first hybrid (mac Vision helper)', () =
 })
 
 describe('createScreenPreprocess — OCR available without the local LLM (Qwen not enabled/provisioned)', () => {
-  it('localReady=false + OCR present + OCR returns text: engine is eligible, caches the OCR extract, ' +
-    'never calls the VLM endpoint or spins up the local runtime', async () => {
-    const h = makeHarness({ withOcr: true, localReady: false })
-    h.state.ocrText = "Text visible on the user's screen (OCR extract, top to bottom):\nQ3 pipeline review"
-    h.sp.refresh()
-    expect(h.sp.isActive()).toBe(true) // eligible on OCR alone, despite localReady=false
-    h.setWindow('w1')
-    await h.sp._test.describeForWindow('w1')
-    expect(h.ocrCalls()).toBe(1)
-    expect(h.peek()?.description).toContain('Q3 pipeline review')
-    expect(h.fetchCalls()).toBe(0) // VLM never called
-    expect(h.ensureStarted).not.toHaveBeenCalled() // local runtime never spun up
-  })
+  it(
+    'localReady=false + OCR present + OCR returns text: engine is eligible, caches the OCR extract, ' +
+      'never calls the VLM endpoint or spins up the local runtime',
+    async () => {
+      const h = makeHarness({ withOcr: true, localReady: false })
+      h.state.ocrText = "Text visible on the user's screen (OCR extract, top to bottom):\nQ3 pipeline review"
+      h.sp.refresh()
+      expect(h.sp.isActive()).toBe(true) // eligible on OCR alone, despite localReady=false
+      h.setWindow('w1')
+      await h.sp._test.describeForWindow('w1')
+      expect(h.ocrCalls()).toBe(1)
+      expect(h.peek()?.description).toContain('Q3 pipeline review')
+      expect(h.fetchCalls()).toBe(0) // VLM never called
+      expect(h.ensureStarted).not.toHaveBeenCalled() // local runtime never spun up
+    }
+  )
 
   it('localReady=false + OCR present + OCR returns null: caches nothing, no fetch, no crash', async () => {
     const h = makeHarness({ withOcr: true, localReady: false })
@@ -629,5 +646,110 @@ describe('createScreenPreprocess — failing captures back off instead of stormi
     }
     expect(h.shots()).toBe(10)
     expect(h.audits.some((a) => a.event === 'screen.preprocess.suspended')).toBe(false)
+  })
+})
+
+describe('createScreenPreprocess — a revoked observation drops pending work and its result (G16)', () => {
+  it('drops a description whose capture was revoked while the on-device OCR was running', async () => {
+    const h = makeHarness({ withOcr: true, observation: true })
+    h.sp.refresh()
+    h.setWindow('w1')
+    h.state.ocrText = 'Quarterly numbers, synthetic'
+    h.state.duringOcr = () => {
+      h.state.generation += 1 // sign-out, lock, Private View or a revoked permission lands mid-OCR
+    }
+    await h.sp._test.describeForWindow('w1')
+    expect(h.peek()).toBeNull()
+    expect(h.sp.currentFreshContext()).toBeNull()
+    expect(h.audits.some((a) => a.event === 'capture.dropped')).toBe(true)
+  })
+
+  it('drops a description whose capture was revoked while the local describe request was in flight', async () => {
+    const h = makeHarness({ observation: true })
+    h.sp.refresh()
+    h.setWindow('w1')
+    h.state.duringFetch = () => {
+      h.state.generation += 1
+    }
+    await h.sp._test.describeForWindow('w1')
+    expect(h.fetchCalls()).toBe(1)
+    expect(h.peek()).toBeNull()
+  })
+
+  it('stops serving a cached description the moment the generation moves, and forgets it', async () => {
+    const h = makeHarness({ observation: true })
+    h.sp.refresh()
+    h.setWindow('w1')
+    await h.sp._test.describeForWindow('w1')
+    expect(h.sp.currentFreshContext()).not.toBeNull()
+    h.state.generation += 1
+    expect(h.sp.currentFreshContext()).toBeNull()
+    expect(h.peek()).toBeNull()
+  })
+
+  it('does not re-stamp a description that predates the revocation just because the pixels are unchanged', async () => {
+    const h = makeHarness({ observation: true })
+    h.sp.refresh()
+    h.setWindow('w1')
+    await h.sp._test.describeForWindow('w1')
+    h.state.generation += 1
+    h.advance(3_000)
+    await h.sp._test.describeForWindow('w1')
+    expect(h.fetchCalls()).toBe(2) // described again under the new generation
+    expect(h.sp.currentFreshContext()).not.toBeNull()
+  })
+
+  it('still behaves exactly as before when no observation generation is wired', async () => {
+    const h = makeHarness()
+    h.sp.refresh()
+    h.setWindow('w1')
+    await h.sp._test.describeForWindow('w1')
+    expect(h.sp.currentFreshContext()).not.toBeNull()
+  })
+
+  it('a refusal from the observation gate (locked, idle) is not a failure and never feeds the backoff', async () => {
+    const h = makeHarness({ observation: true })
+    h.sp.refresh()
+    h.setWindow('w1')
+    h.state.captureError = 'Métis does not capture the screen while it is locked.'
+    h.state.captureErrorName = 'ScreenObservationRefusedError'
+    for (let i = 0; i < 10; i++) {
+      await h.sp._test.describeForWindow('w1')
+      h.advance(6_000)
+    }
+    expect(h.shots()).toBe(10) // never suspended
+    expect(h.audits.some((a) => a.event === 'screen.preprocess.suspended')).toBe(false)
+  })
+})
+
+describe('createScreenPreprocess — idle captures nothing (G16)', () => {
+  beforeEach(() => vi.useFakeTimers())
+  afterEach(() => vi.useRealTimers())
+
+  it('with the default setting (background screen context off) an hour of nothing never captures', async () => {
+    const h = makeHarness({ backgroundScreenContext: false, observation: true })
+    h.sp.refresh()
+    await vi.advanceTimersByTimeAsync(60 * 60 * 1000)
+    expect(h.sp.isActive()).toBe(false)
+    expect(h.shots()).toBe(0)
+  })
+
+  it('opted in but with no foreground change observed, the armed engine still never captures', async () => {
+    const h = makeHarness({ observation: true })
+    h.sp.refresh()
+    expect(h.sp.isActive()).toBe(true)
+    await vi.advanceTimersByTimeAsync(10 * 60 * 1000)
+    expect(h.shots()).toBe(0)
+  })
+
+  it('signing out stops the engine and a later hour captures nothing', async () => {
+    const h = makeHarness({ observation: true })
+    h.sp.refresh()
+    h.setWindow('w1')
+    h.state.authorized = false
+    h.sp.refresh()
+    await vi.advanceTimersByTimeAsync(60 * 60 * 1000)
+    expect(h.sp.isActive()).toBe(false)
+    expect(h.shots()).toBe(0)
   })
 })

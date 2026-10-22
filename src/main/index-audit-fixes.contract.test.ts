@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
+import { readModuleSource } from '../test-helpers/module-source'
 import { sourceIndexOf } from '../../scripts/lib/source-layout'
 import { ipcModuleSource } from '../../scripts/lib/ipc-module-source'
 
@@ -384,14 +385,18 @@ describe('MQA-081 — a wrong-monitor capture is flagged and keyed to the displa
   it('carries the flag AND the captured display out to the caller, through the cache as well as a fresh capture', () => {
     // MQA-183 added dispId to the same two returns: a consumer that CACHES a derived artifact (the
     // background screen description) needs to know which monitor the frame was of, not just that main
-    // noticed a mismatch. Both fields travel on both paths or the cache-hit path silently drops them.
+    // noticed a mismatch. Since G16 the cache and the return live in features/screen-observation: the frame
+    // type keeps both fields, and the reused shot and the fresh shot are both built from the whole frame.
     expect(indexSrc).toMatch(/type CapturedScreen = \{[^}]*displayMismatch: boolean/)
-    expect(indexSrc).toMatch(/return \{ image, width, height, capturedAt: ts, dispId, displayMismatch \}/)
-    expect(indexSrc).toMatch(/return \{ image, width, height, capturedAt, dispId, displayMismatch \}/)
+    const observationSrc = readModuleSource(__dirname, './features/screen-observation/screen-observation').text
+    expect(observationSrc).toMatch(/interface CapturedFrame \{[^}]*dispId: number[^}]*displayMismatch: boolean/)
+    expect(observationSrc).toMatch(/const shot: ScreenShot = \{ \.\.\.frame, capturedAt, observation \}/)
+    expect(observationSrc).toMatch(/return reusable\.shot/)
   })
 
   it('keeps the "captured a different display" guard as a real check, not a tautology', () => {
-    expect(indexSrc).toMatch(/if \(shot\.dispId !== disp\.id && !shot\.displayMismatch\)/)
+    const observationSrc = readModuleSource(__dirname, './features/screen-observation/screen-observation').text
+    expect(observationSrc).toMatch(/if \(frame\.dispId !== displayId && !frame\.displayMismatch\)/)
   })
 })
 

@@ -609,12 +609,11 @@ import { registerQuitIpc } from './ipc/quit-ipc'
 import { QA_IDENTITY_BUILD, installQaFaultHook } from './qa-hooks'
 import { installQaCaptureSource } from './qa-capture-source'
 import { resetDustConversation, prewarmDustConversation, isDustAuthError } from './llm/dust'
-import {
-  createKeyedSingleFlight,
-  getScreenSourcesWithRetry,
-  isUsableScreenSource,
-  screenCaptureUnavailableMessage
-} from './screen-capture'
+import { getScreenSourcesWithRetry, isUsableScreenSource, screenCaptureUnavailableMessage } from './screen-capture'
+import { cropNormalizedRegion } from './features/screen-observation/crop'
+import { installScreenObservationLifecycle } from './features/screen-observation/lifecycle'
+import { captureReasonForPhase, createScreenObservation } from './features/screen-observation/screen-observation'
+import { ScreenScopeSchema, type ScreenRegion, type ScreenScope } from '@shared/screen-observation'
 import {
   enqueueIngest,
   exciseDeletedMeeting,
@@ -854,7 +853,8 @@ import {
   getPlatformPermissions,
   permissionAskTargets,
   probeScreenCapture,
-  noteScreenCaptureOutcome
+  noteScreenCaptureOutcome,
+  windowsScreenStatus
 } from './platform-perms'
 import { collectVisionStream, runScreenCaptureCheck } from './screen-capture-check'
 import { VISION_CHECK_PROMPT, VISION_CHECK_SYSTEM, isApiVisionCandidate } from '@shared/screen-capture-check'
@@ -1256,6 +1256,7 @@ function setListeningActive(on: boolean): void {
   }
   if (listeningActive === on) return
   listeningActive = on
+  if (!on) screenObservation.revoke('session-ended') // a stopped session cannot publish a late screen answer
   speechPackCaptureRevision += 1
   speechPackDesktop?.refresh()
   rebuildTrayMenu()
@@ -4583,22 +4584,10 @@ function handleSmokeReopenProbe(commandLine: readonly string[]): boolean {
   return true
 }
 
-// --- Screen capture (cached + pre-warmable for vision latency) -----------------------------------------
-// A vision ask issued within CAPTURE_TTL_MS of a (pre-warmed) capture reuses the JPEG instead of paying the
-// ~150-450ms capture cost again. 4s covers hover→click and shortcut→Enter without showing a visibly stale
-// frame; Private View / display-id checks still refuse a bad send.
-const CAPTURE_TTL_MS = 4000
-let shotCache: {
-  image: string
-  width: number
-  height: number
-  dispId: number
-  displayMismatch: boolean
-  ts: number
-} | null = null
+// --- Screen capture (identity, revocation and reuse live in features/screen-observation) --------------------
 type CapturedScreen = { image: string; width: number; height: number; dispId: number; displayMismatch: boolean }
 
-async function captureScreenshotOnce(displayId: number): Promise<CapturedScreen> {
+async function captureScreenshotOnce(displayId: number, region?: ScreenRegion): Promise<CapturedScreen> {
   const disp = screen.getAllDisplays().find(({ id }) => id === displayId)
   if (!disp) throw new Error('The selected display changed before Métis could capture it. Try again.')
   const sf = disp.scaleFactor || 1
@@ -4608,7 +4597,7 @@ async function captureScreenshotOnce(displayId: number): Promise<CapturedScreen>
   const VISION_JPEG_Q = 72
   const fullW = Math.round(disp.size.width * sf)
   const fullH = Math.round(disp.size.height * sf)
-  const capScale = Math.min(1, VISION_MAX_EDGE / Math.max(fullW, fullH))
+  const capScale = region ? 1 : Math.min(1, VISION_MAX_EDGE / Math.max(fullW, fullH)) // a region is cropped at full resolution first
   const thumbnailSize = {
     width: Math.max(1, Math.round(fullW * capScale)),
     height: Math.max(1, Math.round(fullH * capScale))
@@ -4654,6 +4643,7 @@ async function captureScreenshotOnce(displayId: number): Promise<CapturedScreen>
     throw new Error(screenCaptureUnavailableMessage(process.platform, status))
   }
   let img = src.thumbnail
+  if (region) img = cropNormalizedRegion(img, region)
   const sz = img.getSize()
   const maxEdge = Math.max(sz.width, sz.height)
   if (maxEdge > VISION_MAX_EDGE) {
@@ -4681,9 +4671,6 @@ async function captureScreenshotOnce(displayId: number): Promise<CapturedScreen>
   return { image: jpeg.toString('base64'), width: size.width, height: size.height, dispId, displayMismatch }
 }
 
-/** Share a native capture only between pre-warm and click requests for the same display. */
-const captureScreenshot = createKeyedSingleFlight<number, CapturedScreen>(captureScreenshotOnce)
-
 /** The one wording for the one promise. getScreenshot() throws it when Private View blocks a LIVE capture;
  *  IPC.askStart sends it verbatim when it refuses an already-captured frame (MQA-182). Keeping both on the
  *  same string is what lets the renderer's /private view/i copy paths recognise either one. */
@@ -4699,70 +4686,21 @@ class PrivateViewBlockedError extends Error {
   }
 }
 
-async function getScreenshot(phase?: string): Promise<{
-  image: string
-  width: number
-  height: number
-  capturedAt: number
-  dispId: number
-  displayMismatch: boolean
-}> {
-  // Private View promises Métis won't look at (or send) the screen while it's on — that has to mean
-  // this app's own capture pipeline refuses to run, not just that OTHER apps can't screen-share our window
-  // (that's the separate, still-active setContentProtection() call on the BrowserWindow itself).
-  // AUDIT the block: a run of user-invisible capture failures used to leave zero trace in the audit log,
-  // which made "couldn't capture my screen" reports undiagnosable after the fact.
-  if (privateViewOn()) {
-    // Prewarm is an opportunistic cache-fill fired on every ask-input focus — auditing its blocks/
-    // failures would write a log line per focus while Private View is on (pure noise). Real asks audit.
-    if (phase !== 'prewarm') auditLog('capture.blocked', { reason: 'private_view', ...(phase ? { phase } : {}) })
-    throw new PrivateViewBlockedError()
-  }
-  const disp = screen.getDisplayNearestPoint(screen.getCursorScreenPoint())
-  if (shotCache && Date.now() - shotCache.ts < CAPTURE_TTL_MS && shotCache.dispId === disp.id) {
-    const { image, width, height, ts, dispId, displayMismatch } = shotCache
-    return { image, width, height, capturedAt: ts, dispId, displayMismatch }
-  }
-  let shot: CapturedScreen
-  try {
-    shot = await captureScreenshot(disp.id)
-  } catch (e) {
-    if (phase !== 'prewarm') {
-      auditLog('capture.failed', {
-        reason: e instanceof Error ? e.message : String(e),
-        ...(phase ? { phase } : {})
-      })
-    }
-    throw e
-  }
-  // A drift we DETECTED and flagged is handed to the renderer as the documented soft "captured a different
-  // monitor" notice — dead-ending an otherwise usable answer would be worse than telling the user. An
-  // UNFLAGGED drift is still a bug we cannot explain, so it still hard-fails here.
-  if (shot.dispId !== disp.id && !shot.displayMismatch) {
-    throw new Error('Métis captured a different display than requested. Try again.')
-  }
-  // Re-check after the async capture: Private View could have been toggled ON while getSources()/resize
-  // were in flight. Without this second check, a frame grabbed a moment before the toggle would still be
-  // cached and sent to the model — breaking the Private View guarantee on a mid-capture toggle.
-  if (privateViewOn()) {
-    // Audit like the pre-check (this path used to throw traceless); `at` distinguishes the race.
-    if (phase !== 'prewarm')
-      auditLog('capture.blocked', { reason: 'private_view', at: 'post_capture', ...(phase ? { phase } : {}) })
-    throw new PrivateViewBlockedError()
-  }
-  const capturedAt = Date.now()
-  shotCache = { ...shot, ts: capturedAt }
-  auditLog('capture.screen', {
-    width: shot.width,
-    height: shot.height,
-    bytes: shot.image.length,
-    ...(phase ? { phase } : {})
-  })
-  // dispId is the monitor this frame is really OF. Callers that cache a DERIVED artifact (the background
-  // screen description) need it: the capture always follows the cursor, which an alt-tab does not move,
-  // so without it a cached description cannot tell it is about a monitor the user has looked away from.
-  const { image, width, height, dispId, displayMismatch } = shot
-  return { image, width, height, capturedAt, dispId, displayMismatch }
+/** Admission, identity, reuse and revocation of every screen capture (G16, features/screen-observation). */
+const screenObservation = createScreenObservation({
+  captureOnce: (request) => captureScreenshotOnce(request.displayId, request.region),
+  cursorDisplayId: () => screen.getDisplayNearestPoint(screen.getCursorScreenPoint()).id,
+  privateViewOn,
+  privateViewBlockedError: () => new PrivateViewBlockedError(),
+  screenAccess: () =>
+    process.platform === 'darwin' ? systemPreferences.getMediaAccessStatus('screen') : windowsScreenStatus(),
+  backgroundAllowed: () => getSettings().backgroundScreenContext === true,
+  audit: (event, data) => auditLog(event, data)
+})
+
+/** The one way to take a frame. The phase names the trigger; an unknown phase is not admitted (idle = no capture). */
+function getScreenshot(phase?: string, scope?: ScreenScope) {
+  return screenObservation.capture({ reason: captureReasonForPhase(phase) ?? 'unadmitted', phase, scope })
 }
 
 /** Fill the cache + warm the OS capture pipeline ahead of a real ask. Fire-and-forget; auth-gated. */
@@ -4914,6 +4852,11 @@ const screenPreprocess: ScreenPreprocess = createScreenPreprocess({
   // Undefined off darwin: Windows has no queryable screen grant and its capture prompts nothing.
   screenCaptureGranted:
     process.platform === 'darwin' ? () => systemPreferences.getMediaAccessStatus('screen') === 'granted' : undefined,
+  // G16: reading the generation also notices a Screen Recording grant or Private View change nothing announced.
+  observationGeneration: () => {
+    screenObservation.reconcile()
+    return screenObservation.generation()
+  },
   log: (level, message) => (level === 'warn' ? mainLog.warn(message) : mainLog.info(message)),
   audit: (event, data) => auditLog(event as Parameters<typeof auditLog>[0], data)
 })
@@ -4929,12 +4872,14 @@ const screenPreprocess: ScreenPreprocess = createScreenPreprocess({
  * drifted apart (MQA-178/MQA-179).
  */
 function refreshScreenPreprocess(): void {
+  screenObservation.reconcile() // Private View and the Screen Recording grant, before the engine re-reads them
   screenPreprocess.refresh()
 }
 
 /** Revoke every privileged surface that outlives one IPC call at a session boundary. */
 function revokePrivilegedSurface(): void {
   hardStopInputSession('auth-revoked')
+  screenObservation.revoke('signed-out') // a pending capture, OCR or description dies with the session
   refreshScreenPreprocess() // stops the watcher child, the 6s tick and the cached description
   invalidateCloudSttOwner() // closes authenticated live-speech sockets and invalidates their callbacks
   closeIntelligenceWindow() // account-scoped state belongs to the session being cleared or replaced
@@ -7532,11 +7477,11 @@ function registerIpc(): void {
   registerWriteupIpc(assertMainWindow)
 
   // --- Screen capture ---
-  ipcMain.handle(IPC.captureScreen, async (event) => {
+  ipcMain.handle(IPC.captureScreen, async (event, rawScope?: unknown) => {
     assertMainWindow(event)
     if (!requireAuth()) throw new Error('Not signed in.')
     if (!takeHotPath('capture-screen')) throw new Error('Could not capture the screen.')
-    return getScreenshot()
+    return getScreenshot(undefined, ScreenScopeSchema.parse(rawScope ?? { kind: 'display' }))
   })
   // Pre-warm: prime the cache + spin up the OS capture pipeline so the next real vision ask is instant.
   ipcMain.handle(IPC.prewarmCapture, (e) => {
@@ -7603,6 +7548,16 @@ function registerIpc(): void {
         auditLog('capture.blocked', { reason: 'private_view', at: 'ask' })
         win?.webContents.send(IPC.streamError, { id: req.id, message: PRIVATE_VIEW_BLOCKED_MESSAGE })
         return
+      }
+      // G16: a frame captured before access to the screen was withdrawn (sign-out, lock, a revoked grant, the
+      // session ending) is not sent either, even when the renderer kept it for a Retry.
+      if (req.image) {
+        const verdict = screenObservation.checkSend(req.image)
+        if (!verdict.ok) {
+          auditLog('capture.dropped', { reason: 'stale_generation', at: 'ask' })
+          win?.webContents.send(IPC.streamError, { id: req.id, message: verdict.message })
+          return
+        }
       }
       // PLAN.md P2.2b #2: recap generation is Operator-gated (a Métis Light seat's license may not
       // include it). Only mode:'recap' is checked here — answer/vision/suggest/summary stay ungated by
@@ -9278,6 +9233,7 @@ if (!app.requestSingleInstanceLock()) {
       commandControl.initialize(powerMonitor, initLogging, mainLog)
       // Capture admission remains closed unless both suspend and lock-screen invalidation are observed.
       installInputPowerLifecycleHooks()
+      installScreenObservationLifecycle(powerMonitor, screenObservation, mainLog) // lock and sleep drop pending captures
       const bootWork = createBootWork() // M2-0031: non-first-paint fs work starts after the first show, under the pool cap
       bootWorkGate = bootWork
       configureSidecarRegistry(createSidecarRegistry(app.getPath('userData')))

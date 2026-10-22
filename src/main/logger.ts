@@ -166,6 +166,8 @@ export type AuditEvent =
   | 'capture.screen'
   | 'capture.display_mismatch'
   | 'capture.blocked'
+  | 'capture.revoked'
+  | 'capture.dropped'
   | 'capture.failed'
   | 'capture.check'
   | 'transcript.saved'
