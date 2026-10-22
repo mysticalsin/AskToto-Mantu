@@ -3,7 +3,20 @@ import type { TrustedInputOwner } from '@shared/input-session'
 /** Task ownership is derived by the future main-process caller from the WP02 IPC sender. */
 export type TaskOwner = TrustedInputOwner
 
-export type TaskStatus = 'ready' | 'dispatching' | 'paused' | 'cancelled' | 'completed' | 'uncertain'
+/**
+ * `planning` holds no authority: the plan is being drafted or was steered, and only an approval (`reviseTask`)
+ * makes the task `ready`. `quota_paused` is a billing suspension at a step boundary. It keeps the task revision,
+ * the consumed budget and the live grants; it never refills budget and it never revives revoked authority.
+ */
+export type TaskStatus =
+  | 'planning'
+  | 'ready'
+  | 'dispatching'
+  | 'paused'
+  | 'quota_paused'
+  | 'cancelled'
+  | 'completed'
+  | 'uncertain'
 export type EffectOutcome = 'applied' | 'not-applied' | 'uncertain'
 
 export interface TaskScope {
@@ -35,6 +48,11 @@ export interface TaskDefinition {
   readonly retentionMs: number
   readonly parentTaskId?: string
   readonly parentTaskRevision?: number
+  /**
+   * A multi-step task survives a verified step: it returns to `ready` and meters its budget across every step
+   * and every helper. A task without this flag keeps the single-action behaviour (an applied effect completes it).
+   */
+  readonly multiStep?: boolean
 }
 
 export interface DispatchGrantScope {
@@ -60,6 +78,10 @@ export interface TaskRecord extends TaskDefinition {
   readonly effectOutcome?: EffectOutcome
   readonly activeAttemptId?: string
   readonly lastAttemptId?: string
+  /** Verified steps of a multi-step task. */
+  readonly stepsCompleted?: number
+  /** Budget charged at step admission, shared by every helper in the lineage. Present only on metered lineages. */
+  readonly usedResources?: Readonly<Record<string, number>>
 }
 
 export interface TaskAttempt {
@@ -110,6 +132,8 @@ export type TaskTransitionDenial =
   | 'parent_inactive'
   | 'uncertain_requires_reconciliation'
   | 'invalid_transition'
+  | 'step_active'
+  | 'lease_stale'
 
 export type TransitionResult<T extends TaskRuntimeState = TaskRuntimeState> =
   | { readonly ok: true; readonly state: T }
@@ -120,3 +144,6 @@ export interface DispatchDecision {
   readonly reason?: TaskTransitionDenial
   readonly task?: TaskRecord
 }
+
+/** Why a step lease signal was aborted. */
+export type StepLeaseAbortReason = 'revoked' | 'expired'

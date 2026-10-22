@@ -8,13 +8,24 @@ import type {
   TaskStatus
 } from './task-contract'
 
-const ARCHIVE_VERSION = 1
-const TASK_STATUSES = new Set<TaskStatus>(['ready', 'dispatching', 'paused', 'cancelled', 'completed', 'uncertain'])
+/**
+ * Archive versions. The encoder writes the lowest version that can represent the state, so an archive that uses
+ * no v2 feature stays readable by a build that only knows v1 (rollback). A v2 archive is only written once a task
+ * actually uses a planning or quota_paused state, a multi-step flag, or metered usage. An older build then rejects
+ * it as `unsupported-version` and the bridge sets it aside instead of misreading it.
+ */
+const ARCHIVE_VERSION_V1 = 1
+const ARCHIVE_VERSION_V2 = 2
+const V1_TASK_STATUSES = ['ready', 'dispatching', 'paused', 'cancelled', 'completed', 'uncertain'] as const
+const V2_TASK_STATUSES = new Set<TaskStatus>([...V1_TASK_STATUSES, 'planning', 'quota_paused'])
+const V1_TASK_STATUS_SET = new Set<TaskStatus>(V1_TASK_STATUSES)
+const V2_ONLY_STATUSES = new Set<TaskStatus>(['planning', 'quota_paused'])
+const V2_TASK_KEYS = ['multiStep', 'stepsCompleted', 'usedResources'] as const
 const EFFECT_OUTCOMES = new Set<EffectOutcome>(['applied', 'not-applied', 'uncertain'])
 const ATTEMPT_STATUSES = new Set<TaskAttempt['status']>(['authorized', 'uncertain', 'settled', 'reconciled'])
 
-interface TaskRuntimeArchiveV1 {
-  readonly version: 1
+interface TaskRuntimeArchive {
+  readonly version: 1 | 2
   readonly tasks: readonly TaskRecord[]
   readonly attempts: readonly TaskAttempt[]
   readonly consumedGrantIds: readonly string[]
@@ -120,7 +131,8 @@ function hasExactKeys(
   required: readonly string[],
   optional: readonly string[] = []
 ): boolean {
-  const keys = Object.keys(value)
+  // An explicitly undefined field is an absent field (it never survives JSON).
+  const keys = Object.keys(value).filter((key) => value[key] !== undefined)
   return (
     required.every((key) => Object.prototype.hasOwnProperty.call(value, key)) &&
     keys.every((key) => required.includes(key) || optional.includes(key))
@@ -167,7 +179,11 @@ function isTaskScope(value: unknown): value is TaskScope {
   )
 }
 
-function isTaskRecord(value: unknown, limits: TaskStateCodecLimits): value is TaskRecord {
+function usesV2(task: TaskRecord): boolean {
+  return V2_ONLY_STATUSES.has(task.status) || V2_TASK_KEYS.some((key) => task[key] !== undefined)
+}
+
+function isTaskRecord(value: unknown, limits: TaskStateCodecLimits, version: 1 | 2 = 2): value is TaskRecord {
   if (
     !isObject(value) ||
     !hasExactKeys(
@@ -184,7 +200,14 @@ function isTaskRecord(value: unknown, limits: TaskStateCodecLimits): value is Ta
         'status',
         'expiresAt'
       ],
-      ['parentTaskId', 'parentTaskRevision', 'effectOutcome', 'activeAttemptId', 'lastAttemptId']
+      [
+        'parentTaskId',
+        'parentTaskRevision',
+        'effectOutcome',
+        'activeAttemptId',
+        'lastAttemptId',
+        ...(version === 2 ? V2_TASK_KEYS : [])
+      ]
     )
   )
     return false
@@ -211,8 +234,9 @@ function isTaskRecord(value: unknown, limits: TaskStateCodecLimits): value is Ta
     Number.isFinite(task.expiresAt) &&
     task.expiresAt === task.createdAt + task.retentionMs &&
     typeof task.status === 'string' &&
-    TASK_STATUSES.has(task.status as TaskStatus)
+    (version === 2 ? V2_TASK_STATUSES : V1_TASK_STATUS_SET).has(task.status as TaskStatus)
   if (!baseValid) return false
+  if (!isV2TaskFieldsValid(task)) return false
   if (task.parentTaskId !== undefined && (typeof task.parentTaskId !== 'string' || task.parentTaskId.length === 0))
     return false
   if (
@@ -236,6 +260,29 @@ function isTaskRecord(value: unknown, limits: TaskStateCodecLimits): value is Ta
   if (task.status === 'dispatching') {
     if (!task.activeAttemptId || task.lastAttemptId !== task.activeAttemptId) return false
   } else if (task.activeAttemptId !== undefined) return false
+  return true
+}
+
+function isV2TaskFieldsValid(task: Record<string, unknown>): boolean {
+  if (task.multiStep !== undefined && typeof task.multiStep !== 'boolean') return false
+  if (
+    task.stepsCompleted !== undefined &&
+    (task.multiStep !== true || !Number.isSafeInteger(task.stepsCompleted) || (task.stepsCompleted as number) < 0)
+  )
+    return false
+  if (task.usedResources !== undefined) {
+    if (!isResources(task.usedResources)) return false
+    const ceiling = (task.scope as TaskScope).resources
+    // Metered usage can never exceed the approved budget, and only names a budgeted resource.
+    if (
+      !Object.entries(task.usedResources).every(
+        ([key, used]) => Object.prototype.hasOwnProperty.call(ceiling, key) && used <= ceiling[key]!
+      )
+    )
+      return false
+  }
+  // Helpers are created under an approved parent, so one can never be in planning.
+  if (task.status === 'planning' && task.parentTaskId !== undefined) return false
   return true
 }
 
@@ -355,17 +402,18 @@ function isStrictlyNarrowerScope(child: TaskScope, parent: TaskScope): boolean {
  */
 export function encodeTaskRuntimeState(state: TaskRuntimeState, limits: TaskStateCodecLimits): string {
   assertLimits(limits)
+  const version: 1 | 2 = [...state.tasks.values()].some(usesV2) ? ARCHIVE_VERSION_V2 : ARCHIVE_VERSION_V1
   if (
     state.tasks.size > limits.maxTasks ||
     state.attempts.size > limits.maxAttempts ||
     state.consumedGrantIds.size > limits.maxConsumedGrantIds ||
-    [...state.tasks.values()].some((task) => !isTaskRecord(task, limits)) ||
+    [...state.tasks.values()].some((task) => !isTaskRecord(task, limits, version)) ||
     [...state.attempts.values()].some((attempt) => !isTaskAttempt(attempt, limits))
   ) {
     throw new RangeError('Task state exceeds the explicit archive limits or has invalid records')
   }
-  const archive: TaskRuntimeArchiveV1 = {
-    version: ARCHIVE_VERSION,
+  const archive: TaskRuntimeArchive = {
+    version,
     tasks: [...state.tasks.values()].sort((a, b) => a.taskId.localeCompare(b.taskId)),
     attempts: [...state.attempts.values()].sort((a, b) => a.attemptId.localeCompare(b.attemptId)),
     consumedGrantIds: [...state.consumedGrantIds].sort()
@@ -394,7 +442,11 @@ export function decodeTaskRuntimeState(read: TaskStateReadResult, limits: TaskSt
   if (!isObject(parsed) || !hasExactKeys(parsed, ['version', 'tasks', 'attempts', 'consumedGrantIds'])) {
     return { kind: 'corrupt', reason: 'invalid-shape' }
   }
-  if (parsed.version !== ARCHIVE_VERSION) return { kind: 'corrupt', reason: 'unsupported-version' }
+  // v1 archives are read as they always were; a v1 label never admits a v2 field or status.
+  if (parsed.version !== ARCHIVE_VERSION_V1 && parsed.version !== ARCHIVE_VERSION_V2) {
+    return { kind: 'corrupt', reason: 'unsupported-version' }
+  }
+  const version = parsed.version
   if (
     Array.isArray(parsed.tasks) &&
     Array.isArray(parsed.attempts) &&
@@ -405,7 +457,7 @@ export function decodeTaskRuntimeState(read: TaskStateReadResult, limits: TaskSt
   if (
     !Array.isArray(parsed.tasks) ||
     parsed.tasks.length > limits.maxTasks ||
-    !parsed.tasks.every((item) => isTaskRecord(item, limits)) ||
+    !parsed.tasks.every((item) => isTaskRecord(item, limits, version)) ||
     !Array.isArray(parsed.attempts) ||
     parsed.attempts.length > limits.maxAttempts ||
     !parsed.attempts.every((item) => isTaskAttempt(item, limits)) ||
@@ -456,7 +508,7 @@ export function decodeTaskRuntimeState(read: TaskStateReadResult, limits: TaskSt
         ) {
           return { kind: 'corrupt', reason: 'inconsistent-history' }
         }
-        if (!['ready', 'dispatching', 'paused'].includes(parent.status))
+        if (!['ready', 'dispatching', 'paused', 'quota_paused'].includes(parent.status))
           return { kind: 'corrupt', reason: 'inconsistent-history' }
         if (parent.status === 'paused' && task.status !== 'paused')
           return { kind: 'corrupt', reason: 'inconsistent-history' }
@@ -468,9 +520,13 @@ export function decodeTaskRuntimeState(read: TaskStateReadResult, limits: TaskSt
     }
     if (
       (task.status === 'uncertain' && task.effectOutcome !== 'uncertain') ||
-      (task.status === 'completed' && task.effectOutcome !== 'applied') ||
+      // A multi-step task completes explicitly, so its completion needs no applied effect of its own.
+      (task.status === 'completed' && task.effectOutcome !== 'applied' && task.multiStep !== true) ||
       (task.effectOutcome === 'applied' && task.status !== 'completed' && task.status !== 'cancelled') ||
-      ((task.status === 'ready' || task.status === 'dispatching') &&
+      ((task.status === 'ready' ||
+        task.status === 'dispatching' ||
+        task.status === 'planning' ||
+        task.status === 'quota_paused') &&
         (task.effectOutcome === 'applied' || task.effectOutcome === 'uncertain'))
     ) {
       return { kind: 'corrupt', reason: 'inconsistent-history' }
@@ -543,12 +599,14 @@ export function decodeTaskRuntimeState(read: TaskStateReadResult, limits: TaskSt
     ) {
       return { kind: 'corrupt', reason: 'inconsistent-history' }
     }
+    // A multi-step task keeps every verified step in its history, so only its latest attempt is the effect record.
     if (
       attempt.outcome === 'applied' &&
       ((attempt.status !== 'settled' && attempt.status !== 'reconciled') ||
-        task?.lastAttemptId !== attempt.attemptId ||
-        task.effectOutcome !== 'applied' ||
-        !sameAttemptSnapshot(task, attempt))
+        (task?.multiStep !== true &&
+          (task?.lastAttemptId !== attempt.attemptId ||
+            task.effectOutcome !== 'applied' ||
+            !sameAttemptSnapshot(task, attempt))))
     ) {
       return { kind: 'corrupt', reason: 'inconsistent-history' }
     }

@@ -1,4 +1,3 @@
-import type { TrustedInputOwner } from '@shared/input-session'
 import type {
   DispatchGrant,
   DispatchGrantScope,
@@ -12,6 +11,34 @@ import type {
   TaskTransitionDenial,
   TransitionResult
 } from './task-contract'
+import {
+  allow,
+  budgetFits,
+  cancelDescendants,
+  chargeFits,
+  chargeLineage,
+  childScopeStrictlyNarrower,
+  deny,
+  descendants,
+  grantScopeFits,
+  invalidateSubtree,
+  isMetered,
+  lineage,
+  lineageHasActiveStep,
+  remainingBudget,
+  revokeGrants,
+  sameGrantScope,
+  sameOwner,
+  snapshotAttempt,
+  snapshotGrant,
+  snapshotTask,
+  validOwner,
+  validPolicy,
+  validScope
+} from './task-state-internal'
+
+export { completeTask, pauseTaskForQuota, resumeAfterQuota, steerTask } from './task-session'
+export { TaskStepLeases, type StepLease, type StepLeaseCheck } from './task-step-lease'
 
 export function createTaskRuntimeState(): TaskRuntimeState {
   return {
@@ -23,227 +50,14 @@ export function createTaskRuntimeState(): TaskRuntimeState {
   }
 }
 
-const deny = (state: TaskRuntimeState, reason: TaskTransitionDenial): TransitionResult => ({ ok: false, state, reason })
-const allow = (state: TaskRuntimeState): TransitionResult => ({ ok: true, state })
-
-function snapshotOwner(owner: TaskOwner): TaskOwner {
-  return Object.freeze({ ...owner })
-}
-
-function snapshotScope(scope: TaskScope): TaskScope {
-  return Object.freeze({
-    capabilities: Object.freeze([...scope.capabilities]),
-    resources: Object.freeze({ ...scope.resources })
-  })
-}
-
-function snapshotGrantScope(scope: DispatchGrantScope): DispatchGrantScope {
-  return Object.freeze({ capability: scope.capability, resources: Object.freeze({ ...scope.resources }) })
-}
-
-function snapshotTask(task: TaskRecord): TaskRecord {
-  return Object.freeze({ ...task, owner: snapshotOwner(task.owner), scope: snapshotScope(task.scope) })
-}
-
-function snapshotAttempt(attempt: TaskAttempt): TaskAttempt {
-  return Object.freeze({ ...attempt, owner: snapshotOwner(attempt.owner), scope: snapshotGrantScope(attempt.scope) })
-}
-
-function snapshotGrant(grant: DispatchGrant): DispatchGrant {
-  return Object.freeze({ ...grant, owner: snapshotOwner(grant.owner), scope: snapshotGrantScope(grant.scope) })
-}
-
-function validOwner(owner: TaskOwner): boolean {
-  return (
-    !!owner &&
-    owner.isTopFrame === true &&
-    Number.isSafeInteger(owner.webContentsId) &&
-    owner.webContentsId > 0 &&
-    typeof owner.frameId === 'string' &&
-    owner.frameId.length > 0 &&
-    owner.frameId.length <= 256 &&
-    Number.isSafeInteger(owner.authSessionGeneration) &&
-    owner.authSessionGeneration >= 0 &&
-    Number.isSafeInteger(owner.contextRevision) &&
-    owner.contextRevision >= 0
-  )
-}
-
-function sameOwner(a: TrustedInputOwner, b: TrustedInputOwner): boolean {
-  return (
-    a.webContentsId === b.webContentsId &&
-    a.frameId === b.frameId &&
-    a.isTopFrame === b.isTopFrame &&
-    a.authSessionGeneration === b.authSessionGeneration &&
-    a.contextRevision === b.contextRevision
-  )
-}
-
-function validPolicy(policy: TaskPolicy): boolean {
-  return (
-    !!policy &&
-    Array.isArray(policy.allowedTaskTypes) &&
-    Array.isArray(policy.allowedCapabilities) &&
-    !!policy.resourceBudgets &&
-    typeof policy.resourceBudgets === 'object' &&
-    Number.isFinite(policy.maxRetentionMs) &&
-    policy.maxRetentionMs >= 0 &&
-    Number.isFinite(policy.maxGrantTtlMs) &&
-    policy.maxGrantTtlMs > 0 &&
-    policy.allowedTaskTypes.every((v) => typeof v === 'string' && v.length > 0) &&
-    policy.allowedCapabilities.every((v) => typeof v === 'string' && v.length > 0) &&
-    Object.entries(policy.resourceBudgets).every(
-      ([key, value]) => key.length > 0 && Number.isFinite(value) && value >= 0
-    )
-  )
-}
-
-function validScope(scope: TaskScope): boolean {
-  return (
-    !!scope &&
-    Array.isArray(scope.capabilities) &&
-    !!scope.resources &&
-    typeof scope.resources === 'object' &&
-    scope.capabilities.every((v) => typeof v === 'string' && v.length > 0) &&
-    new Set(scope.capabilities).size === scope.capabilities.length &&
-    Object.entries(scope.resources).every(([key, value]) => key.length > 0 && Number.isFinite(value) && value >= 0)
-  )
-}
-
-function budgetFits(requested: Readonly<Record<string, number>>, ceiling: Readonly<Record<string, number>>): boolean {
-  return Object.entries(requested).every(
-    ([key, value]) =>
-      Object.prototype.hasOwnProperty.call(ceiling, key) &&
-      Number.isFinite(value) &&
-      value >= 0 &&
-      value <= ceiling[key]!
-  )
-}
-
-function grantScopeFits(scope: DispatchGrantScope, taskScope: TaskScope, policy: TaskPolicy): boolean {
-  return (
-    taskScope.capabilities.includes(scope.capability) &&
-    policy.allowedCapabilities.includes(scope.capability) &&
-    budgetFits(scope.resources, taskScope.resources) &&
-    budgetFits(scope.resources, policy.resourceBudgets)
-  )
-}
-
-function sameRecord<T>(a: T, b: T): boolean {
-  if (!a || !b || typeof a !== 'object' || typeof b !== 'object') return a === b
-  const left = a as Record<string, unknown>
-  const right = b as Record<string, unknown>
-  const leftKeys = Object.keys(left).sort()
-  const rightKeys = Object.keys(right).sort()
-  return (
-    leftKeys.length === rightKeys.length && leftKeys.every((key, i) => key === rightKeys[i] && left[key] === right[key])
-  )
-}
-
-function sameGrantScope(a: DispatchGrantScope, b: DispatchGrantScope): boolean {
-  return a.capability === b.capability && sameRecord(a.resources, b.resources)
-}
-
-function sameCapabilitySet(a: readonly string[], b: readonly string[]): boolean {
-  return a.length === b.length && a.every((capability) => b.includes(capability))
-}
-
-function childScopeStrictlyNarrower(child: TaskScope, parent: TaskScope): boolean {
-  if (
-    !validScope(child) ||
-    !validScope(parent) ||
-    !child.capabilities.every((cap) => parent.capabilities.includes(cap))
-  )
-    return false
-  if (!budgetFits(child.resources, parent.resources)) return false
-  const resourceKeys = Object.keys(child.resources)
-  const parentKeys = Object.keys(parent.resources)
-  const strict =
-    !sameCapabilitySet(child.capabilities, parent.capabilities) ||
-    resourceKeys.length < parentKeys.length ||
-    Object.entries(child.resources).some(([key, value]) => value < parent.resources[key]!)
-  return strict
-}
-
-function descendants(tasks: ReadonlyMap<string, TaskRecord>, rootTaskId: string): Set<string> {
-  const found = new Set<string>([rootTaskId])
-  let changed = true
-  while (changed) {
-    changed = false
-    for (const task of tasks.values()) {
-      if (task.parentTaskId && found.has(task.parentTaskId) && !found.has(task.taskId)) {
-        found.add(task.taskId)
-        changed = true
-      }
-    }
-  }
-  return found
-}
-
-function revokeGrants(state: TaskRuntimeState, taskIds: Set<string>): TaskRuntimeState {
-  const grants = new Map(state.grants)
-  for (const [id, grant] of grants) if (taskIds.has(grant.taskId)) grants.delete(id)
-  return { ...state, grants }
-}
-
-function cancelDescendants(state: TaskRuntimeState, rootTaskId: string): TaskRuntimeState {
-  const ids = descendants(state.tasks, rootTaskId)
-  ids.delete(rootTaskId)
-  const next = revokeGrants(state, ids)
-  const tasks = new Map(next.tasks)
-  const attempts = new Map(next.attempts)
-  for (const id of ids) {
-    const child = tasks.get(id)
-    if (!child || child.status === 'completed' || child.status === 'cancelled') continue
-    if (child.status === 'dispatching' && child.activeAttemptId) {
-      const attempt = attempts.get(child.activeAttemptId)
-      if (attempt?.status === 'authorized')
-        attempts.set(attempt.attemptId, snapshotAttempt({ ...attempt, status: 'uncertain', outcome: 'uncertain' }))
-    }
-    tasks.set(
-      id,
-      snapshotTask({
-        ...child,
-        status: 'cancelled',
-        ...(child.status === 'dispatching' ? { effectOutcome: 'uncertain' as const, activeAttemptId: undefined } : {})
-      })
-    )
-  }
-  return { ...next, tasks, attempts }
-}
-
-function invalidateSubtree(
+export function createTask(
   state: TaskRuntimeState,
-  rootTaskId: string,
-  status: 'paused' | 'cancelled'
-): TaskRuntimeState {
-  const ids = descendants(state.tasks, rootTaskId)
-  const next = revokeGrants(state, ids)
-  const tasks = new Map(next.tasks)
-  const attempts = new Map(next.attempts)
-  for (const id of ids) {
-    const task = tasks.get(id)
-    if (!task || task.status === 'completed' || task.status === 'cancelled') continue
-    if (task.status === 'dispatching' && task.activeAttemptId) {
-      const attempt = attempts.get(task.activeAttemptId)
-      if (attempt?.status === 'authorized')
-        attempts.set(attempt.attemptId, snapshotAttempt({ ...attempt, status: 'uncertain', outcome: 'uncertain' }))
-    }
-    tasks.set(
-      id,
-      snapshotTask({
-        ...task,
-        status,
-        // A dispatched effect may already have happened. Pause/cancel never claims to roll it back.
-        ...(task.status === 'dispatching' ? { effectOutcome: 'uncertain' as const, activeAttemptId: undefined } : {})
-      })
-    )
-  }
-  return { ...next, tasks, attempts }
-}
-
-export function createTask(state: TaskRuntimeState, definition: TaskDefinition, policy: TaskPolicy): TransitionResult {
+  definition: TaskDefinition,
+  policy: TaskPolicy,
+  options?: { readonly initialStatus?: 'ready' | 'planning' }
+): TransitionResult {
   if (state.ownerRebindRequired) return deny(state, 'owner_rebind_required')
+  const initialStatus = options?.initialStatus ?? 'ready'
   if (
     !validPolicy(policy) ||
     !definition ||
@@ -259,7 +73,11 @@ export function createTask(state: TaskRuntimeState, definition: TaskDefinition, 
     !validScope(definition.scope) ||
     !Number.isFinite(definition.createdAt) ||
     !Number.isFinite(definition.retentionMs) ||
-    definition.retentionMs < 0
+    definition.retentionMs < 0 ||
+    (initialStatus !== 'ready' && initialStatus !== 'planning') ||
+    (definition.multiStep !== undefined && typeof definition.multiStep !== 'boolean') ||
+    // A helper is created under an approved parent, so it cannot start unapproved.
+    (initialStatus === 'planning' && definition.parentTaskId !== undefined)
   ) {
     return deny(state, 'invalid_input')
   }
@@ -287,9 +105,13 @@ export function createTask(state: TaskRuntimeState, definition: TaskDefinition, 
     }
     if (expiresAt > parent.expiresAt) return deny(state, 'retention_exceeded')
     if (!childScopeStrictlyNarrower(definition.scope, parent.scope)) return deny(state, 'scope_not_subset')
+    // Delegation draws on the parent's shared budget, so a helper cannot ask for more than the parent has left.
+    if (isMetered(lineage(state, parent)) && !budgetFits(definition.scope.resources, remainingBudget(parent))) {
+      return deny(state, 'budget_exceeded')
+    }
   } else if (definition.parentTaskRevision !== undefined) return deny(state, 'invalid_input')
 
-  const task = snapshotTask({ ...definition, expiresAt, status: 'ready' })
+  const task = snapshotTask({ ...definition, expiresAt, status: initialStatus })
   const tasks = new Map(state.tasks)
   tasks.set(task.taskId, task)
   return allow({ ...state, tasks })
@@ -302,7 +124,8 @@ export function reviseTask(
   if (state.ownerRebindRequired) return deny(state, 'owner_rebind_required')
   const task = state.tasks.get(input.taskId)
   if (!task) return deny(state, 'unknown_task')
-  if (task.status !== 'ready') return deny(state, 'task_not_ready')
+  // Approving a plan (planning -> ready) and re-approving a ready task both replace scope and arguments.
+  if (task.status !== 'ready' && task.status !== 'planning') return deny(state, 'task_not_ready')
   if (
     !Number.isSafeInteger(input.revision) ||
     input.revision <= task.revision ||
@@ -334,7 +157,9 @@ export function reviseTask(
           argumentsDigest: input.argumentsDigest,
           scope: input.scope,
           status: 'ready',
-          effectOutcome: undefined
+          effectOutcome: undefined,
+          // A new approval opens a new budget. A quota resume never reaches this path.
+          usedResources: undefined
         })
       )
     } else {
@@ -388,6 +213,7 @@ export function issueDispatchGrant(
     return deny(state, 'grant_already_exists')
   }
   if (!grantScopeFits(input.scope, task.scope, input.policy)) return deny(state, 'scope_not_subset')
+  if (!chargeFits(lineage(state, task), input.scope.resources)) return deny(state, 'budget_exceeded')
   if (task.parentTaskId) {
     const parent = state.tasks.get(task.parentTaskId)
     if (!parent || (parent.status !== 'ready' && parent.status !== 'dispatching') || input.now >= parent.expiresAt) {
@@ -428,7 +254,9 @@ export function authorizeDispatch(
   }
 ): {
   readonly state: TaskRuntimeState
-  readonly decision: { allowed: true; task: TaskRecord } | { allowed: false; reason: TaskTransitionDenial }
+  readonly decision:
+    | { allowed: true; task: TaskRecord; leaseExpiresAt: number }
+    | { allowed: false; reason: TaskTransitionDenial }
 } {
   const grant = state.grants.get(input.grantId)
   if (!grant) {
@@ -488,6 +316,15 @@ export function authorizeDispatch(
   if (task.status === 'uncertain')
     return { state: consumedState, decision: { allowed: false, reason: 'uncertain_requires_reconciliation' } }
   if (task.status !== 'ready') return { state: consumedState, decision: { allowed: false, reason: 'task_not_ready' } }
+  const chain = lineage(state, task)
+  // One active step per lineage: a helper never runs beside its parent or a sibling.
+  if (lineageHasActiveStep(state, chain, task.taskId)) {
+    return { state: consumedState, decision: { allowed: false, reason: 'step_active' } }
+  }
+  // The call budget is charged at admission, so a failed attempt can never refill it.
+  if (!chargeFits(chain, grant.scope.resources)) {
+    return { state: consumedState, decision: { allowed: false, reason: 'budget_exceeded' } }
+  }
   const dispatching = snapshotTask({
     ...task,
     status: 'dispatching' as const,
@@ -497,6 +334,7 @@ export function authorizeDispatch(
   })
   const tasks = new Map(consumedState.tasks)
   tasks.set(task.taskId, dispatching)
+  chargeLineage(tasks, chain, grant.scope.resources)
   const attempts = new Map(consumedState.attempts)
   const attempt = snapshotAttempt({
     attemptId: input.attemptId,
@@ -510,7 +348,14 @@ export function authorizeDispatch(
     status: 'authorized'
   })
   attempts.set(attempt.attemptId, attempt)
-  return { state: { ...consumedState, tasks, attempts }, decision: { allowed: true, task: dispatching } }
+  return {
+    state: { ...consumedState, tasks, attempts },
+    decision: {
+      allowed: true,
+      task: tasks.get(task.taskId) ?? dispatching,
+      leaseExpiresAt: Math.min(grant.expiresAt, task.expiresAt)
+    }
+  }
 }
 
 export function pauseTask(state: TaskRuntimeState, taskId: string): TransitionResult {
@@ -562,6 +407,20 @@ export function recordEffectOutcome(
     attemptId,
     snapshotAttempt({ ...attempt, status: outcome === 'uncertain' ? 'uncertain' : 'settled', outcome })
   )
+  if (outcome === 'applied' && task.multiStep === true) {
+    // A verified step of a multi-step task returns to the boundary. Helpers and the budget carry on.
+    tasks.set(
+      taskId,
+      snapshotTask({
+        ...task,
+        status: 'ready',
+        effectOutcome: undefined,
+        activeAttemptId: undefined,
+        stepsCompleted: (task.stepsCompleted ?? 0) + 1
+      })
+    )
+    return allow({ ...state, tasks, attempts })
+  }
   if (outcome === 'applied')
     tasks.set(
       taskId,
@@ -606,6 +465,18 @@ export function reconcileUncertainEffect(
   attempts.set(attempt.attemptId, snapshotAttempt({ ...attempt, status: 'reconciled', outcome }))
   if (outcome === 'applied') {
     const tasks = new Map(state.tasks)
+    if (task.multiStep === true && !cancelled) {
+      tasks.set(
+        taskId,
+        snapshotTask({
+          ...task,
+          status: paused ? 'paused' : 'ready',
+          effectOutcome: undefined,
+          stepsCompleted: (task.stepsCompleted ?? 0) + 1
+        })
+      )
+      return allow({ ...state, tasks, attempts })
+    }
     tasks.set(
       taskId,
       snapshotTask({ ...task, status: cancelled ? 'cancelled' : 'completed', effectOutcome: 'applied' })
