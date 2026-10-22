@@ -3,6 +3,7 @@ import { AlertCircle, Check, CircleCheck, FolderCog, FolderOpen, X } from 'lucid
 import type { MeetingsFolderPickResult } from '@shared/contracts/settings-os-state'
 import type { PublicSettings } from '@shared/ipc'
 import { isWindows } from '../../lib/keys'
+import { unreportedPatch } from '../../lib/report-settings-patch'
 import { ManagedChip } from '../../ui/ManagedChip'
 import { Section } from '../../ui/Section'
 import { ToggleRow } from '../../ui/Toggle'
@@ -19,6 +20,9 @@ export function meetingsFolderPickError(result: MeetingsFolderPickResult): strin
   return 'Sign in with your Mantu account first.'
 }
 
+export const FOLDER_CHANGED_NOTE =
+  'Meetings already in the previous folder stay there. Métis now saves, lists and cleans up only this folder.'
+
 /** Settings → Meetings: where meetings are saved, team transcript folders, encryption, login item, retention. */
 export function MeetingsTab({
   settings,
@@ -32,8 +36,14 @@ export function MeetingsTab({
   const [meetingsFolderErr, setMeetingsFolderErr] = useState<string | null>(null)
   // HIG (Settings): a refused folder is explained next to its control and the last valid folder stays.
   const [folderPickErr, setFolderPickErr] = useState<string | null>(null)
+  // After a successful change: old meetings are not moved, listed or cleaned up any more (multi-folder
+  // management is a later release), so say so instead of leaving it to be discovered.
+  const [folderChangedNote, setFolderChangedNote] = useState(false)
   const folderErrId = useId()
   const loginHintId = useId()
+  // `patch({})` re-reads the settings snapshot after main changed a folder. It is a refresh, not a save, so it
+  // goes around the reporting wrapper: its failure is not "couldn't save this change".
+  const refreshSettings = (): void => void unreportedPatch(patch)({}).catch(() => undefined)
   const { osState, refreshOsState } = useSettingsOsState()
   const loginItem = loginItemView(settings.launchAtLogin, settings.loginItemOpenAtLogin, osState?.loginItem)
   return (
@@ -64,7 +74,9 @@ export function MeetingsTab({
                 setFolderPickErr(
                   result ? meetingsFolderPickError(result) : "Métis couldn't change the folder. Try again."
                 )
-                void patch({})
+                setFolderChangedNote(result?.ok === true)
+                // A refresh only: a failure here is not the folder choice failing, and must not go unhandled.
+                refreshSettings()
               }}
               className={[
                 'no-drag cl-focus flex items-center gap-1 rounded-lg bg-white/[0.05] px-2.5 py-1.5 text-[12px] text-[color:var(--cl-foreground)] hover:bg-white/[0.1]',
@@ -95,6 +107,12 @@ export function MeetingsTab({
               className="mt-1.5 flex items-center gap-1.5 text-[11px] text-[color:var(--cl-destructive)]"
             >
               <AlertCircle size={12} className="shrink-0" aria-hidden="true" /> {folderPickErr}
+            </div>
+          )}
+          {folderChangedNote && !folderPickErr && (
+            <div className="mt-1.5 flex items-start gap-1.5 text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
+              <CircleCheck size={12} className="mt-0.5 shrink-0" aria-hidden="true" />
+              {FOLDER_CHANGED_NOTE}
             </div>
           )}
           {meetingsFolderErr && (
@@ -132,7 +150,7 @@ export function MeetingsTab({
                     disabled={settings.managedKeys.includes('teamTranscriptFolders')}
                     onClick={async () => {
                       await window.toto.removeTeamTranscriptFolder(folder)
-                      void patch({})
+                      refreshSettings()
                     }}
                     title="Stop ingesting this folder"
                     aria-label={`Stop ingesting ${folder}`}
@@ -150,7 +168,7 @@ export function MeetingsTab({
               disabled={settings.managedKeys.includes('teamTranscriptFolders')}
               onClick={async () => {
                 await window.toto.addTeamTranscriptFolder()
-                void patch({})
+                refreshSettings()
               }}
               className={[
                 'no-drag cl-focus flex items-center gap-1 rounded-lg bg-white/[0.05] px-2.5 py-1.5 text-[12px] text-[color:var(--cl-foreground)] hover:bg-white/[0.1]',
@@ -189,8 +207,7 @@ export function MeetingsTab({
             {settings.encryptTranscripts && (
               <div className="mt-1 flex items-start gap-1.5 px-1 text-[11px] leading-snug text-[color:var(--cl-success)]">
                 <CircleCheck size={12} className="mt-0.5 shrink-0" />
-                Encrypted at rest. Even if the folder syncs to the cloud, contents stay locked to this device. Opening a
-                transcript shows a temporary decrypted copy.
+                New meetings are encrypted at rest. Meetings saved before you turned this on stay as they were.
               </div>
             )}
           </ToggleRow>
@@ -199,7 +216,13 @@ export function MeetingsTab({
             label="Launch at login"
             desc="Open Métis automatically when you sign in."
             on={loginItem.on}
-            onChange={(v) => void patch({ launchAtLogin: v }).finally(() => void refreshOsState())}
+            // The refresh runs whether or not the write went through; a rejection is the reporting patch's to
+            // announce, and is swallowed here so this derived promise does not surface it a second time.
+            onChange={(v) =>
+              void patch({ launchAtLogin: v })
+                .catch(() => undefined)
+                .finally(() => void refreshOsState())
+            }
             disabled={settings.managedKeys.includes('launchAtLogin')}
             describedBy={loginItem.hint ? loginHintId : undefined}
           />

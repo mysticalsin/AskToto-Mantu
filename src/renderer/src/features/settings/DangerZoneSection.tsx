@@ -34,6 +34,11 @@ export async function confirmRetentionChange(
   return askToConfirm(retentionDeleteConfirmation(counted.expired, label))
 }
 
+/** What delete-all left alone: files in the folder that are not Métis meetings. */
+export function skippedFilesNote(count: number): string {
+  return `${count} file${count === 1 ? '' : 's'} that aren't Métis meetings ${count === 1 ? 'was' : 'were'} left in place.`
+}
+
 function formatPreservedIndexSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`
   const kb = bytes / 1024
@@ -50,10 +55,13 @@ export function DangerZoneSection({
   patch
 }: {
   settings: PublicSettings
-  patch: (p: Partial<PublicSettings>) => void
+  patch: (p: Partial<PublicSettings>) => Promise<PublicSettings> | void
 }): JSX.Element {
   const [busy, setBusy] = useState(false)
-  const [result, setResult] = useState<{ ok: boolean; deleted: number; error?: string } | null>(null)
+  const [result, setResult] = useState<{ ok: boolean; deleted: number; error?: string; skipped?: string[] } | null>(
+    null
+  )
+  const [dangerErr, setDangerErr] = useState<string | null>(null)
   const [preservedBusy, setPreservedBusy] = useState<string | null>(null)
   const [preservedMsg, setPreservedMsg] = useState<string | null>(null)
   const [preservedCopies, setPreservedCopies] = useState<PreservedBrainIndexCopy[]>([])
@@ -79,9 +87,14 @@ export function DangerZoneSection({
   const deleteAll = async (): Promise<void> => {
     setBusy(true)
     setResult(null)
-    const r = await window.toto.recallDeleteAll()
-    setResult(r)
-    setBusy(false)
+    setDangerErr(null)
+    try {
+      setResult(await window.toto.recallDeleteAll())
+    } catch {
+      setDangerErr("Couldn't delete. Try again.")
+    } finally {
+      setBusy(false)
+    }
   }
 
   const restorePreserved = async (id: string): Promise<void> => {
@@ -200,6 +213,11 @@ export function DangerZoneSection({
           {preservedMsg && <div className="text-[11px] text-[color:var(--cl-muted-foreground)]">{preservedMsg}</div>}
         </div>
       )}
+      {dangerErr && (
+        <div role="alert" className="mt-2 text-[11px] text-[color:var(--cl-destructive)]">
+          {dangerErr}
+        </div>
+      )}
       {result && (
         <div
           className={[
@@ -216,6 +234,9 @@ export function DangerZoneSection({
               : result.error
                 ? result.error
                 : `Deleted ${result.deleted}, but some files could not be removed.`}
+          {result.error !== 'cancelled' && result.skipped && result.skipped.length > 0
+            ? ` ${skippedFilesNote(result.skipped.length)}`
+            : null}
         </div>
       )}
     </Section>

@@ -12,7 +12,8 @@ const mocks = vi.hoisted(() => ({
   requestSourceRefresh: vi.fn(async () => {}),
   publishMeetingCard: vi.fn(async () => {}),
   exciseDeletedMeeting: vi.fn(async () => ({ gone: true })),
-  listMeetings: vi.fn(async () => [{}, {}]),
+  listMeetings: vi.fn(async (): Promise<{ file?: string }[]> => [{}, {}]),
+  isOwnedMeetingFile: vi.fn(async (_folder: string, _file: string): Promise<boolean | symbol> => true),
   purgeBrain: vi.fn(() => ({ ok: true })),
   removeWiki: vi.fn(() => ({ ok: true })),
   purgeGraphArtifacts: vi.fn(() => true),
@@ -52,6 +53,7 @@ vi.mock('../graphify', () => ({
   purgeGraphArtifacts: mocks.purgeGraphArtifacts,
   scheduleRebuild: mocks.scheduleRebuild
 }))
+vi.mock('../meeting-privacy', () => ({ isOwnedMeetingFile: mocks.isOwnedMeetingFile }))
 
 import { registerRecallIpc } from './recall-ipc'
 
@@ -74,6 +76,7 @@ function setup(overrides: { requireAuth?: () => boolean; response?: number } = {
   const handlers = new Map<string, Handler>()
   const assertMainWindow = vi.fn()
   const writeTextFile = vi.fn()
+  const showMessageBox = vi.fn(async (_options: { message?: string }) => ({ response: overrides.response ?? 0 }))
   registerRecallIpc({
     ipcMain: {
       handle: (channel: string, handler: unknown) => {
@@ -82,7 +85,7 @@ function setup(overrides: { requireAuth?: () => boolean; response?: number } = {
     } as unknown as Pick<IpcMain, 'handle'>,
     assertMainWindow,
     requireAuth: overrides.requireAuth ?? (() => true),
-    showMessageBox: vi.fn(async () => ({ response: overrides.response ?? 0 })),
+    showMessageBox,
     showSaveDialog: vi.fn(async () => ({ canceled: false, filePath: '/out/meeting.md' })),
     downloadsPath: () => '/downloads',
     writeTextFile,
@@ -93,13 +96,14 @@ function setup(overrides: { requireAuth?: () => boolean; response?: number } = {
     if (!found) throw new Error(`${channel} was not registered`)
     return found
   }
-  return { handlers, handler, assertMainWindow, writeTextFile }
+  return { handlers, handler, assertMainWindow, writeTextFile, showMessageBox }
 }
 
 const event = { sender: { send: vi.fn() } } as unknown as IpcMainInvokeEvent
 
 beforeEach(() => {
   vi.clearAllMocks()
+  mocks.isOwnedMeetingFile.mockImplementation(async () => true)
 })
 
 describe('recall IPC', () => {
@@ -177,6 +181,25 @@ describe('recall IPC', () => {
     expect(await handler(IPC.recallExportPlain)(event, 'a.md')).toEqual({ ok: true, path: '/out/meeting.md' })
     expect(writeTextFile).toHaveBeenCalledWith('/out/meeting.md', '# meeting')
     expect(mocks.auditLog).toHaveBeenCalledWith('recall.export', { file: 'a.md' })
+  })
+
+  it('counts only Métis meetings in the delete-all confirmation, never files it will leave in place (Q10, D4-19)', async () => {
+    mocks.listMeetings.mockResolvedValueOnce([{ file: 'a.md' }, { file: 'b.md' }, { file: 'notes.md' }])
+    mocks.isOwnedMeetingFile.mockImplementation(async (_folder, file) => file !== 'notes.md')
+    const { handler, showMessageBox } = setup()
+    await handler(IPC.recallDeleteAll)(event)
+    expect(mocks.isOwnedMeetingFile).toHaveBeenCalledWith('/meetings', 'notes.md')
+    expect(showMessageBox.mock.calls[0][0].message).toBe('Delete all 2 saved meetings?')
+  })
+
+  it('counts a file it cannot read yet, because the wipe will try it and report it if it fails (Q10, D4-19)', async () => {
+    mocks.listMeetings.mockResolvedValueOnce([{ file: 'a.md' }, { file: 'locked.md' }])
+    mocks.isOwnedMeetingFile.mockImplementation(async (_folder, file) =>
+      file === 'locked.md' ? Symbol('unreadable') : true
+    )
+    const { handler, showMessageBox } = setup()
+    await handler(IPC.recallDeleteAll)(event)
+    expect(showMessageBox.mock.calls[0][0].message).toBe('Delete all 2 saved meetings?')
   })
 
   it('erases everything through the bulk flow and audits the counts', async () => {

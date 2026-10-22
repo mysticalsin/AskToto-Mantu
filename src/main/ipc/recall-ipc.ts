@@ -27,6 +27,7 @@ import { safeMeetingBasename } from '../meeting-path'
 import { resolveMeetingsFolder, appendDebrief } from '../transcripts'
 import { readSavedMeeting } from '../history-actions'
 import { listMeetings } from '../history-read'
+import { isOwnedMeetingFile } from '../meeting-privacy'
 import {
   recallRead,
   openExplicitly,
@@ -282,15 +283,22 @@ export function registerRecallIpc(deps: RecallIpcDependencies): void {
   ipcMain.handle(IPC.recallDeleteAll, async (e) => {
     assertMainWindow(e)
     if (!requireAuth()) return { ok: false, error: 'Sign in with your Mantu account first.' }
-    const meetings = await listMeetings()
+    // Count what the wipe will actually remove: deleteAllMeetings leaves files that are not Métis meetings
+    // in place, so the number the person confirms must not include them. A file that cannot be read yet is
+    // counted, because the wipe attempts it and reports it as failed if it still cannot be read.
+    const folder = resolveMeetingsFolder(getSettings())
+    let meetingCount = 0
+    for (const row of await listMeetings()) {
+      if ((await isOwnedMeetingFile(folder, row.file)) !== false) meetingCount++
+    }
     const dialogOpts = {
       type: 'warning' as const,
       title: 'Delete all Métis data',
       // Zero meetings is NOT an empty profile: the derived artifacts (.brain, the published wiki mirror,
       // the graph) outlive the transcripts they were built from, so a folder whose meetings were already
       // deleted one at a time still has plaintext to erase. This flow runs for it too.
-      message: meetings.length
-        ? `Delete all ${meetings.length} saved meeting${meetings.length === 1 ? '' : 's'}?`
+      message: meetingCount
+        ? `Delete all ${meetingCount} saved meeting${meetingCount === 1 ? '' : 's'}?`
         : 'Delete all Métis data on this device?',
       detail:
         'This permanently removes every saved transcript, note, and the knowledge graph from this device. This cannot be undone.',

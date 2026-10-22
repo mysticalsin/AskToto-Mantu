@@ -509,8 +509,13 @@ const api = {
   recallBackfillSpeakers: (file: string): Promise<RecallBackfillSpeakersResult> =>
     ipcRenderer.invoke(IPC.recallBackfillSpeakers, { file }),
   // Delete every saved meeting + the knowledge graph. Main pops its own (extra-emphatic) confirm dialog.
-  recallDeleteAll: (): Promise<{ ok: boolean; deleted: number; failed?: string[]; error?: string }> =>
-    ipcRenderer.invoke(IPC.recallDeleteAll),
+  recallDeleteAll: (): Promise<{
+    ok: boolean
+    deleted: number
+    failed?: string[]
+    skipped?: string[]
+    error?: string
+  }> => ipcRenderer.invoke(IPC.recallDeleteAll),
   preservedBrainIndexesList: (): Promise<PreservedBrainIndexListResult> =>
     ipcRenderer.invoke(IPC.brainPreservedIndexesList),
   preservedBrainIndexRestore: (id: string): Promise<{ ok: boolean; error?: string }> =>

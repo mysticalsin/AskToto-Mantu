@@ -7,6 +7,7 @@ import { ManagedChip } from '../../ui/ManagedChip'
 import { Section } from '../../ui/Section'
 import { ToggleRow } from '../../ui/Toggle'
 import { ctl } from '../../ui/ctl'
+import { patchSettingsChecked } from '../../lib/settings-patch-result'
 import { useConfirm } from '../../ui/confirm-context'
 import { notificationsView, useSettingsOsState } from './os-state'
 import { OsSettingsHint } from './OsSettingsHint'
@@ -25,10 +26,13 @@ let lastOutlookAuthStatus: AuthStatus | null = null
  */
 export function CalendarTab({
   settings,
-  patch
+  patch,
+  onSignOut
 }: {
   settings: PublicSettings
-  patch: (p: Partial<PublicSettings>) => void
+  patch: (p: Partial<PublicSettings>) => Promise<PublicSettings> | void
+  /** The app's full log-out (flushes a live meeting, then refreshes the sign-in gate). Without it, the bare IPC. */
+  onSignOut?: () => void | Promise<void>
 }): JSX.Element {
   const [authStatus, setAuthStatus] = useState<AuthStatus | null>(lastOutlookAuthStatus)
   const [outlookBusy, setOutlookBusy] = useState(false)
@@ -97,27 +101,46 @@ export function CalendarTab({
     }
     setSavingOutlook(true)
     setOutlookErr(null)
-    await patch({ azureClientId: ci, azureTenantId: ti, azureAllowedDomain: dom })
-    refreshOutlook()
-    setSavingOutlook(false)
-    setShowOutlookSetup(false)
+    try {
+      const saved = await patchSettingsChecked(patch, { azureClientId: ci, azureTenantId: ti, azureAllowedDomain: dom })
+      if (!mountedRef.current) return
+      if (!saved.ok) {
+        setOutlookErr(saved.message)
+        return
+      }
+      refreshOutlook()
+      setShowOutlookSetup(false)
+    } finally {
+      if (mountedRef.current) setSavingOutlook(false)
+    }
   }
 
   const signInOutlook = async (): Promise<void> => {
     setOutlookBusy(true)
     setOutlookErr(null)
-    const r = await window.toto.signIn()
-    if (!mountedRef.current) return
-    setOutlookBusy(false)
-    if (!r.ok) setOutlookErr(r.error || 'Sign-in failed.')
-    refreshOutlook()
+    try {
+      const r = await window.toto.signIn()
+      if (!mountedRef.current) return
+      if (!r.ok) setOutlookErr(r.error || 'Sign-in failed.')
+    } catch {
+      if (mountedRef.current) setOutlookErr('Sign-in failed. Try again.')
+    } finally {
+      if (mountedRef.current) setOutlookBusy(false)
+    }
+    if (mountedRef.current) refreshOutlook()
   }
 
   // Signing out is uncommon and not undoable from here (sign-in is a full OAuth round trip): ask first (HIG A2).
   const askToConfirm = useConfirm()
   const signOutOutlook = async (): Promise<void> => {
     if (!(await askToConfirm(OUTLOOK_SIGN_OUT_CONFIRMATION))) return
-    await window.toto.signOut()
+    // Same path as the footer's Log out: flush a live meeting, then refresh the sign-in gate. The bare IPC skipped both.
+    try {
+      await (onSignOut ? onSignOut() : window.toto.signOut())
+    } catch {
+      if (mountedRef.current) setOutlookErr("Métis couldn't sign you out. Try again.")
+      return
+    }
     if (!mountedRef.current) return
     refreshOutlook()
   }
@@ -172,7 +195,8 @@ export function CalendarTab({
           label="Meeting alerts"
           desc="Notify 1 minute before a scheduled meeting starts."
           on={alerts.on}
-          onChange={(v) => patch({ meetingNotifications: v })}
+          onChange={(v) => void patch({ meetingNotifications: v })}
+          disabled={settings.managedKeys.includes('meetingNotifications')}
           icon={Bell}
           describedBy={alerts.hint ? alertsHintId : undefined}
         />
@@ -272,7 +296,11 @@ export function CalendarTab({
                 'azureTenantId'
               )}
               {idField('Allowed email domain', domain, setDomain, 'mantu.com', 'azureAllowedDomain')}
-              {outlookErr && <span className="text-[11px] text-[color:var(--cl-destructive)]">{outlookErr}</span>}
+              {outlookErr && (
+                <span role="alert" className="text-[11px] text-[color:var(--cl-destructive)]">
+                  {outlookErr}
+                </span>
+              )}
               <div className="flex gap-2">
                 <button
                   type="button"
@@ -301,7 +329,9 @@ export function CalendarTab({
 
           {/* Sign-in error — only when the setup form is closed (form shows its own error inline) */}
           {outlookErr && authStatus?.configured && !showOutlookSetup && (
-            <span className="text-[11px] text-[color:var(--cl-destructive)]">{outlookErr}</span>
+            <span role="alert" className="text-[11px] text-[color:var(--cl-destructive)]">
+              {outlookErr}
+            </span>
           )}
         </div>
       </Section>

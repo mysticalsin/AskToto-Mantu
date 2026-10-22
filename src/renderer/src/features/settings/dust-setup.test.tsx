@@ -226,9 +226,11 @@ describe('AgentPicker', () => {
 })
 
 describe('DustSetup', () => {
-  function setup(overrides: Partial<PublicSettings> = {}) {
+  function setup(overrides: Partial<PublicSettings> = {}, writeFails = false) {
     const settings = makeSettings(overrides)
-    const patch = vi.fn(async () => {})
+    const patch = vi.fn(async (_p?: unknown) => {
+      if (writeFails) throw new Error('settings write failed')
+    })
     const saveKey = vi.fn(async () => {})
     const clearKey = vi.fn(async () => {})
     const recoverEncryptedProfile = vi.fn(async () => ({ ok: true }))
@@ -365,6 +367,26 @@ describe('DustSetup', () => {
         providerModels: { ...settings.providerModels, dust: DUST_BASE_AGENT_ID }
       })
     )
+  })
+
+  it('Disconnect writes the settings first and clears the key last (Q10, D6-7)', async () => {
+    hooks.confirm = async () => true
+    const { card, patch, clearKey } = setup({ ...connected, provider: 'dust' })
+    card.button(/Disconnect/).props.onClick()
+    await flush()
+    expect(patch).toHaveBeenCalledTimes(1)
+    expect(clearKey).toHaveBeenCalledWith('dust')
+    expect(patch.mock.invocationCallOrder[0]).toBeLessThan(clearKey.mock.invocationCallOrder[0])
+  })
+
+  it('Disconnect keeps the key when the settings write fails, and says so (Q10, D6-7)', async () => {
+    hooks.confirm = async () => true
+    const { card, patch, clearKey } = setup({ ...connected, provider: 'dust' }, true)
+    card.button(/Disconnect/).props.onClick()
+    await flush()
+    expect(patch).toHaveBeenCalledTimes(1)
+    expect(clearKey).not.toHaveBeenCalled()
+    expect(card.view().text).toContain("Métis couldn't disconnect Dust")
   })
 
   it('reports a failed CLI install without starting the sign-in', async () => {

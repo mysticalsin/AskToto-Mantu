@@ -36,6 +36,7 @@ import {
 import { AgentPicker } from './AgentPicker'
 import { DUST_CREDENTIAL_STORE, PROFILE_CREDENTIAL_STORE, isProfileUnlockError } from './credential-store'
 import { DUST_DISCONNECT_CONFIRMATION, DUST_REMOVE_KEY_CONFIRMATION } from './settings-confirmations'
+import { dustDisconnectPatch } from './dust-disconnect'
 import { pickReadyProvider } from './provider-readiness'
 
 export function DustSetup({
@@ -310,32 +311,21 @@ export function DustSetup({
   // Both removals are uncommon and not undoable from here (reconnecting is a full sign-in): ask first (HIG A2).
   const disconnectDust = async (): Promise<void> => {
     if (!(await askToConfirm(DUST_DISCONNECT_CONFIRMATION))) return
-    await clearKey('dust')
-    const nextThinking = { ...settings.providerModelsThinking }
-    delete nextThinking.dust
-    // Base is now user-changeable, so disconnect restores it to the Métis default rather than leaving
-    // a stale custom agent id pointing at a workspace you just disconnected from. Spotlight Ref is left
-    // untouched — it's a hard-locked app default, not user data.
-    const next: Partial<PublicSettings> = {
-      dustWorkspaceId: '',
-      dustBaseUrl: 'https://dust.tt',
-      providerModels: { ...settings.providerModels, dust: DUST_BASE_AGENT_ID },
-      providerModelsThinking: nextThinking,
-      // Reset to the "never CLI-connected" default (0) — otherwise a stale CLI-origin timestamp survives
-      // into a later manual-API-key connect and wrongly gates the live-check effect into probing a real
-      // Dust CLI session that was never used for that connection (see the effect's own gating comment).
-      dustTokenMintedAt: 0
+    const next = dustDisconnectPatch(settings)
+    // Settings first, key last: if the write fails the key is still saved and the connection is untouched, instead
+    // of a saved workspace with no key (a half-disconnected card).
+    try {
+      await patch(next)
+    } catch {
+      setErr("Métis couldn't disconnect Dust. Your connection is unchanged. Try again.")
+      return
     }
-    if (settings.provider === 'dust')
-      next.provider = pickReadyProvider(
-        'dust',
-        settings.hasKeys,
-        settings.cliConnected ?? {},
-        settings.dustWorkspaceId,
-        settings.providerModels,
-        settings.allowedProviders
-      )
-    await patch(next)
+    try {
+      await clearKey('dust')
+    } catch {
+      setErr("Métis disconnected Dust but couldn't remove the saved key. Try again.")
+      return
+    }
     setAgents(null)
     setErr(null)
     setCli({ busy: false, msg: null, ok: false })
