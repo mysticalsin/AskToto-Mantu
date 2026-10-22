@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, it, expect } from 'vitest'
 import { sourceIndexOf } from '../../../../scripts/lib/source-layout'
+import { readModuleSource } from '../../../test-helpers/module-source'
 import {
   displayedRecapText,
   crmPushDone,
@@ -271,7 +272,10 @@ describe('the deferred CRM marker — a push that beat its own autosave (MQA-092
 })
 
 describe('Review.tsx — ClickUp create-task destination (CLICKUP-PUSH.md)', () => {
-  const src = readFileSync(join(__dirname, 'Review.tsx'), 'utf8')
+  // The ClickUp panel lives in its own hook and section (Q07 extraction), so the contract spans all three modules.
+  const src = ['./Review', './review/useClickupPush', './review/ReviewClickupSection']
+    .map((specifier) => readModuleSource(__dirname, specifier).text)
+    .join('\n')
 
   it('shows Push to ClickUp and Task in, never attach_task_file or a ClickUp project-ID paste', () => {
     expect(src).toMatch(/Push to ClickUp/)
@@ -304,5 +308,83 @@ describe('Review.tsx — ClickUp create-task destination (CLICKUP-PUSH.md)', () 
     for (const block of effects) {
       expect(block).not.toMatch(/mcpPush/)
     }
+  })
+})
+
+// Q07 — Review: honest flags, protected edits, no duplicate pushes. Review.tsx has no render harness here, so
+// the wiring is pinned against the source (see the header of the previous source-pinning block). Modules are
+// addressed by specifier (readModuleSource), so a move fails the test instead of silently reading nothing.
+describe('Review.tsx — honest flags, protected edits, no duplicate pushes (Q07)', () => {
+  const src = readModuleSource(__dirname, './Review').text
+  const clickupSrc = readModuleSource(__dirname, './review/useClickupPush').text
+  const debriefSrc = readModuleSource(__dirname, './review/ReviewDebrief').text
+  const sliceFrom = (text: string, needle: string, length: number): string => {
+    const at = text.indexOf(needle)
+    expect(at, needle).toBeGreaterThan(-1)
+    return text.slice(at, at + length)
+  }
+
+  it('confidential republish failure keeps the saved flag and shows the reason (D4-1)', () => {
+    const body = sliceFrom(src, 'const changeConfidential = async', 1800)
+    // The flag is only reverted when main did NOT save it.
+    expect(body).toMatch(/r\.flagSaved/)
+    expect(body).toMatch(/setConfidentialError\(\{ message: r\.error/)
+    // A thrown IPC is a failure to save as well, and still tells the user.
+    expect(body).toMatch(/catch \{[\s\S]*?setConfidentialError\(/)
+    // The reason is rendered under the toggle with an alert role, wired to the switch, with a retry.
+    expect(src).toMatch(/role="alert"[\s\S]{0,300}\{confidentialError\.message\}/)
+    expect(src).toMatch(/aria-describedby=\{confidentialError \? 'review-confidential-error' : undefined\}/)
+    expect(src).toMatch(/Try Again/)
+  })
+
+  it('Regenerate on edited notes asks first and Cancel keeps the notes (D4-3)', () => {
+    const at = src.indexOf('title="Regenerate this summary from the transcript"')
+    expect(at).toBeGreaterThan(-1)
+    const button = src.slice(Math.max(0, at - 900), at)
+    expect(button).toMatch(/recapEdited/)
+    // Cancel returns before the regeneration starts.
+    expect(button).toMatch(/if \(!\(await askToConfirm\(REPLACE_EDITED_NOTES_CONFIRMATION\)\)\) return/)
+    expect(button.indexOf('askToConfirm')).toBeLessThan(button.indexOf('onRetryRecap?.()'))
+  })
+
+  it('debrief panel hidden for a summary-only meeting (D4-4) and surfaces the reason from main', () => {
+    expect(src).toMatch(/savedPath && !meetingMeta && !summaryOnly/)
+    expect(debriefSrc).toMatch(/setError\(r\.error/)
+    expect(debriefSrc).toMatch(/error \|\| 'Could not save\. Try again\.'/)
+  })
+
+  it("the debrief box enforces main's limit instead of letting the tail be cut (D4-5)", () => {
+    expect(debriefSrc).toMatch(/maxLength=\{DEBRIEF_MAX_CHARS\}/)
+  })
+
+  it('a rejected mcpPush returns the card to a retryable error (D4-7)', () => {
+    const bodies = [
+      sliceFrom(src, 'const sendToCrm = async', 2600),
+      sliceFrom(clickupSrc, 'const send = async', 2600),
+      sliceFrom(src, 'const runNextStepPushes = async', 3200)
+    ]
+    for (const body of bodies) {
+      expect(body).toMatch(/try \{[\s\S]*?await window\.toto\.mcpPush/)
+      expect(body).toMatch(/catch \{[\s\S]*?error: PUSH_FAILED_COPY/)
+    }
+  })
+
+  it('ClickUp and next-step pushes stamp a durable marker and seed from it (D4-6)', () => {
+    expect(clickupSrc).toMatch(/seedClickupPushed\(clickupPushedKey\)/)
+    expect(clickupSrc).toMatch(/recallSetPushMarker\([\s\S]{0,160}'clickup_pushed'/)
+    expect(clickupSrc).toMatch(/const pushed = clickupPushDone\(state\.phase, payload\)/)
+    expect(src).toMatch(/seedNextStepsPushed\(nextStepsPushedKeys\)/)
+    expect(src).toMatch(/recallSetPushMarker\([\s\S]{0,160}'next_steps_pushed'/)
+  })
+
+  it('Escape on a dirty recap draft opens the save prompt (D4-22)', () => {
+    const body = sliceFrom(src, "if (e.key === 'Escape')", 400)
+    expect(body).toMatch(/void requestCancelEditRecap\(\)/)
+    expect(body).not.toMatch(/\bcancelEditRecap\(\)/)
+    const request = sliceFrom(src, 'const requestCancelEditRecap = async', 600)
+    expect(request).toMatch(/if \(!recapDirty\)/)
+    expect(request).toMatch(/guardRecapEditNavigation\(\)/)
+    // The Cancel button stays a deliberate discard.
+    expect(src).toMatch(/<TextButton onClick=\{cancelEditRecap\} disabled=\{recapSaving\}>/)
   })
 })

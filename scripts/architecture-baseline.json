@@ -53,12 +53,12 @@
     "src/renderer/src/components/BrainView.tsx": 1445,
     "src/renderer/src/components/OnboardingExperience.tsx": 1632,
     "src/renderer/src/components/RecallView.tsx": 1109,
-    "src/renderer/src/components/Review.tsx": 1895,
+    "src/renderer/src/components/Review.tsx": 1770,
     "src/renderer/src/features/settings/AiSection.tsx": 2278,
     "src/renderer/src/features/settings/DustSetup.tsx": 928,
     "src/renderer/src/features/settings/SettingsRoot.tsx": 1049,
     "src/renderer/src/lib/listen.ts": 2992,
-    "src/shared/ipc.ts": 2251
+    "src/shared/ipc.ts": 2231
   },
   "FF-05a": {
     "src/main/apple-speech.ts": 2,
@@ -257,7 +257,7 @@
     "src/renderer/src/components/OverlayPeek.test.ts": 2,
     "src/renderer/src/components/OverlayPlacementPicker.test.ts": 4,
     "src/renderer/src/components/Panel.scroll-cap.test.tsx": 3,
-    "src/renderer/src/components/Review.audit.test.ts": 3,
+    "src/renderer/src/components/Review.audit.test.ts": 2,
     "src/renderer/src/components/RightEdgeSidecar.command-mic-guard.test.tsx": 1,
     "src/renderer/src/components/RightEdgeSidecar.test.tsx": 3,
     "src/renderer/src/components/Settings.contract.test.ts": 5,

@@ -109,6 +109,14 @@ import { useWebgpuFallbackNote } from './lib/asr-fallback-notes'
 import { useEscapeKeyListener, useSettingsShortcut, useSettingsWindowMode } from './lib/overlay-window-effects'
 import { useUpdateReadySubscription, type UpdateReadyState } from './lib/update-ready'
 import { DEFAULT_SHORTCUTS, ASK_MEMORY_IDLE_MS } from '@shared/ipc'
+import { isSummaryOnlyProfile, resolveEnterpriseLiveProfile } from '@shared/enterprise-live-profile'
+import {
+  pastMeetingMarkers,
+  reviewMarkerProps,
+  withEditedRecap,
+  withGeneratedRecap,
+  type PastMeeting
+} from './lib/past-meeting'
 import { applyCaveman, DEFAULT_ASK_CAVEMAN } from '@shared/caveman-ask'
 import type {
   HotkeyAction,
@@ -487,21 +495,7 @@ export function App(): JSX.Element {
   const [screenCapturedAt, setScreenCapturedAt] = useState<number | null>(null)
   const [focusSignal, setFocusSignal] = useState(0)
   // A past meeting opened from History → shown read-only in Review (recap + transcript + Resume).
-  const [pastMeeting, setPastMeeting] = useState<{
-    file: string
-    title: string
-    date: string
-    recap: string
-    recapStatus?: RecapStatus
-    lines: TranscriptLine[]
-    startedAt: number
-    durationMs?: number
-    confidential: boolean
-    recovered?: boolean
-    /** MQA-092 — the meeting's saved `crm_pushed` fingerprint, so Review knows a recap that already
-     *  reached the CRM in an earlier session and does not re-arm the push. */
-    crmPushedKey?: string
-  } | null>(null)
+  const [pastMeeting, setPastMeeting] = useState<PastMeeting | null>(null)
   // Surfaced when opening a past meeting fails (recallRead ok:false — unreadable/undecrypted file). Every
   // open path (History row, Settings' Mantu Intelligence list, Review's own Recent-meetings/Related panel)
   // funnels through openPastMeeting, so a single piece of state here covers all of them. Cleared at the
@@ -3094,9 +3088,7 @@ export function App(): JSX.Element {
           // Functional update: read whichever past meeting is open NOW, not whatever was captured when
           // this effect started — the user may have opened a DIFFERENT one while the write was in flight,
           // and a stale closure here would paint THIS text onto THAT meeting instead.
-          setPastMeeting((prev) =>
-            prev && prev.file === action.file ? { ...prev, recap: action.text, recapStatus: action.recapStatus } : prev
-          )
+          setPastMeeting((prev) => (prev && prev.file === action.file ? withGeneratedRecap(prev, action) : prev))
           // Only release the target if a NEWER generation hasn't already taken it over — that one owns it
           // now and must not have it wiped out from under it by this older run settling late.
           if (recapGenRunIdRef.current === owningId) setRecapGenTarget(null)
@@ -3168,7 +3160,7 @@ export function App(): JSX.Element {
         durationMs: r.durationMs,
         confidential: !!r.confidential,
         recovered: r.recovered === true,
-        crmPushedKey: r.crmPushedKey
+        ...pastMeetingMarkers(r)
       })
       setView('review')
       setCollapsed(false)
@@ -3721,7 +3713,8 @@ export function App(): JSX.Element {
         meetingMeta={pm ? { title: pm.title, date: pm.date } : undefined}
         recovered={pm?.recovered === true}
         confidential={pm ? pm.confidential : false}
-        crmPushedKey={pm ? pm.crmPushedKey : undefined}
+        {...reviewMarkerProps(pm)}
+        summaryOnly={!pm && isSummaryOnlyProfile(resolveEnterpriseLiveProfile(settings?.enterpriseLive ?? settings))}
         followupDraft={followup.answer}
         winsToggle={spotlightRefReady ? { on: includeWins, onToggle: setIncludeWins } : undefined}
         onGenerateFollowup={generateFollowup}
@@ -3766,7 +3759,9 @@ export function App(): JSX.Element {
               }
             : undefined
         }
-        onRecapSaved={pm ? (recap) => setPastMeeting((prev) => (prev ? { ...prev, recap } : prev)) : undefined}
+        onRecapSaved={
+          pm ? (recap) => setPastMeeting((prev) => (prev ? withEditedRecap(prev, recap) : prev)) : undefined
+        }
         onUpdateRecap={updateRecapManually}
         onDone={
           pm

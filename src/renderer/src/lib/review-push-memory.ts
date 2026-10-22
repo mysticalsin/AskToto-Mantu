@@ -42,6 +42,32 @@ export function crmPushDone(phase: CrmPushPhase, p: CrmPayload): boolean {
   return phase === 'sent' || pushedCrmPayloads.has(crmPushKey(p))
 }
 
+// ── ClickUp — one task per meeting recap (Q07, D4-6) ───────────────────────────────────────────────────
+// Before this the ClickUp "sent" state lived in component state only, so leaving Review for History and coming
+// back re-offered "Push to ClickUp" and a second Confirm created a duplicate task in the team's tracker. Same
+// remedy as the CRM: module memory that outlives the component, seeded from a durable frontmatter marker.
+const pushedClickupPayloads = new Set<string>()
+
+/** The ClickUp payload's fingerprint — the identity the session Set and the `clickup_pushed` marker share. */
+export function clickupPayloadKey(p: CrmPayload): string {
+  return fnv1a(JSON.stringify(['clickup', p.title, p.summary])).toString(36)
+}
+
+/** Remember a ClickUp task that was created, so re-opening this meeting doesn't offer to create it again. */
+export function markClickupPushed(p: CrmPayload): void {
+  pushedClickupPayloads.add(clickupPayloadKey(p))
+}
+
+/** Seed the session memory from a meeting's durable `clickup_pushed` marker. */
+export function seedClickupPushed(key: string | undefined): void {
+  if (key) pushedClickupPayloads.add(key)
+}
+
+/** Whether THIS payload already became a ClickUp task. A changed recap is a different payload and re-arms. */
+export function clickupPushDone(phase: CrmPushPhase, p: CrmPayload): boolean {
+  return phase === 'sent' || pushedClickupPayloads.has(clickupPayloadKey(p))
+}
+
 // ── "Book next steps" — push recap action items to a connected task manager (Plane today) ──────────────
 // One MCP task per (action item × connection) — see the design note on NextStepArgs below for the exact
 // wire shape. Per-card push status; a card that already succeeded this session is remembered the same
@@ -53,8 +79,24 @@ export type NextStepPhase = 'idle' | 'sending' | 'sent' | 'error'
  *  structured — see dueDateText's own doc comment in shared/ipc.ts). */
 export type NextStepArgs = { title: string; description: string; project_id?: string }
 const pushedNextSteps = new Set<string>()
-const nextStepKey = (connectionId: string, args: NextStepArgs): string =>
+const nextStepIdentity = (connectionId: string, args: NextStepArgs): string =>
   JSON.stringify([connectionId, args.title, args.description, args.project_id ?? ''])
+
+/**
+ * The durable fingerprint of one next-step push (Q07, D4-6), kept in the meeting's `next_steps_pushed` list. Two
+ * differently salted 32-bit hashes, so a collision between two items in one meeting is out of reach, and short
+ * enough (at most 14 characters) for the main-side `[a-z0-9]{1,32}` key contract.
+ */
+export function nextStepPushKey(connectionId: string, args: NextStepArgs): string {
+  const identity = nextStepIdentity(connectionId, args)
+  return fnv1a(identity).toString(36) + fnv1a(`next-step:${identity}`).toString(36)
+}
+const nextStepKey = nextStepPushKey
+
+/** Seed the session memory from a meeting's durable `next_steps_pushed` list. */
+export function seedNextStepsPushed(keys: readonly string[] | undefined): void {
+  for (const key of keys ?? []) pushedNextSteps.add(key)
+}
 
 /** Remember a next-step push that succeeded, so re-opening this meeting doesn't re-offer it. */
 export function markNextStepPushed(connectionId: string, args: NextStepArgs): void {

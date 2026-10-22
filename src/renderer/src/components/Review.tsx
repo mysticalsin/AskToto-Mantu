@@ -5,15 +5,14 @@ import {
   FileText,
   ListTree,
   FolderOpen,
-  Save,
   RotateCcw,
+  Save,
   Play,
   Download,
   Clock,
   Mail,
   Send,
   AlertCircle,
-  EarOff,
   ArrowLeft,
   Pencil,
   X,
@@ -52,13 +51,20 @@ import {
   crmPushKey,
   markCrmPushed,
   markNextStepPushed,
+  nextStepPushKey,
   nextStepPushed,
   seedCrmPushed,
+  seedNextStepsPushed,
   type CrmPayload,
   type CrmPushPhase,
   type NextStepArgs,
   type NextStepPhase
 } from '../lib/review-push-memory'
+import { PUSH_FAILED_COPY, REPLACE_EDITED_NOTES_CONFIRMATION } from './review/review-confirmations'
+import { ReviewClickupSection } from './review/ReviewClickupSection'
+import { ReviewDebrief } from './review/ReviewDebrief'
+import { useClickupPush } from './review/useClickupPush'
+import { useConfirm } from '../ui/confirm-context'
 export {
   crmPushDone,
   crmPushKey,
@@ -118,6 +124,10 @@ export const Review = memo(function Review({
   recovered,
   confidential,
   crmPushedKey,
+  clickupPushedKey,
+  nextStepsPushedKeys,
+  recapEdited,
+  summaryOnly,
   followupDraft,
   winsToggle,
   onOpenFolder,
@@ -163,6 +173,14 @@ export const Review = memo(function Review({
   /** MQA-092 — this meeting's saved `crm_pushed` fingerprint, so a recap pushed to the CRM before the
    *  last relaunch does not re-arm "Push to CRM". Undefined for a live meeting and for one never pushed. */
   crmPushedKey?: string
+  /** Q07 (D4-6) — this meeting's saved `clickup_pushed` fingerprint and `next_steps_pushed` list, so a task that
+   *  already landed in the tracker is not offered again after a remount or relaunch. */
+  clickupPushedKey?: string
+  nextStepsPushedKeys?: string[]
+  /** Q07 (D4-3) — the saved notes carry `recap_edited: true`: a person wrote them, so Regenerate asks first. */
+  recapEdited?: boolean
+  /** Q07 (D4-4) — a managed summary-only meeting keeps no transcript to attach a debrief to, so the panel is hidden. */
+  summaryOnly?: boolean
   /** Draft follow-up email from the locked follow-up Dust agent — null until Generate is clicked. */
   followupDraft?: AnswerState | null
   onOpenFolder: () => void
@@ -215,6 +233,7 @@ export const Review = memo(function Review({
     onBookMeetings: () => void
   }
 }): JSX.Element {
+  const askToConfirm = useConfirm()
   const [copied, flashCopied] = useFlash(1500)
   const [notesCopied, flashNotesCopied] = useFlash(1500)
   const [jsonCopied, flashJsonCopied] = useFlash(1500)
@@ -226,36 +245,34 @@ export const Review = memo(function Review({
   // false for a just-ended live one) and updated optimistically on toggle.
   const [confidentialFlag, setConfidentialFlag] = useState(!!confidential)
   const [confidentialBusy, setConfidentialBusy] = useState(false)
-  useEffect(() => setConfidentialFlag(!!confidential), [confidential, savedPath])
-  const toggleConfidential = async (): Promise<void> => {
+  // Q07 (D4-1): why the last change did not fully take, and the value a retry should aim for.
+  const [confidentialError, setConfidentialError] = useState<{ message: string; target: boolean } | null>(null)
+  useEffect(() => {
+    setConfidentialFlag(!!confidential)
+    setConfidentialError(null)
+  }, [confidential, savedPath])
+  const changeConfidential = async (next: boolean): Promise<void> => {
     if (!savedPath || confidentialBusy) return
     const file = savedPath.split('/').pop() ?? savedPath
-    const next = !confidentialFlag
     setConfidentialBusy(true)
-    setConfidentialFlag(next) // optimistic — reverted below on failure
+    setConfidentialFlag(next) // optimistic — reverted below only when main did not save it
+    setConfidentialError(null)
     try {
       const r = await window.toto.recallSetConfidential(file, next)
-      if (!r.ok) setConfidentialFlag(!next)
+      if (!r.ok) {
+        // `flagSaved`: the frontmatter write is durable and only the republish failed, so the toggle keeps the
+        // value the file really has and the reason says what is still wrong. Anything else did not save.
+        if (!r.flagSaved) setConfidentialFlag(!next)
+        setConfidentialError({ message: r.error || "Couldn't change the confidential flag. Try again.", target: next })
+      }
     } catch {
       setConfidentialFlag(!next)
+      setConfidentialError({ message: "Couldn't change the confidential flag. Try again.", target: next })
     } finally {
       setConfidentialBusy(false)
     }
   }
-  // 90-Second Debrief (innovation #6): the off-record layer — what was NOT said out loud.
-  const [debrief, setDebrief] = useState('')
-  const [debriefState, setDebriefState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle')
-  const saveDebrief = async (): Promise<void> => {
-    if (!savedPath || !debrief.trim() || debriefState === 'saving') return
-    setDebriefState('saving')
-    try {
-      const file = savedPath.split('/').pop() ?? savedPath
-      const r = await window.toto.debriefSave(file, debrief)
-      setDebriefState(r.ok ? 'saved' : 'error')
-    } catch {
-      setDebriefState('error')
-    }
-  }
+  const toggleConfidential = (): Promise<void> => changeConfidential(!confidentialFlag)
   // Frozen at mount: by the time Review shows, the meeting has ENDED, so its duration is a constant.
   // A ticking wall-clock here made the Duration chip keep growing after Stop whenever a session ended
   // with ≤1 transcript line (the wall-clock fallback below) — a stopped meeting must never keep counting.
@@ -317,6 +334,15 @@ export const Review = memo(function Review({
     recapEditIdentityRef.current.draftRevision = 0
     setEditingRecap(false)
     setRecapEditError(null)
+  }
+  // Esc with unsaved changes asks first (Q07, D4-22), through the same "Save recap changes?" sheet as leaving
+  // the screen. The Cancel button stays a deliberate discard: pressing it already says "throw this away".
+  const requestCancelEditRecap = async (): Promise<void> => {
+    if (!recapDirty) {
+      cancelEditRecap()
+      return
+    }
+    if (await guardRecapEditNavigation()) cancelEditRecap()
   }
   const handleRecapDraftChange = (draft: string): void => {
     recapEditIdentityRef.current.draftRevision += 1
@@ -566,6 +592,10 @@ export const Review = memo(function Review({
   useEffect(() => {
     seedCrmPushed(crmPushedKey)
   }, [crmPushedKey])
+  // Q07 (D4-6): the same durable memory for ClickUp and next-step tasks.
+  useEffect(() => {
+    seedNextStepsPushed(nextStepsPushedKeys)
+  }, [nextStepsPushedKeys])
   // ...and stamp a push that beat the meeting's own autosave, once the file finally exists. Guarded on
   // the fingerprint matching THIS payload, so a marker can never land on a different meeting's file.
   const crmPayloadKey = crmPushKey(crmPayload)
@@ -591,12 +621,19 @@ export const Review = memo(function Review({
     const payload = crmPayload
     const file = savedPath
     setPushState({ phase: 'sending', error: null })
-    const r = await window.toto.mcpPush({
-      connectionId: 'bidstack',
-      toolName: pushTool,
-      args: { ...payload, confidential: confidentialFlag },
-      ...(file ? { meetingFile: file.split(/[/\\]/).pop() || file } : {})
-    })
+    let r: Awaited<ReturnType<typeof window.toto.mcpPush>>
+    try {
+      r = await window.toto.mcpPush({
+        connectionId: 'bidstack',
+        toolName: pushTool,
+        args: { ...payload, confidential: confidentialFlag },
+        ...(file ? { meetingFile: file.split(/[/\\]/).pop() || file } : {})
+      })
+    } catch {
+      // A rejected IPC must not leave the card on "Pushing…" with its in-flight guard blocking every retry.
+      setPushState({ phase: 'error', error: PUSH_FAILED_COPY })
+      return
+    }
     if (r.ok) {
       markCrmPushed(payload)
       setPushState({ phase: 'sent', error: null })
@@ -619,91 +656,14 @@ export const Review = memo(function Review({
     [mcpConnections]
   )
   const clickupConn = mcpConnections?.find((c) => c.kind === 'clickup' && c.connected)
-  const [clickupResolvedDest, setClickupResolvedDest] = useState('')
-  const [clickupResolving, setClickupResolving] = useState(false)
-  const clickupDiscoveringRef = useRef(false)
-  const clickupDestName = (
-    clickupResolvedDest ||
-    clickupConn?.clickupListName ||
-    clickupConn?.clickupListId ||
-    ''
-  ).trim()
-  const [clickupOpen, setClickupOpen] = useState(false)
-  const [clickupState, setClickupState] = useState<{
-    phase: CrmPushPhase
-    error: string | null
-    destinationName?: string
-    taskUrl?: string
-  }>({
-    phase: 'idle',
-    error: null
+  const clickup = useClickupPush({
+    clickupConn,
+    savedPath,
+    confidentialFlag,
+    payload: crmPayload,
+    clickupPushedKey
   })
-  useEffect(() => {
-    setClickupOpen(false)
-    setClickupState({ phase: 'idle', error: null })
-    setClickupResolvedDest('')
-    setClickupResolving(false)
-    clickupDiscoveringRef.current = false
-  }, [savedPath])
-
-  const ensureClickupDest = async (): Promise<void> => {
-    if (!clickupConn) return
-    if (clickupDestName || clickupDiscoveringRef.current) return
-    clickupDiscoveringRef.current = true
-    setClickupResolving(true)
-    try {
-      const r = await window.toto.mcpClickupDiscoverDestination()
-      const named = (r.clickupListName || r.clickupListId || '').trim()
-      if (r.ok && named) {
-        setClickupResolvedDest(named)
-        setClickupState((s) =>
-          s.phase === 'error' && /could not name the destination/i.test(s.error || '')
-            ? { phase: 'idle', error: null }
-            : s
-        )
-      } else {
-        setClickupState({ phase: 'error', error: r.error || 'ClickUp could not name the destination.' })
-      }
-    } finally {
-      clickupDiscoveringRef.current = false
-      setClickupResolving(false)
-    }
-  }
-
-  const sendToClickup = async (): Promise<void> => {
-    if (clickupState.phase === 'sending' || !clickupConn) return
-    if (confidentialFlag) {
-      setClickupState({ phase: 'error', error: 'This meeting is marked confidential. ClickUp push is blocked.' })
-      return
-    }
-    if (!clickupDestName) {
-      setClickupState({ phase: 'error', error: 'ClickUp could not name the destination.' })
-      return
-    }
-    const file = savedPath
-    setClickupState({ phase: 'sending', error: null })
-    const r = await window.toto.mcpPush({
-      connectionId: 'clickup',
-      toolName: 'clickup_create_task',
-      args: {
-        name: crmPayload.title,
-        title: crmPayload.title,
-        description: crmPayload.summary,
-        confidential: confidentialFlag
-      },
-      ...(file ? { meetingFile: file.split(/[/\\]/).pop() || file } : {})
-    })
-    if (r.ok) {
-      setClickupState({
-        phase: 'sent',
-        error: null,
-        destinationName: r.destinationName || clickupDestName,
-        taskUrl: r.taskUrl
-      })
-    } else {
-      setClickupState({ phase: 'error', error: r.error || 'ClickUp rejected the task.' })
-    }
-  }
+  const { destName: clickupDestName, resolving: clickupResolving, ensureDest: ensureClickupDest } = clickup
   const [nextStepsOpen, setNextStepsOpen] = useState(false)
   const [nextStepsData, setNextStepsData] = useState<RecapExport['actionItems'] | null>(null)
   const [nextStepsLoading, setNextStepsLoading] = useState(false)
@@ -828,14 +788,31 @@ export const Review = memo(function Review({
         const key = `${i}:${conn.id}`
         if (nextStepPushed(stepStatus[key]?.phase ?? 'idle', conn.id, args)) continue
         setStepStatus((s) => ({ ...s, [key]: { phase: 'sending', error: null } }))
-        const r = await window.toto.mcpPush({
-          connectionId: conn.id,
-          toolName: tool,
-          args: { ...args, confidential: confidentialFlag },
-          ...(savedPath ? { meetingFile: savedPath.split(/[/\\]/).pop() || savedPath } : {})
-        })
+        let r: Awaited<ReturnType<typeof window.toto.mcpPush>>
+        try {
+          r = await window.toto.mcpPush({
+            connectionId: conn.id,
+            toolName: tool,
+            args: { ...args, confidential: confidentialFlag },
+            ...(savedPath ? { meetingFile: savedPath.split(/[/\\]/).pop() || savedPath } : {})
+          })
+        } catch {
+          // One rejected push must not strand this card on "Sending" or abort the rest of the batch.
+          setStepStatus((s) => ({ ...s, [key]: { phase: 'error', error: PUSH_FAILED_COPY } }))
+          continue
+        }
         if (r.ok) {
           markNextStepPushed(conn.id, args)
+          // Durable half (Q07, D4-6): the task exists, so recording it is best-effort and never a push failure.
+          if (savedPath) {
+            void window.toto
+              .recallSetPushMarker(
+                savedPath.split(/[/\\]/).pop() || savedPath,
+                'next_steps_pushed',
+                nextStepPushKey(conn.id, args)
+              )
+              .catch(() => {})
+          }
           setStepStatus((s) => ({ ...s, [key]: { phase: 'sent', error: null } }))
         } else {
           setStepStatus((s) => ({ ...s, [key]: { phase: 'error', error: r.error || 'Push failed.' } }))
@@ -1022,33 +999,51 @@ export const Review = memo(function Review({
           card, entity timelines/current-facts, indexes). Available for both a just-saved live meeting
           and a reopened past one — anything with a real savedPath. */}
       {savedPath && (
-        <button
-          type="button"
-          onClick={() => void toggleConfidential()}
-          disabled={confidentialBusy}
-          aria-pressed={confidentialFlag}
-          className={[
-            'no-drag focus-ring flex items-center gap-2 rounded-xl border px-3 py-2 text-left text-[12px] disabled:opacity-60',
-            confidentialFlag
-              ? 'border-[var(--color-danger)]/30 bg-[var(--color-danger)]/10'
-              : 'border-[var(--color-hair-soft)] bg-white/[0.02] hover:bg-white/[0.05]'
-          ].join(' ')}
-        >
-          <Lock
-            size={13}
-            className={confidentialFlag ? 'text-[var(--color-danger)]' : 'text-[color:var(--color-ink-3)]'}
-          />
-          <span className="flex-1 text-[color:var(--color-ink-2)]">
-            {confidentialFlag
-              ? 'Confidential: excluded from published intelligence.'
-              : 'Confidential: exclude from published intelligence'}
-          </span>
-          <span
-            className={confidentialFlag ? 'font-medium text-[var(--color-danger)]' : 'text-[color:var(--color-ink-3)]'}
+        <>
+          <button
+            type="button"
+            onClick={() => void toggleConfidential()}
+            disabled={confidentialBusy}
+            aria-pressed={confidentialFlag}
+            aria-describedby={confidentialError ? 'review-confidential-error' : undefined}
+            className={[
+              'no-drag focus-ring flex items-center gap-2 rounded-xl border px-3 py-2 text-left text-[12px] disabled:opacity-60',
+              confidentialFlag
+                ? 'border-[var(--color-danger)]/30 bg-[var(--color-danger)]/10'
+                : 'border-[var(--color-hair-soft)] bg-white/[0.02] hover:bg-white/[0.05]'
+            ].join(' ')}
           >
-            {confidentialFlag ? 'On' : 'Off'}
-          </span>
-        </button>
+            <Lock
+              size={13}
+              className={confidentialFlag ? 'text-[var(--color-danger)]' : 'text-[color:var(--color-ink-3)]'}
+            />
+            <span className="flex-1 text-[color:var(--color-ink-2)]">
+              {confidentialFlag
+                ? 'Confidential: excluded from published intelligence.'
+                : 'Confidential: exclude from published intelligence'}
+            </span>
+            <span
+              className={
+                confidentialFlag ? 'font-medium text-[var(--color-danger)]' : 'text-[color:var(--color-ink-3)]'
+              }
+            >
+              {confidentialFlag ? 'On' : 'Off'}
+            </span>
+          </button>
+          {confidentialError && (
+            <div
+              id="review-confidential-error"
+              role="alert"
+              className="flex items-start gap-1.5 px-1 text-[11px] text-[var(--color-danger)]"
+            >
+              <AlertCircle size={13} className="mt-px shrink-0" />
+              <span className="flex-1">{confidentialError.message}</span>
+              <TextButton onClick={() => void changeConfidential(confidentialError.target)} disabled={confidentialBusy}>
+                Try Again
+              </TextButton>
+            </div>
+          )}
+        </>
       )}
 
       {/* Entities in this meeting (Task MI-3) — the moment-of-truth correction strip. Renders nothing
@@ -1056,43 +1051,9 @@ export const Review = memo(function Review({
           layout for anyone else; dismissible; blocks no other Review interaction. */}
       <ReviewEntityStrip file={savedPath} />
 
-      {/* 90-SECOND DEBRIEF — the unsaid, captured while it's still warm. Live reviews only (a past
-          meeting's moment has passed). Stored inside the saved meeting file: same encryption, same
-          retention, same deletion; the brain folds it into signals on re-ingest. */}
-      {savedPath && !meetingMeta && (
-        <div className="rounded-xl border border-[var(--color-hair-soft)] bg-white/[0.02] px-3 py-2.5">
-          <div className="mb-1.5 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-[color:var(--color-ink-3)]">
-            <EarOff size={12} /> 90-second debrief, off the record
-          </div>
-          {debriefState === 'saved' ? (
-            <div className="flex items-center gap-2 text-[12px] text-[color:var(--color-ink-2)]">
-              <Check size={13} className="text-[var(--color-success)]" />
-              Saved with the meeting. It feeds your intelligence brain, never a follow-up email.
-            </div>
-          ) : (
-            <>
-              <textarea
-                value={debrief}
-                onChange={(e) => setDebrief(e.target.value)}
-                rows={2}
-                placeholder="What wasn't said out loud? Hallway remarks, hesitation, your gut read…"
-                className="no-drag focus-ring w-full resize-none rounded-lg border border-[var(--color-hair-soft)] bg-white/[0.03] px-2.5 py-1.5 text-[12px] text-[color:var(--color-ink)] placeholder:text-[color:var(--color-ink-3)]"
-              />
-              <div className="mt-1.5 flex items-center justify-between">
-                <span className="text-[10px] text-[color:var(--color-ink-3)]">
-                  {debriefState === 'error'
-                    ? 'Could not save. Try again.'
-                    : 'Impressions, not transcript. 90 seconds, then move on.'}
-                </span>
-                <TextButton onClick={() => void saveDebrief()} disabled={!debrief.trim() || debriefState === 'saving'}>
-                  {debriefState === 'saving' ? <InlineOrb kind="writing" /> : <Save size={11} />}
-                  Save debrief
-                </TextButton>
-              </div>
-            </>
-          )}
-        </div>
-      )}
+      {/* 90-SECOND DEBRIEF: live reviews only, and never for a summary-only meeting (it keeps no transcript to
+          attach it to). */}
+      {savedPath && !meetingMeta && !summaryOnly && <ReviewDebrief key={savedPath} savedPath={savedPath} />}
 
       <section ref={summaryRef} tabIndex={-1} aria-live="polite" aria-atomic="false">
         <div className="mb-1.5 flex items-center justify-between">
@@ -1143,7 +1104,11 @@ export const Review = memo(function Review({
                       because this button unmounts the instant regeneration clears recapText (mirrors Retry). */}
                   {onRetryRecap && (
                     <TextButton
-                      onClick={() => {
+                      onClick={async () => {
+                        // Q07 (D4-3): notes a person edited are not the generation's to replace without asking.
+                        if (recapEdited || editedRecap !== null) {
+                          if (!(await askToConfirm(REPLACE_EDITED_NOTES_CONFIRMATION))) return
+                        }
                         summaryRef.current?.focus()
                         onRetryRecap?.()
                       }}
@@ -1192,7 +1157,7 @@ export const Review = memo(function Review({
                 // app's other commit shortcuts.
                 if (e.key === 'Escape') {
                   e.stopPropagation()
-                  cancelEditRecap()
+                  void requestCancelEditRecap()
                 } else if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
                   e.stopPropagation()
                   e.preventDefault()
@@ -1559,97 +1524,7 @@ export const Review = memo(function Review({
       )}
 
       {recapText && !recap?.error && !editingRecap && clickupConn && (
-        <section aria-live="polite">
-          <div className="mb-1.5 flex items-center justify-between">
-            <div className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-[color:var(--color-ink-3)]">
-              <Send size={12} /> ClickUp
-            </div>
-            {!clickupOpen && clickupState.phase !== 'sent' && !confidentialFlag && (
-              <Chip
-                onClick={() => {
-                  setClickupOpen(true)
-                  void ensureClickupDest()
-                }}
-                variant="accent"
-              >
-                <Send size={13} /> Push to ClickUp
-              </Chip>
-            )}
-            {confidentialFlag && (
-              <span className="text-[11px] text-[color:var(--color-ink-3)]">ClickUp push blocked (confidential)</span>
-            )}
-          </div>
-
-          {clickupState.phase === 'sent' ? (
-            <div className="flex flex-col gap-1 text-[13px] text-[var(--color-success)]">
-              <div className="flex items-center gap-1.5">
-                <Check size={13} /> Created in {clickupState.destinationName || clickupDestName || 'ClickUp'}.
-              </div>
-              {clickupState.taskUrl ? (
-                <a
-                  href={clickupState.taskUrl}
-                  className="text-[11px] text-[color:var(--color-ink-2)] underline"
-                  target="_blank"
-                  rel="noreferrer"
-                >
-                  {clickupState.taskUrl}
-                </a>
-              ) : null}
-            </div>
-          ) : clickupOpen ? (
-            <div className="flex flex-col gap-2">
-              <div className="text-[12px] text-[color:var(--color-ink-2)]">
-                {clickupResolving
-                  ? 'Finding the ClickUp list…'
-                  : clickupDestName
-                    ? `Task in ${clickupDestName}`
-                    : 'ClickUp could not name the destination.'}
-              </div>
-              <div className="rounded-xl border border-[var(--color-hair-soft)] bg-white/[0.02] p-3 text-[12px]">
-                <div className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-[color:var(--color-ink-3)]">
-                  Payload preview
-                </div>
-                <div className="flex flex-col gap-1 text-[color:var(--color-ink-2)]">
-                  <div>
-                    <span className="text-[color:var(--color-ink-3)]">Name: </span>
-                    {crmPayload.title}
-                  </div>
-                  <div className="text-[color:var(--color-ink-3)]">Description:</div>
-                  <div className="scroll-thin max-h-32 overflow-y-auto whitespace-pre-wrap rounded-lg bg-white/[0.03] p-2 text-[color:var(--color-ink)]">
-                    {crmPayload.summary || '(empty)'}
-                  </div>
-                </div>
-              </div>
-              {clickupState.phase === 'error' && clickupState.error && (
-                <div className="flex items-start gap-1.5 text-[11px] text-[var(--color-danger)]">
-                  <AlertCircle size={13} className="mt-px shrink-0" />
-                  <span>{clickupState.error}</span>
-                </div>
-              )}
-              <div className="flex items-center gap-1.5">
-                {clickupDestName && !clickupResolving ? (
-                  <Chip
-                    onClick={() => void sendToClickup()}
-                    variant="accent"
-                    disabled={clickupState.phase === 'sending'}
-                  >
-                    {clickupState.phase === 'sending' ? <InlineOrb kind="connecting" /> : <Send size={13} />}
-                    {clickupState.phase === 'sending' ? 'Pushing…' : 'Confirm push'}
-                  </Chip>
-                ) : null}
-                <TextButton
-                  onClick={() => {
-                    setClickupOpen(false)
-                    setClickupState({ phase: 'idle', error: null })
-                  }}
-                  disabled={clickupState.phase === 'sending'}
-                >
-                  Cancel
-                </TextButton>
-              </div>
-            </div>
-          ) : null}
-        </section>
+        <ReviewClickupSection push={clickup} payload={crmPayload} confidentialFlag={confidentialFlag} />
       )}
 
       {recapText && !recap?.error && !editingRecap && taskConnections.length > 0 && (

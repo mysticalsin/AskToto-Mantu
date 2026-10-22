@@ -206,6 +206,7 @@ function reviewEditCallbacks(renderValues: Record<string, unknown>) {
     recapDraft: string
     startEditRecap: () => void
     cancelEditRecap: () => void
+    requestCancelEditRecap: () => Promise<void>
     saveRecap: () => Promise<boolean>
     guardRecapEditNavigation: () => Promise<boolean>
     draftOnChange: (event: { target: { value: string } }) => void
@@ -224,12 +225,14 @@ function reviewEditCallbacks(renderValues: Record<string, unknown>) {
       const recapEditSnapshot = ${namedExpression(review, 'recapEditSnapshot')};
       const saveRecap = ${namedExpression(review, 'saveRecap')};
       const guardRecapEditNavigation = ${namedExpression(review, 'guardRecapEditNavigation')};
+      const requestCancelEditRecap = ${namedExpression(review, 'requestCancelEditRecap')};
       const handleRecapDraftChange = ${optionalDraftHandler};
       return {
         recapDirty,
         recapDraft,
         startEditRecap,
         cancelEditRecap,
+        requestCancelEditRecap,
         saveRecap,
         guardRecapEditNavigation,
         draftOnChange: ${reviewJsxHandler('textarea', 'onChange', { ariaLabel: 'Edit meeting notes' })},
@@ -1173,9 +1176,8 @@ describe('actual Review recap edit callbacks', () => {
       const editorA = enterReviewDraft(host, 'Submitted A')
       saveA = editorA.saveRecap()
       const writeA = host.writes[0]!
-      const escape = { key: 'Escape', stopPropagation: vi.fn(), preventDefault: vi.fn() }
-      editorA.draftOnKeyDown(escape)
-      expect(escape.stopPropagation).toHaveBeenCalledExactlyOnceWith()
+      // The Cancel button is a deliberate discard. Esc on a dirty draft asks first now (Q07, D4-22), tested below.
+      editorA.cancelEditRecap()
       expect(host.state.editingRecap).toBe(false)
 
       host.render().startEditRecap()
@@ -1287,9 +1289,7 @@ describe('actual Review recap edit callbacks', () => {
 
       const nextText = reopen ? 'Submitted A' : 'Newer B'
       if (reopen) {
-        const escape = { key: 'Escape', stopPropagation: vi.fn(), preventDefault: vi.fn() }
-        editorA.draftOnKeyDown(escape)
-        expect(escape.stopPropagation).toHaveBeenCalledExactlyOnceWith()
+        editorA.cancelEditRecap()
         expect(host.state.editingRecap).toBe(false)
         host.render().startEditRecap()
         host.render().draftOnChange({ target: { value: nextText } })
@@ -1340,6 +1340,58 @@ describe('actual Review recap edit callbacks', () => {
       expect(host.state.editingRecap).toBe(false)
       expect(host.state.editedRecap).toEqual({ base: 'Saved recap.', text: 'Submitted A' })
       expect(host[callback]).toHaveBeenCalledTimes(1)
+    } finally {
+      await host.cleanup()
+    }
+  })
+
+  // Q07 (D4-22): Esc used to throw a long draft away with no question. Esc on a dirty draft now opens the same
+  // "Save recap changes?" sheet as leaving the screen; an unchanged draft still closes at once.
+  it('Escape on a dirty recap draft opens the save prompt, and only Discard closes the editor', async () => {
+    const host = reviewRecapHost()
+    try {
+      const editor = enterReviewDraft(host, 'Unsaved words')
+      const escape = { key: 'Escape', stopPropagation: vi.fn(), preventDefault: vi.fn() }
+      editor.draftOnKeyDown(escape)
+      expect(escape.stopPropagation).toHaveBeenCalledExactlyOnceWith()
+      expect(host.navigationGuard.request).toHaveBeenCalledTimes(1)
+      expect(host.state.editingRecap).toBe(true)
+      expect(host.state.recapDraft).toBe('Unsaved words')
+
+      host.navigationChoice.resolve('discard')
+      await new Promise<void>((resolve) => setImmediate(resolve))
+      expect(host.state.editingRecap).toBe(false)
+      expect(host.updateRecap).not.toHaveBeenCalled()
+    } finally {
+      await host.cleanup()
+    }
+  })
+
+  it('Cancel in the Escape prompt keeps the draft open', async () => {
+    const host = reviewRecapHost()
+    try {
+      const editor = enterReviewDraft(host, 'Unsaved words')
+      editor.draftOnKeyDown({ key: 'Escape', stopPropagation: vi.fn(), preventDefault: vi.fn() })
+      host.navigationChoice.resolve('cancel')
+      await new Promise<void>((resolve) => setImmediate(resolve))
+      expect(host.state.editingRecap).toBe(true)
+      expect(host.state.recapDraft).toBe('Unsaved words')
+      expect(host.updateRecap).not.toHaveBeenCalled()
+    } finally {
+      await host.cleanup()
+    }
+  })
+
+  it('Escape on an unchanged recap draft closes it without asking', async () => {
+    const host = reviewRecapHost()
+    try {
+      host.render().startEditRecap()
+      const editor = host.render()
+      expect(editor.recapDirty).toBe(false)
+      editor.draftOnKeyDown({ key: 'Escape', stopPropagation: vi.fn(), preventDefault: vi.fn() })
+      await new Promise<void>((resolve) => setImmediate(resolve))
+      expect(host.navigationGuard.request).not.toHaveBeenCalled()
+      expect(host.state.editingRecap).toBe(false)
     } finally {
       await host.cleanup()
     }
