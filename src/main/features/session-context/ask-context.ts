@@ -1,4 +1,5 @@
 import { contextRecord } from '@shared/context-authority'
+import type { ContextManifestEntry } from '@shared/context-manifest'
 import type { AskStart } from '@shared/ipc'
 import { redactSecrets } from '@shared/redact'
 import { SESSION_CONTEXT_DEFAULT_TAIL } from '@shared/session-context-request'
@@ -18,6 +19,8 @@ export interface AskContextDeps {
   readonly frame: FrameKey | null | undefined
   /** `settings.redactSensitive`: strip high-confidence secrets from captured speech before it leaves the device. */
   readonly redact: boolean
+  /** G46: told which records went into the prompt (never their text), for the turn's context manifest. */
+  readonly manifest?: { add(entry: ContextManifestEntry): void }
 }
 
 /** Modes whose only transcript source used to be the renderer's `transcript` field. Recap and summary keep theirs. */
@@ -49,6 +52,15 @@ export function applyAskContext(req: AskStart, deps: AskContextDeps, gate: AskCo
     lastThem: contextRecord('other-speaker', lastThem)
   })
   if (request.field) req.transcript = transcript
+  if (transcript) {
+    deps.manifest?.add({
+      origin: handle ? transcriptBlockOrigin(handle.snapshot) : 'other-speaker',
+      authority: 'data',
+      sourceId: 'meeting-transcript',
+      bytes: Buffer.byteLength(transcript, 'utf8'),
+      via: 'ask'
+    })
+  }
   if (handle) gate.arm(handle)
   return redactCarried(req, deps)
 }

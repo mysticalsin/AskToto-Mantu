@@ -471,7 +471,7 @@ describe('a captured frame cannot be sent after access was revoked (G16)', () =>
   it('lets a current frame through and says it recognised it', async () => {
     const h = makeHarness()
     const shot = await h.observation.capture({ reason: 'ask' })
-    expect(h.observation.checkSend(shot.image)).toEqual({ ok: true, known: true })
+    expect(h.observation.checkSend(shot.image)).toEqual({ ok: true, known: true, identity: shot.observation })
   })
 
   it('refuses the frame once any revocation has moved the generation', async () => {

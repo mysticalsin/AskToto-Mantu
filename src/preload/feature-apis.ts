@@ -7,6 +7,7 @@ import { createDictationMemoryPreloadApi } from './dictation-memory'
 import { createVoiceActionsPreloadApi } from './voice-actions'
 import { createSessionContextPreloadApi } from './session-context'
 import { createTaskCardsPreloadApi } from './task-cards'
+import { createContextGrantsPreloadApi } from './context-grants'
 
 /** The preload bridges that are one self-contained feature each, composed here so index.ts stays under its size cap. */
 export function createFeaturePreloadApis(ipc: IpcRenderer) {
@@ -18,6 +19,7 @@ export function createFeaturePreloadApis(ipc: IpcRenderer) {
     ...createDictationMemoryPreloadApi(ipc),
     ...createSessionContextPreloadApi(ipc),
     ...createCommandConfirmPreloadApi(ipc),
-    ...createTaskCardsPreloadApi(ipc)
+    ...createTaskCardsPreloadApi(ipc),
+    ...createContextGrantsPreloadApi(ipc)
   }
 }

@@ -67,6 +67,8 @@ export interface BrainContextDispatchDeps {
   gate?: { refusal(): string | null }
   /** Told once, with the gate's message, when the gate refuses; the ask is then cancelled. */
   onRefused?: (message: string) => void
+  /** G46: told what memory text this dispatch really attached (undefined = none), for the turn's context manifest. */
+  onApplied?: (brainContext: string | undefined) => void
 }
 
 /** Owns one ask's brain-context envelope and re-proves it before every provider dispatch. */
@@ -107,6 +109,7 @@ export function createBrainContextDispatch(deps: BrainContextDispatchDeps) {
       envelope = staleBrainContextEnvelope(envelope)
       deps.req.brainContext = undefined
     }
+    deps.onApplied?.(deps.req.brainContext)
   }
 
   /** Synchronous (undefined) unless a ready envelope needs its entity/source files re-proved. */

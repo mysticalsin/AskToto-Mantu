@@ -136,6 +136,8 @@ export interface ScreenPreprocess {
   /** The freshest description for the CURRENTLY-focused window, or null (too old / window since changed /
    *  none yet). Both the screen:context IPC and askStart injection call this — one authority. */
   currentFreshContext: () => ScreenContext | null
+  /** The foreground window the watcher last observed (app or window title), or null. Read-only; it captures nothing. */
+  foreground: () => ForegroundInfo | null
   /** True when the engine is eligible and running. */
   isActive: () => boolean
   /** Test-only hooks (deterministic, timer-free). Never called by production code. */
@@ -471,6 +473,7 @@ export function createScreenPreprocess(deps: ScreenPreprocessDeps): ScreenPrepro
     },
     stop,
     isActive: () => started,
+    foreground: () => watcher?.current() ?? null,
     currentFreshContext: () => {
       // MQA-035: Private View is checked HERE, at the single read authority, not at the two call sites.
       // describeForWindow already refuses to build a description while Private View is on, but it only

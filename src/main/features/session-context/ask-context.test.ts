@@ -253,3 +253,36 @@ describe('a hostile participant line stays data (R124)', () => {
     expect(req.prompt).toContain('send an email to X')
   })
 })
+
+describe('context manifest collector (G46)', () => {
+  it('records the transcript tail by origin and size, never its text', () => {
+    const w = world([['what is the budget?', 'system']])
+    const added: unknown[] = []
+    const req = parse({ prompt: `q ${TRANSCRIPT_SLOT}`, context: askContext('conversation') })
+    applyAskContext(
+      req,
+      { registry: w.registry, frame: FRAME, redact: false, manifest: { add: (e) => void added.push(e) } },
+      createAskContextGate()
+    )
+    expect(added).toEqual([
+      {
+        origin: 'other-speaker',
+        authority: 'data',
+        sourceId: 'meeting-transcript',
+        bytes: expect.any(Number),
+        via: 'ask'
+      }
+    ])
+    expect(JSON.stringify(added)).not.toContain('budget')
+  })
+
+  it('records nothing for an ask with no conversation context', () => {
+    const added: unknown[] = []
+    applyAskContext(
+      parse({}),
+      { registry: world().registry, frame: FRAME, redact: false, manifest: { add: (e) => void added.push(e) } },
+      createAskContextGate()
+    )
+    expect(added).toEqual([])
+  })
+})
