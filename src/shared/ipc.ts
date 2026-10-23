@@ -223,6 +223,7 @@ export const IPC = {
   // Support diagnosability: copy the log trail (main + audit + crash dumps + boot sentinel) into a
   // user-chosen folder — the ONLY way that data reaches support, since nothing uploads by design.
   diagnosticsExport: 'diagnostics:export',
+  exportReveal: 'export:reveal', // G58: open/reveal a finished export by receipt id
   debriefSave: 'debrief:save',
   brainCommitmentSettle: 'brain:commitmentSettle',
   brainSetDealOutcome: 'brain:setDealOutcome',
@@ -1995,26 +1996,15 @@ export interface UpdateDownloadStart {
   reason?: string
 }
 
-/** Result of recall:export-plain — a user-initiated decrypted markdown copy of one saved meeting, so
- *  external tools (Claude local ingesting into the second brain, an email, an archive) can read it even
- *  when at-rest encryption is on. Always explicit per meeting; never a bulk decrypt. */
-export interface DiagnosticsExportResult {
-  ok: boolean
-  /** Folder the bundle was written to. */
-  path?: string
-  /** How many files were copied. */
-  files?: number
-  cancelled?: boolean
-  error?: string
-}
-
-export interface RecallExportPlainResult {
-  ok: boolean
-  /** Absolute path the copy was written to (absent when the user cancelled the save dialog). */
-  path?: string
-  cancelled?: boolean
-  error?: string
-}
+export type {
+  DiagnosticsExportResult,
+  ExportConflictResolution,
+  ExportKind,
+  ExportReceipt,
+  ExportRevealResult,
+  RecallExportPlainResult,
+  RecapPdfResult
+} from './export-types'
 
 /** Result of recall:backfillSpeakers (Speaker Intelligence) — `named` is how many transcript lines
  *  received a resolved display name; 0 is a normal, non-error outcome (no Teams transcript existed for

@@ -88,7 +88,16 @@ const CHANNELS = [
 function setup(overrides: { requireAuth?: () => boolean; response?: number } = {}) {
   const handlers = new Map<string, Handler>()
   const assertMainWindow = vi.fn()
-  const writeTextFile = vi.fn()
+  const receipt = {
+    exportId: 'e1',
+    kind: 'meeting-markdown',
+    destination: '/out/meeting.md',
+    bytes: 9,
+    sha256: 'a'.repeat(64),
+    writtenAt: '2026-10-23T12:00:00.000Z',
+    conflictResolution: 'none'
+  }
+  const exportFile = vi.fn(async (_request: unknown) => ({ ok: true as const, receipt, receiptLogged: true }))
   const showMessageBox = vi.fn(async (_options: { message?: string }) => ({ response: overrides.response ?? 0 }))
   registerRecallIpc({
     ipcMain: {
@@ -99,9 +108,8 @@ function setup(overrides: { requireAuth?: () => boolean; response?: number } = {
     assertMainWindow,
     requireAuth: overrides.requireAuth ?? (() => true),
     showMessageBox,
-    showSaveDialog: vi.fn(async () => ({ canceled: false, filePath: '/out/meeting.md' })),
+    exporter: { exportFile, exportDirectory: vi.fn() } as never,
     downloadsPath: () => '/downloads',
-    writeTextFile,
     backfillSpeakerNames: vi.fn(async () => ({ ok: true, named: 1 }))
   })
   const handler = (channel: string): Handler => {
@@ -109,7 +117,7 @@ function setup(overrides: { requireAuth?: () => boolean; response?: number } = {
     if (!found) throw new Error(`${channel} was not registered`)
     return found
   }
-  return { handlers, handler, assertMainWindow, writeTextFile, showMessageBox }
+  return { handlers, handler, assertMainWindow, exportFile, receipt, showMessageBox }
 }
 
 const event = { sender: { send: vi.fn() } } as unknown as IpcMainInvokeEvent
@@ -189,10 +197,12 @@ describe('recall IPC', () => {
     expect(mocks.scheduleRebuild).not.toHaveBeenCalled()
   })
 
-  it('exports the decrypted copy through the injected writer only after the save dialog', async () => {
-    const { handler, writeTextFile } = setup()
-    expect(await handler(IPC.recallExportPlain)(event, 'a.md')).toEqual({ ok: true, path: '/out/meeting.md' })
-    expect(writeTextFile).toHaveBeenCalledWith('/out/meeting.md', '# meeting')
+  it('exports the decrypted copy through the shared export service', async () => {
+    const { handler, exportFile, receipt } = setup()
+    expect(await handler(IPC.recallExportPlain)(event, 'a.md')).toEqual({ ok: true, path: '/out/meeting.md', receipt })
+    const request = exportFile.mock.calls[0][0] as { kind: string; bytes: Buffer }
+    expect(request.kind).toBe('meeting-markdown')
+    expect(request.bytes.toString('utf8')).toBe('# meeting')
     expect(mocks.auditLog).toHaveBeenCalledWith('recall.export', { file: 'a.md' })
   })
 

@@ -58,6 +58,7 @@ import {
   type PushMarkerField,
   type RecallExportPlainResult,
   type DiagnosticsExportResult,
+  type RecapPdfResult,
   type UpdateCheckResult,
   type UpdateDownloadStart,
   type RecallBackfillSpeakersResult,
@@ -702,7 +703,7 @@ const api = {
 
   openMailDraft: (input: { subject: string; body: string }): Promise<{ truncated: boolean }> =>
     ipcRenderer.invoke(IPC.openMailDraft, input),
-  recapPdf: (input: { markdown: string; title?: string }): Promise<{ ok: boolean; path?: string }> =>
+  recapPdf: (input: { markdown: string; title?: string }): Promise<RecapPdfResult> =>
     ipcRenderer.invoke(IPC.recapPdf, input),
 
   mcpTestConnection: (payload: McpTestConnectionPayload): Promise<McpConnectResult> =>

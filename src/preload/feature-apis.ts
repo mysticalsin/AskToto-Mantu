@@ -10,6 +10,7 @@ import { createTaskCardsPreloadApi } from './task-cards'
 import { createContextGrantsPreloadApi } from './context-grants'
 import { createScreenMarksPreloadApi } from './screen-marks'
 import { createTaskBrowserPreloadApi } from './task-browser'
+import { createExportPreloadApi } from './export-reveal'
 
 /** The preload bridges that are one self-contained feature each, composed here so index.ts stays under its size cap. */
 export function createFeaturePreloadApis(ipc: IpcRenderer) {
@@ -24,6 +25,7 @@ export function createFeaturePreloadApis(ipc: IpcRenderer) {
     ...createTaskCardsPreloadApi(ipc),
     ...createContextGrantsPreloadApi(ipc),
     ...createScreenMarksPreloadApi(ipc),
-    ...createTaskBrowserPreloadApi(ipc)
+    ...createTaskBrowserPreloadApi(ipc),
+    ...createExportPreloadApi(ipc)
   }
 }
