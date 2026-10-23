@@ -17,6 +17,7 @@ import { getPublishedSettingsObservation } from '../settings-observation'
 import type { SpeechDesktopHooks } from '../speech-desktop-boundary'
 import type { RendererResetSource } from '../features/meetings/session-closure'
 import { bootstrapDictationMemory } from './dictation-memory-wiring'
+import { bootstrapUserMemory } from './user-memory-wiring'
 import { bootstrapLiveMeetingJournal } from './live-meeting-journal-wiring'
 import { bindMeetingSpeechInvalidation, bootstrapMeetingSpeech } from './meeting-speech-persistence-wiring'
 import { bootMainMemoryPartitions } from './memory-partition-wiring'
@@ -133,6 +134,14 @@ export function createOwnerSessionWiring(deps: OwnerSessionWiringDeps): OwnerSes
     qaIdentity: QA_IDENTITY_BUILD,
     audit: (record) => auditLog('dictation.memory', { ...record }),
     onWillQuit: (listener) => app.once('will-quit', listener)
+  })
+  // G57 user memory: durable preferences and expiring project context, owner-scoped and sealed.
+  bootstrapUserMemory({
+    ipcMain,
+    authorizeSender,
+    requireAuth: () => requireAuth(),
+    userDataPath: () => app.getPath('userData'),
+    audit: (record) => auditLog('user.memory', { ...record })
   })
   return {
     ownerSession,

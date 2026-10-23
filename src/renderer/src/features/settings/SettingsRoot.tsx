@@ -77,6 +77,7 @@ import { ctl } from '../../ui/ctl'
 import { DustSetup } from './DustSetup'
 import { PrivacyObservationSections } from './PrivacyObservationSections'
 import { SensitiveDataSection } from './SensitiveDataSection'
+import { UserMemorySection } from './UserMemorySection'
 import { OperatorReportingSection, OperatorSourceLine } from './OperatorReportingSection'
 import { ReplayHint, SaveErrorLine } from './SettingsNotices'
 import { CalendarTab } from './CalendarTab'
@@ -93,8 +94,7 @@ import { haltAllOnboardingAudio, unlockOnboardingAudio } from '../../lib/onboard
 import { readLastSettingsPane, writeLastSettingsPane } from '../../lib/settings-last-pane'
 
 // Kept importable from here: its focused tests and callers predate the move to features/settings.
-export { pickReadyProvider }
-export { screenRecordingJustGranted }
+export { pickReadyProvider, screenRecordingJustGranted }
 export {
   AppleEngineNotice,
   LocalAiSection,
@@ -112,7 +112,6 @@ export {
 export { parseAsrCorrections, sameAsrCorrections, serializeAsrCorrections } from './AudioTab'
 
 export { licenseErrorMessage } from './LicenseSection'
-
 export { METIS_FEEDBACK_EMAIL } from './AboutTab'
 
 /**
@@ -853,6 +852,7 @@ export function Settings({
                     onChange={(v) => reportedPatch({ askFollowUpMemory: v })}
                     disabled={settings.managedKeys.includes('askFollowUpMemory')}
                   />
+                  <UserMemorySection />
                 </Section>
                 <Section
                   title="Recording consent"
