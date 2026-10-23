@@ -107,7 +107,9 @@ export interface ScreenObservationDeps {
   ) => void
 }
 
-export type SendVerdict = { ok: true; known: boolean } | { ok: false; reason: 'stale'; message: string }
+export type SendVerdict =
+  | { ok: true; known: boolean; identity?: ScreenObservationIdentity }
+  | { ok: false; reason: 'stale'; message: string }
 
 export interface ScreenObservation {
   capture: (request: { reason: string; phase?: string; scope?: ScreenScope }) => Promise<ScreenShot>
@@ -286,7 +288,7 @@ export function createScreenObservation(deps: ScreenObservationDeps): ScreenObse
       const identity = issued.get(fingerprint(image))
       if (!identity) return { ok: true, known: false }
       if (identity.generation !== generation) return { ok: false, reason: 'stale', message: STALE_SEND_MESSAGE }
-      return { ok: true, known: true }
+      return { ok: true, known: true, identity }
     }
   }
 }

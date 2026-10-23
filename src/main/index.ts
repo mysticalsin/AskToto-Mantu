@@ -738,6 +738,8 @@ import {
 } from './lifecycle/owner-session-wiring'
 import { applyAskContext, createAskContextGate, prewarmText } from './features/session-context/ask-context'
 import { askStartFailureMessage, createAskTurns } from './features/session-context/ask-turn'
+import { applyAmbientScreenContext, composeContextGrants, createManifestCollector } from './features/context-grants'
+import type { ContextGrants } from './features/context-grants'
 import { recoverOrphanDrafts } from './features/meetings/draft-recovery'
 import { writeMeetingOnce } from './features/meetings/save-identity'
 import { holdAppSuspensionWhileVisible } from './lifecycle/overlay-suspension-hold'
@@ -4692,6 +4694,8 @@ class PrivateViewBlockedError extends Error {
   }
 }
 
+let contextGrants: ContextGrants | null = null
+
 /** Admission, identity, reuse and revocation of every screen capture (G16, features/screen-observation). */
 const screenObservation = createScreenObservation({
   captureOnce: (request) => captureScreenshotOnce(request.displayId, request.region),
@@ -4702,7 +4706,10 @@ const screenObservation = createScreenObservation({
     process.platform === 'darwin' ? systemPreferences.getMediaAccessStatus('screen') : windowsScreenStatus(),
   backgroundAllowed: () => getSettings().backgroundScreenContext === true,
   prewarmAllowed: () => getSettings().screenHoverPrewarm === true,
-  onSourceChange: (sourceId, at) => currentMeetingContexts()?.observeScreen(sourceId, at),
+  onSourceChange: (sourceId, at) => {
+    currentMeetingContexts()?.observeScreen(sourceId, at)
+    if (sourceId === null) void contextGrants?.revokeAll('screen_revoked') // stop, sign-out, lock, Private View
+  },
   audit: (event, data) => auditLog(event, data)
 })
 
@@ -5524,6 +5531,15 @@ function registerIpc(): void {
     assertMainWindow,
     currentInputSessionContext,
     privateView: privateViewOn
+  })
+  contextGrants = composeContextGrants({
+    ipcMain,
+    assertMainWindow,
+    requireAuth,
+    screenObservation,
+    readText: process.platform === 'darwin' ? extractScreenText : undefined,
+    foreground: () => screenPreprocess.foreground(),
+    sessionId: () => String(activeLiveSpeakerStartedAt ?? 'idle')
   })
   speechDesktop = startSpeechDesktopBootstrap({
     ipcMain,
@@ -7484,7 +7500,8 @@ function registerIpc(): void {
         streams,
         onError: failAskStart,
         gate: contextGate,
-        onRefused: (message) => askTurns.fail(req.id, message)
+        onRefused: (message) => askTurns.fail(req.id, message),
+        onApplied: (text) => contextGrants?.manifests.setMemory(req.id, text)
       })
       // MQA-182: Private View means Métis does not look at OR SEND your screen, and an already-captured frame is
       // still your screen. Retry / "Go deeper" replay the last vision request (state.ts lastReqRef) and used to
@@ -7547,9 +7564,10 @@ function registerIpc(): void {
       }
       // Conversation context is main-derived: the transcript comes from the SessionContext snapshot of main's ledger,
       // redacted there when s.redactSensitive (never the typed prompt, never the saved meeting file).
+      const manifest = createManifestCollector()
       const contextRefusal = applyAskContext(
         req,
-        { registry: owners.meetingContexts, frame: e.senderFrame, redact: s.redactSensitive },
+        { registry: owners.meetingContexts, frame: e.senderFrame, redact: s.redactSensitive, manifest },
         contextGate
       )
       if (contextRefusal) return void win?.webContents.send(IPC.streamError, { id: req.id, message: contextRefusal })
@@ -7598,36 +7616,18 @@ function registerIpc(): void {
         }
         if (hold.release()) return
       }
-      // Screen fast-path (M13): inject main's OWN cached screen description (re-validated for freshness) plus a
-      // short recent-conversation tail, so the answer fuses the screen with what's being said. Best-effort: a
-      // stale cache answers from the prompt alone. A SIBLING of the brainContext gate above, not nested in it:
-      // the fact-check exclusion is scoped to brainContext, and this block has its own untrusted-data guard
-      // (llm/shared.ts screenContextBlock). Nested, "fact-check my screen" sent no screen data (MQA-009).
-      if (req.mode === 'answer' && req.wantsScreenContext) {
-        try {
-          const ctx = screenPreprocess.currentFreshContext()
-          if (ctx?.description) {
-            // Same local-first redaction contract as the transcript above (review finding): on macOS the
-            // description can be a VERBATIM OCR extract of the screen — an open password manager or API
-            // key must be stripped before this text reaches a cloud answer provider. The tail is already
-            // redacted (req.transcript was, at parse time).
-            const description = s.redactSensitive ? redactSecrets(ctx.description) : ctx.description
-            const tail = (req.transcript ?? '').slice(-1500).trim()
-            req.screenContext = tail
-              ? `${description}\n\nRecent conversation (most recent speech):\n${tail}`
-              : description
-          }
-        } catch (err) {
-          mainLog.warn(
-            `[screen-preprocess] context injection failed: ${err instanceof Error ? err.message : String(err)}`
-          )
-        }
-      }
-      // MQA-180: that injection is best-effort and on a REPLAY (Retry / "Go deeper" re-send the intent flag long
-      // after the description expired) usually finds nothing, yet the renderer badged the answer "Viewed screen"
-      // from the flag alone. Main alone knows what went out: report it on stream:meta. `undefined` for every
-      // other ask (the renderer keeps what run() set; a vision ask carries its own image).
-      const screenGrounded = req.mode === 'answer' && req.wantsScreenContext ? !!req.screenContext : undefined
+      // Screen fast-path (M13, MQA-009, MQA-180): main's own cached description; the manifest names it ambient.
+      const screenGrounded = applyAmbientScreenContext(req, {
+        fresh: () => screenPreprocess.currentFreshContext(),
+        redact: s.redactSensitive,
+        log: (message) => mainLog.warn(message)
+      })
+      // G46: explicit snapshot and granted documents join the prompt as data; the turn's manifest is recorded (no capture).
+      const sent = req.image ? screenObservation.checkSend(req.image) : null
+      await contextGrants?.runtime.prepareTurn(req, manifest.entries(), {
+        redact: s.redactSensitive ? redactSecrets : undefined,
+        imageSourceId: sent?.ok ? sent.identity?.sourceId : undefined
+      })
       // M2-0412: the fleet model policy narrows the org allowlist for ask/chat; CLI providers and 'local'
       // are governed by their own connect/routing toggles and never narrowed.
       const allowed = narrowAllowedForCapability(s, getAllowedProviders(), 'askChat', [...CLI_PROVIDER_IDS, 'local'])
