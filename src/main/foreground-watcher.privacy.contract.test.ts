@@ -118,11 +118,12 @@ describe('foreground watcher keeps observations in memory only (R111, D-19)', ()
     expect(stops[0]).toHaveBeenCalledTimes(1)
   })
 
-  it('the voice-action consumer starts its watcher lazily at the first proposal and stops it on dispose', () => {
+  it('the voice-action consumer starts its watcher lazily, stops it when idle and on dispose', () => {
     const runtime = read('main/voice/command-confirm-runtime')
-    expect(runtime.match(/startForegroundWatcher\(/g)).toHaveLength(1)
-    expect(runtime).toMatch(/watcher \?\?= startForegroundWatcher\(\(\) => \{\}/) // no onChange sink: latest value only
-    expect(runtime).toMatch(/dispose: \(\) => \{[\s\S]*watcher\?\.stop\(\)/)
+    expect(runtime.match(/startForegroundWatcher/g)).toHaveLength(3) // import, option type, default
+    expect(runtime).toMatch(/watcher \?\?= start\(\(\) => \{\}/) // no onChange sink: latest value only
+    expect(runtime).toMatch(/dispose: \(\) => \{[\s\S]*stopWatcher\(\)/)
+    expect(runtime).toMatch(/FOREGROUND_IDLE_STOP_MS = 60_000/)
     expect(runtime).not.toMatch(/writeFile|appendFile|auditLog|localStorage/)
   })
 

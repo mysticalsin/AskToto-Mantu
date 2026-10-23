@@ -29,7 +29,14 @@ export interface CommandConfirmRuntimeOptions {
   showForConfirm(): void
   /** Windows: blur the overlay so the system returns to the previous window. */
   blurWindow(): void
+  /** Test seams: the watcher producer, the clock and the idle period (D-19). */
+  startWatcher?: typeof startForegroundWatcher
+  now?: () => number
+  idleMs?: number
 }
+
+/** D-19: the voice-action watcher stops this long after its last use, and restarts on the next proposal. */
+export const FOREGROUND_IDLE_STOP_MS = 60_000
 
 export interface CommandConfirmRuntime {
   // stopTasks is required here, not optional: dropping it would leave Stop, sign-out and lock unable to reach queued
@@ -47,12 +54,30 @@ export interface CommandConfirmRuntime {
 export function createCommandConfirmRuntime(options: CommandConfirmRuntimeOptions): CommandConfirmRuntime {
   const tasks = desktopActionTaskDeps()
   let watcher: ForegroundWatcher | null = null
-  // Started at the first proposal, so a person who never uses voice actions never pays for a second watcher
-  // process. Its initial emit lands while the propose-stage preflight runs, before the card takes focus.
+  let lastUsedAt = 0
+  let idleTimer: ReturnType<typeof setTimeout> | null = null
+  const now = options.now ?? Date.now
+  const idleMs = options.idleMs ?? FOREGROUND_IDLE_STOP_MS
+  const start = options.startWatcher ?? startForegroundWatcher
+  const stopWatcher = (): void => {
+    if (idleTimer) clearTimeout(idleTimer)
+    idleTimer = null
+    watcher?.stop()
+    watcher = null
+  }
+  // Started at the first proposal and stopped idleMs after its last use, so no watcher process runs while no voice
+  // action is in play (D-19). A restarted watcher has no observation until its first line: unknown, never stale.
   const ensureWatcher = (): ForegroundWatcher => {
-    watcher ??= startForegroundWatcher(() => {}, {
+    if (watcher && now() - lastUsedAt >= idleMs) stopWatcher()
+    lastUsedAt = now()
+    watcher ??= start(() => {}, {
       onError: (message) => mainLog.warn(`[command-confirm] foreground watcher: ${message}`)
     })
+    if (idleTimer) clearTimeout(idleTimer)
+    idleTimer = setTimeout(() => {
+      if (now() - lastUsedAt >= idleMs) stopWatcher()
+    }, idleMs)
+    idleTimer.unref?.()
     return watcher
   }
   const gestures = createGestureBindings({ frontmost: () => ensureWatcher().current() })
@@ -115,7 +140,7 @@ export function createCommandConfirmRuntime(options: CommandConfirmRuntimeOption
       setDesktopActionGestureSource(null)
       setDesktopActionFocusHost(null)
       gestures.clear()
-      watcher?.stop()
+      stopWatcher()
     }
   }
 }
