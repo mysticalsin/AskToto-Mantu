@@ -405,7 +405,8 @@ describe('live meeting journal session', () => {
       expect(results.filter((result) => result.status === 'durable')).toHaveLength(64)
       expect(results.filter((result) => result.status === 'refused' && result.reason === 'QUEUE_FULL')).toHaveLength(6)
       await journal.dispose()
-    })
+      // 64 real encrypted durable appends: a cold hosted Windows runner can need well over the default timeout.
+    }, 60_000)
   })
 
   describe('kill switch and gates', () => {
