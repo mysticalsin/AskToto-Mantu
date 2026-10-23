@@ -190,8 +190,10 @@ describe('V04 confirmation card boundary', () => {
   it('wires one production composition into the confirmation, with the recovery IPC behind the main-window check', () => {
     expect(main).toMatch(/createCommandConfirmRuntime\(\{[\s\S]*?showForConfirm:/)
     expect(main).toContain('...commandConfirm.deps,')
-    expect(main).toContain('registerCommandConfirmIpc(ipcMain, assertMainWindow, commandConfirm)')
+    expect(main).toContain('registerCommandConfirmIpc(ipcMain, assertMainWindow, commandConfirm, () => win)')
     const ipcSource = readModuleSource(__dirname, './ipc/command-confirm-ipc').text
     expect(ipcSource).toMatch(/assertMainWindow\(event\)\s*return runtime\.takeRecoveryNotices\(\)/)
+    // G33: the task-card IPC registers here too, behind the same main-window check.
+    expect(ipcSource).toContain('registerTaskCardIpc(ipcMain, assertMainWindow, runtime.taskCards, getWindow)')
   })
 })
