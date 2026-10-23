@@ -48,6 +48,10 @@ export type VoiceFailureReason =
   | 'documents_unavailable'
   | 'unsupported'
   | 'task_unavailable'
+  /** G34: another app was in front at dispatch than when the gesture started. Nothing ran. */
+  | 'target_changed'
+  /** G34: the request addressed someone main could not resolve from trusted UI state. Nothing ran. */
+  | 'recipient_unresolved'
   | 'adapter_failed'
 
 export type VoiceRefusalReason =
@@ -126,6 +130,8 @@ export interface VoiceActionExecutor {
 }
 
 const FAILURE_DETAILS: Readonly<Record<string, VoiceFailureReason>> = {
+  'task_denied:target_changed': 'target_changed',
+  'task_denied:recipient_unresolved': 'recipient_unresolved',
   automation_denied: 'automation_denied',
   accessibility_required: 'accessibility_required',
   preferred_missing: 'preferred_missing',

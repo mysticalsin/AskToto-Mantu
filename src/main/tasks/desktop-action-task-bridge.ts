@@ -2,6 +2,8 @@ import { randomBytes } from 'node:crypto'
 import { recoveredUncertainCopy } from '@shared/command-copy'
 import type { DesktopActionRequest, DesktopActionResult } from '@shared/desktop-actions'
 import type { MetisCommandRecoveryNotice } from '@shared/metis-command-contract'
+import { checkGestureTarget, type GestureBinding, type GestureTarget } from '@shared/gesture-binding'
+import { recipientFieldsIn, recipientsMatchResolution, type ResolvedRecipient } from '@shared/recipient-resolution'
 import { DESKTOP_ADAPTER_IDS } from '@shared/desktop-actions'
 import {
   ACTION_DEPENDENCY_LIMIT,
@@ -111,6 +113,24 @@ export type DesktopActionTaskAuditEvent =
   | 'task.dispatch_denied'
   | 'task.stopped'
 
+/**
+ * G34: the gesture the task came from. `bindingFor` is read when the command is submitted (the binding that was live
+ * when the owner decided), and `currentTarget` is read again at dispatch. A different app in front refuses the task.
+ */
+export interface DesktopActionGestureGate {
+  bindingFor(webContentsId: number): GestureBinding | null
+  currentTarget(): GestureTarget | null
+  ownPid: number
+}
+
+/**
+ * G34: the recipient main resolved from trusted UI state for the live gesture. Arguments that address someone may
+ * name only that recipient; without a resolver any recipient-bearing request is refused.
+ */
+export interface DesktopActionRecipientGate {
+  resolved(request: DesktopActionRequest, context: CommandExecutionContext): ResolvedRecipient | null
+}
+
 export interface DesktopActionTaskBridgeDeps {
   /** The envelope is the args hash and idempotency key main derived. A verified result must echo both in its receipt. */
   execute: (
@@ -120,6 +140,8 @@ export interface DesktopActionTaskBridgeDeps {
     signal?: AbortSignal
   ) => Promise<DesktopActionResult>
   scheduler?: TaskScheduler
+  gesture?: DesktopActionGestureGate
+  recipient?: DesktopActionRecipientGate
   store: TaskStateStore
   authSessionGeneration: () => number
   /**
@@ -318,12 +340,13 @@ export class DesktopActionTaskBridge {
     request: DesktopActionRequest,
     context: CommandExecutionContext
   ): Promise<DesktopActionResult> {
+    const bound = this.deps.gesture?.bindingFor(context.owner.webContentsId) ?? null
     const job: SchedulerJob<DesktopActionResult> = {
       key: context.proposalId,
       owner: `webContents:${context.owner.webContentsId}`,
       effect: 'effect',
       resources: desktopActionResources(request),
-      run: (signal) => this.run(request, context, signal)
+      run: (signal) => this.run(request, context, signal, bound)
     }
     const queued = await this.scheduler.submit(job)
     if (queued.status === 'ran') return queued.value
@@ -378,9 +401,16 @@ export class DesktopActionTaskBridge {
   private async run(
     request: DesktopActionRequest,
     context: CommandExecutionContext,
-    signal: AbortSignal
+    signal: AbortSignal,
+    bound: GestureBinding | null
   ): Promise<DesktopActionResult> {
     const generation = this.stopGeneration
+    const refusal = this.gestureRefusal(request, context, bound)
+    if (refusal) {
+      // Nothing was created or dispatched: a clean refusal that never retargets.
+      this.deps.audit?.('task.dispatch_denied', { actionId: request.id, reason: refusal })
+      return failedResult(request.id, `task_denied:${refusal}`)
+    }
     let begun: Begun
     try {
       begun = await this.begin(request, context)
@@ -419,6 +449,22 @@ export class DesktopActionTaskBridge {
     if (!result) return unknownResult(request.id, 'dispatch_threw')
     if (outcome === 'uncertain' && result.outcome !== 'unknown') return unknownResult(request.id, 'outcome_unverified')
     return result
+  }
+
+  /** G34: the task stays on the app the gesture started in, and a recipient comes only from trusted UI state. */
+  private gestureRefusal(
+    request: DesktopActionRequest,
+    context: CommandExecutionContext,
+    bound: GestureBinding | null
+  ): 'target_changed' | 'recipient_unresolved' | null {
+    const gesture = this.deps.gesture
+    if (bound && gesture && !checkGestureTarget(bound, gesture.currentTarget(), gesture.ownPid).ok) {
+      return 'target_changed'
+    }
+    const fields = recipientFieldsIn(request.args)
+    if (fields.length === 0) return null
+    const resolved = this.deps.recipient?.resolved(request, context) ?? null
+    return resolved && recipientsMatchResolution(fields, resolved) ? null : 'recipient_unresolved'
   }
 
   private locked<T>(fn: () => Promise<T>): Promise<T> {

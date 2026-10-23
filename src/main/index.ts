@@ -1493,9 +1493,9 @@ commandSpeechCapture = new CommandSpeechCapture({
   ingestTranscript: (text) => {
     if (!voiceActions?.onTranscript(text)) getMetisCommandRuntime()?.ingestTranscript(text, 'command')
   },
-  onExpired: (sessionId) => {
-    if (inputSessionAuthority.activeLease?.sessionId === sessionId) inputSessionAuthority.hardStop('cancelled')
-  },
+  onStarted: commandConfirm.gestureStarted,
+  onExpired: (sessionId) =>
+    inputSessionAuthority.activeLease?.sessionId === sessionId && inputSessionAuthority.hardStop('cancelled'),
   onFinished: (sessionId, result) => voiceActions?.onSpeechFinished(sessionId, result)
 })
 voiceActions = createVoiceActionsRuntime({

@@ -35,6 +35,8 @@ export class CommandSpeechCapture {
       isCurrent: (owner: TrustedInputOwner, sessionId: string) => boolean
       transcribe: (samples: Float32Array) => Promise<string>
       ingestTranscript: (text: string) => void
+      /** G34: the gesture began (main-minted owner and session). Main binds what is in front right now. */
+      onStarted?: (owner: TrustedInputOwner, sessionId: string) => void
       onExpired?: (sessionId: string) => void
       /** Every finish outcome, exactly what the renderer is told, after any transcript was ingested. */
       onFinished?: (sessionId: string, result: CommandSpeechResult) => void
@@ -62,6 +64,11 @@ export class CommandSpeechCapture {
       }, COMMAND_SPEECH_MAX_AGE_MS)
     }
     this.#capture = capture
+    try {
+      this.options.onStarted?.(capture.owner, sessionId)
+    } catch {
+      /* the binding is best effort: without one a task is simply not constrained by a gesture */
+    }
     return { ok: true }
   }
 

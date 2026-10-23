@@ -10,7 +10,11 @@ import { createQaDesktopSink, qaDesktopSinkEnabled } from '../qa-voice-hooks'
 import { atomicSavedWrite } from '../infra/storage/atomic-saved-write'
 import { decryptSecret, encryptSecret } from '../secrets'
 import type { CommandConfirmationDeps } from '../command-confirmation'
-import { DesktopActionTaskBridge, type DesktopActionTaskBridgeDeps } from './desktop-action-task-bridge'
+import {
+  DesktopActionTaskBridge,
+  type DesktopActionGestureGate,
+  type DesktopActionTaskBridgeDeps
+} from './desktop-action-task-bridge'
 import { createEncryptedTaskFileStore } from './encrypted-task-file-store'
 
 /** Task ids the person has been told about (random hex, no arguments), so boot recovery announces each once. */
@@ -29,6 +33,15 @@ function createAcknowledgementStore(file: () => string): NonNullable<DesktopActi
       await atomicSavedWrite(file(), Buffer.from(JSON.stringify(ids.slice(0, 512))))
     }
   }
+}
+
+/**
+ * G34: the gesture source the one production bridge reads. The confirm runtime installs it once it owns the
+ * foreground watcher. Until then (or without one) there is no binding, so a command is not constrained by a gesture.
+ */
+let gestureSource: Omit<DesktopActionGestureGate, 'ownPid'> | null = null
+export function setDesktopActionGestureSource(source: Omit<DesktopActionGestureGate, 'ownPid'> | null): void {
+  gestureSource = source
 }
 
 /**
@@ -58,6 +71,11 @@ export function createDesktopActionTaskBridge(): DesktopActionTaskBridge {
     }),
     acknowledgements: createAcknowledgementStore(() => join(app.getPath('userData'), 'desktop-action-acks.json')),
     authSessionGeneration,
+    gesture: {
+      bindingFor: (webContentsId) => gestureSource?.bindingFor(webContentsId) ?? null,
+      currentTarget: () => gestureSource?.currentTarget() ?? null,
+      ownPid: process.pid
+    },
     audit: (event, metadata) => auditLog(event, metadata),
     log: mainLog
   })

@@ -4,13 +4,15 @@
  * into CommandConfirmation. Electron, the mac helper and the foreground watcher are touched only here.
  */
 import { app } from 'electron'
+import type { TrustedInputOwner } from '@shared/input-session'
 import type { MetisCommandRecoveryNotice } from '@shared/metis-command-contract'
 import type { CommandConfirmationDeps } from '../command-confirmation'
 import { startForegroundWatcher, type ForegroundWatcher } from '../foreground-watcher'
 import { createDesktopPermissionProbes } from '../desktop-permission-probes'
 import { activatePid } from '../mac-helper'
 import { mainLog } from '../logger'
-import { desktopActionTaskDeps } from '../tasks/desktop-action-task-runtime'
+import { desktopActionTaskDeps, setDesktopActionGestureSource } from '../tasks/desktop-action-task-runtime'
+import { createGestureBindings } from './gesture-binding'
 import { createCommandPreflight } from './command-preflight'
 import { createConfirmFocus } from './confirm-focus'
 
@@ -29,6 +31,8 @@ export interface CommandConfirmRuntime {
   deps: Pick<CommandConfirmationDeps, 'execute' | 'recoverTasks' | 'preflight' | 'card' | 'isAssistiveTechnologyOn'> &
     Required<Pick<CommandConfirmationDeps, 'stopTasks'>>
   takeRecoveryNotices(): Promise<MetisCommandRecoveryNotice[]>
+  /** G34: the owner started a gesture (hold chord, panel command). Main captures what is in front right now. */
+  gestureStarted(owner: TrustedInputOwner, sessionId: string): void
   dispose(): void
 }
 
@@ -43,6 +47,12 @@ export function createCommandConfirmRuntime(options: CommandConfirmRuntimeOption
     })
     return watcher
   }
+  const gestures = createGestureBindings({ frontmost: () => ensureWatcher().current() })
+  setDesktopActionGestureSource({
+    bindingFor: (webContentsId) => gestures.current(webContentsId),
+    // A watcher that has given up reports null, and a bound task then refuses rather than trusting a stale app.
+    currentTarget: () => (ensureWatcher().healthy() ? ensureWatcher().current() : null)
+  })
   const platform = process.platform
   // The same probes the adapters read inside a dispatch (desktop-permission-probes.ts): one source of truth.
   const probes = createDesktopPermissionProbes(platform)
@@ -64,7 +74,10 @@ export function createCommandConfirmRuntime(options: CommandConfirmRuntimeOption
     deps: {
       execute: tasks.execute,
       recoverTasks: tasks.recoverTasks,
-      stopTasks: tasks.stopTasks,
+      stopTasks: () => {
+        gestures.clear()
+        tasks.stopTasks()
+      },
       preflight: (request, stage) => {
         ensureWatcher()
         return preflight(request, stage)
@@ -73,6 +86,13 @@ export function createCommandConfirmRuntime(options: CommandConfirmRuntimeOption
       isAssistiveTechnologyOn: () => app.isAccessibilitySupportEnabled()
     },
     takeRecoveryNotices: tasks.takeRecoveryNotices,
-    dispose: () => watcher?.stop()
+    gestureStarted: (owner, sessionId) => {
+      gestures.begin({ webContentsId: owner.webContentsId, revision: owner.contextRevision }, sessionId)
+    },
+    dispose: () => {
+      setDesktopActionGestureSource(null)
+      gestures.clear()
+      watcher?.stop()
+    }
   }
 }
