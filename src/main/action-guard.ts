@@ -36,6 +36,11 @@ function sha256Hex(value: unknown): string {
   return createHash('sha256').update(canonicalJson(value)).digest('hex')
 }
 
+/** SHA-256 of the canonical JSON of any value. Connector writes (G60) bind their approval with the same digest. */
+export function actionDigest(value: unknown): string {
+  return sha256Hex(value)
+}
+
 /** Hash of the whole request (action id and arguments). The same value is the task's arguments digest. */
 export function actionArgsHash(request: DesktopActionRequest): string {
   return sha256Hex(request)

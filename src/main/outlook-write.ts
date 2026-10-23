@@ -18,6 +18,11 @@ const GRAPH_TIMEOUT_MS = 10_000
 export const OUTLOOK_DRAFT_SCOPES = ['Mail.ReadWrite']
 export const OUTLOOK_EVENT_SCOPES = ['Calendars.ReadWrite']
 
+export const OUTLOOK_DRAFT_CONSENT_COPY =
+  'Outlook draft permission is not granted. Métis will not send mail. Use Open in Mail, or grant Mail.ReadWrite in Settings → Calendar.'
+export const OUTLOOK_EVENT_CONSENT_COPY =
+  'Outlook calendar write is not granted. Métis will not send invites. Connect Outlook in Settings → Calendar.'
+
 export interface OutlookWriteStatus {
   signedIn: boolean
   canDraft: boolean
@@ -34,10 +39,7 @@ export interface OutlookWriteResult {
 export async function outlookWriteStatus(): Promise<OutlookWriteStatus> {
   const read = await getGraphToken(['User.Read'])
   if (!read) return { signedIn: false, canDraft: false, canEvent: false }
-  const [draft, event] = await Promise.all([
-    getGraphToken(OUTLOOK_DRAFT_SCOPES),
-    getGraphToken(OUTLOOK_EVENT_SCOPES)
-  ])
+  const [draft, event] = await Promise.all([getGraphToken(OUTLOOK_DRAFT_SCOPES), getGraphToken(OUTLOOK_EVENT_SCOPES)])
   return { signedIn: true, canDraft: !!draft, canEvent: !!event }
 }
 
@@ -54,9 +56,10 @@ async function graphPost(
     return { ok: false, error: 'Métis could not access Outlook right now. Try again. Nothing was sent.' }
   }
   if (!token) return { ok: false, needsConsent: true, error: missing }
-  const uncertain = path === '/me/messages'
-    ? 'Outlook could not confirm whether the draft was created. Check Drafts before trying again. Nothing was sent.'
-    : 'Outlook could not confirm whether the calendar event was created. Check your calendar before trying again. No invitations were sent.'
+  const uncertain =
+    path === '/me/messages'
+      ? 'Outlook could not confirm whether the draft was created. Check Drafts before trying again. Nothing was sent.'
+      : 'Outlook could not confirm whether the calendar event was created. Check your calendar before trying again. No invitations were sent.'
   try {
     const res = await fetch(`${GRAPH}${path}`, {
       method: 'POST',
@@ -71,10 +74,11 @@ async function graphPost(
     if (!res.ok) {
       return { ok: false, error: `Outlook refused the draft (${res.status}). Nothing was sent.` }
     }
-    const data = await res.json() as unknown
-    const id = data && typeof data === 'object' && typeof (data as { id?: unknown }).id === 'string'
-      ? (data as { id: string }).id.trim()
-      : ''
+    const data = (await res.json()) as unknown
+    const id =
+      data && typeof data === 'object' && typeof (data as { id?: unknown }).id === 'string'
+        ? (data as { id: string }).id.trim()
+        : ''
     if (!id) return { ok: false, error: uncertain }
     return { ok: true, id }
   } catch {
@@ -92,10 +96,10 @@ export async function createOutlookDraft(input: { subject: string; body: string 
     '/me/messages',
     {
       subject: subject || '(no subject)',
-      body: { contentType: 'Text', content: body },
+      body: { contentType: 'Text', content: body }
       // Creating via /me/messages without /send leaves the item in Drafts.
     },
-    'Outlook draft permission is not granted. Métis will not send mail. Use Open in Mail, or grant Mail.ReadWrite in Settings → Calendar.'
+    OUTLOOK_DRAFT_CONSENT_COPY
   )
   if (r.ok) auditLog('outlook.draft', { ok: true, kind: 'mail' })
   return r
@@ -109,7 +113,10 @@ export async function createOutlookEvent(input: {
   endIso?: string
 }): Promise<OutlookWriteResult> {
   const subject = (input.subject || '').trim().slice(0, 200) || 'Next steps'
-  const start = input.startIso && !Number.isNaN(Date.parse(input.startIso)) ? input.startIso : new Date(Date.now() + 86_400_000).toISOString()
+  const start =
+    input.startIso && !Number.isNaN(Date.parse(input.startIso))
+      ? input.startIso
+      : new Date(Date.now() + 86_400_000).toISOString()
   const end =
     input.endIso && !Number.isNaN(Date.parse(input.endIso))
       ? input.endIso
@@ -125,7 +132,7 @@ export async function createOutlookEvent(input: {
       attendees: [],
       isReminderOn: false
     },
-    'Outlook calendar write is not granted. Métis will not send invites. Connect Outlook in Settings → Calendar.'
+    OUTLOOK_EVENT_CONSENT_COPY
   )
   if (r.ok) auditLog('outlook.draft', { ok: true, kind: 'event' })
   return r
