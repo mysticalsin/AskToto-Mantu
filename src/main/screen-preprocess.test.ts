@@ -55,6 +55,7 @@ function makeHarness(init?: {
   let currentWin: ForegroundInfo | null = null
   let watcher: ForegroundWatcher | null = null
   let fetchCalls = 0
+  let watcherStarts = 0
   const ensureStarted = vi.fn(async () => {})
 
   const fetchImpl = vi.fn(async () => {
@@ -108,6 +109,7 @@ function makeHarness(init?: {
     startWatcher: (onChange) => {
       // Record onChange so the test can drive it; expose current() over the harness-controlled window.
       void onChange
+      watcherStarts++
       watcher = { stop: vi.fn(), current: () => currentWin, healthy: () => state.watcherHealthy }
       return watcher
     },
@@ -145,6 +147,8 @@ function makeHarness(init?: {
       state.speculativeLocalWorkAllowed = allowed
     },
     fetchCalls: () => fetchCalls,
+    watcherStarts: () => watcherStarts,
+    watcher: () => watcher,
     ocrCalls: () => ocrCalls,
     shots: () => shots,
     audits,
@@ -751,5 +755,69 @@ describe('createScreenPreprocess — idle captures nothing (G16)', () => {
     await vi.advanceTimersByTimeAsync(60 * 60 * 1000)
     expect(h.sp.isActive()).toBe(false)
     expect(h.shots()).toBe(0)
+  })
+})
+
+/**
+ * G47 / R111 / owner decision D-19: the ambient foreground watcher is only a transient, in-memory trigger for the
+ * opt-in background screen context. With no such consumer active nothing runs and nothing is sampled, and nothing
+ * the watcher observes is written to the audit log (which persists to disk).
+ */
+describe('foreground watcher — idle, opt-in only, no history (R111, D-19)', () => {
+  it('idle: with background screen context off, no watcher is started and nothing is captured', () => {
+    const h = makeHarness({ backgroundScreenContext: false })
+    h.sp.refresh()
+    expect(h.sp.isActive()).toBe(false)
+    expect(h.watcherStarts()).toBe(0)
+    expect(h.shots()).toBe(0)
+    expect(h.sp.currentFreshContext()).toBeNull()
+  })
+
+  it('idle: signed out is idle too, with no watcher process', () => {
+    const h = makeHarness({ authorized: false })
+    h.sp.refresh()
+    expect(h.watcherStarts()).toBe(0)
+    expect(h.sp.isActive()).toBe(false)
+  })
+
+  it('opt-out stops the watcher, drops the cache and forgets the focused window', async () => {
+    const h = makeHarness()
+    h.sp.refresh()
+    h.setWindow('w1')
+    await h.sp._test.describeForWindow('w1')
+    expect(h.peek()).not.toBeNull()
+    const watcher = h.watcher()
+    h.state.backgroundScreenContext = false
+    h.sp.refresh()
+    expect(watcher?.stop).toHaveBeenCalledTimes(1)
+    expect(h.sp.isActive()).toBe(false)
+    expect(h.peek()).toBeNull()
+    expect(h.sp.currentFreshContext()).toBeNull()
+  })
+
+  it('keeps no list of windows: many focus changes leave one cache entry for the latest window only', () => {
+    const h = makeHarness()
+    h.sp.refresh()
+    for (let i = 0; i < 25; i++) h.sp._test.handleWindowChange({ windowId: `app.${i}`, pid: i, title: `t${i}` })
+    expect(h.peek()).toBeNull()
+    expect(Object.keys(h.sp).sort()).toEqual(
+      ['_test', 'canRun', 'currentFreshContext', 'isActive', 'refresh', 'stop'].sort()
+    )
+  })
+
+  it('writes no window id, pid or title to the audit log when it describes a window', async () => {
+    const h = makeHarness({ withOcr: true })
+    h.sp.refresh()
+    h.setWindow('com.secret.bank')
+    h.state.ocrText = 'x'.repeat(200)
+    await h.sp._test.describeForWindow('com.secret.bank')
+    expect(h.audits.length).toBeGreaterThan(0)
+    const text = JSON.stringify(h.audits)
+    expect(text).not.toContain('com.secret.bank')
+    for (const a of h.audits) {
+      expect(Object.keys(a.data ?? {})).not.toContain('windowId')
+      expect(Object.keys(a.data ?? {})).not.toContain('title')
+      expect(Object.keys(a.data ?? {})).not.toContain('pid')
+    }
   })
 })
