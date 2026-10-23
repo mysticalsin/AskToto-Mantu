@@ -53,6 +53,11 @@ export interface MacDictationPortsDeps {
   /** Whether the helper exists on this build. Defaults to the real check. */
   helperPresent?: () => boolean
   platform?: NodeJS.Platform
+  /**
+   * The one platform this adapter serves. Defaults to 'darwin'; the Windows backend (G24, dictation-insert-win.ts)
+   * reuses this whole adapter (target binding, helper request, outcome classification, audit) over its own client.
+   */
+  expectedPlatform?: NodeJS.Platform
   /** The clock the guard measures target freshness with. */
   now?: () => number
   audit?: (detail: MacInsertAudit) => void
@@ -149,7 +154,7 @@ export function createMacDictationPorts(deps: MacDictationPortsDeps = {}): Dicta
   const platform = deps.platform ?? process.platform
   const now = deps.now ?? Date.now
   const present = deps.helperPresent ?? (() => macHelperPresent(platform))
-  const usable = (): boolean => platform === 'darwin' && present()
+  const usable = (): boolean => platform === (deps.expectedPlatform ?? 'darwin') && present()
   const audit = (detail: MacInsertAudit): void => {
     try {
       deps.audit?.(detail)

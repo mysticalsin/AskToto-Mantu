@@ -52,17 +52,22 @@ describe('dictation boundary (G22)', () => {
     expect(index).not.toMatch(/createDictationRuntime|features\/dictation/)
   })
 
-  it('only macOS binds real ports (G23, through the helper adapter); every other platform ships unsupported until G24', () => {
+  it('only macOS (G23) and Windows (G24) bind real ports, through one shared adapter; every other platform ships unsupported', () => {
     const ports = readModuleSource(__dirname, './dictation-ports').text
     expect(ports).toMatch(/UNSUPPORTED_DICTATION_PORTS/)
     expect(ports).toMatch(/reason: 'unsupported'/)
     expect(ports).toMatch(/outcome: 'unsupported'/)
     const runtime = readModuleSource(__dirname, './dictation-runtime').text
     expect(runtime).toMatch(/deps\.ports \?\?\s*\(platform === 'darwin'\s*\? createMacDictationPorts\(/)
+    expect(runtime).toMatch(/platform === 'win32'\s*\? createWinDictationPorts\(/)
     expect(runtime).toMatch(/:\s*UNSUPPORTED_DICTATION_PORTS\)/)
     // The adapter is a sibling in this feature and its only native reach is the helper gateway.
     const mac = readModuleSource(__dirname, './dictation-insert-mac').text
     expect(mac).not.toMatch(/child_process|NSPasteboard|robotjs|sendKeys/i)
+    // The Windows backend is a thin wrapper over that adapter: no second protocol, no native reach of its own.
+    const win = readModuleSource(__dirname, './dictation-insert-win').text
+    expect(win).toContain('createMacDictationPorts({')
+    expect(win).not.toMatch(/child_process|robotjs|sendKeys|ffi-napi|koffi/i)
   })
 
   it('the desktop contract barrel exports the guard but not the routine coordinator (no dead consumer)', () => {

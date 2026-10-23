@@ -19,6 +19,7 @@ import { auditLog } from '../../logger'
 import type { ChordWatcherEvent } from '../../voice/chord-watcher'
 import { createVoiceChordWiring, type VoiceChordWiring } from '../../voice/chord-wiring'
 import { createMacDictationPorts } from './dictation-insert-mac'
+import { createWinDictationPorts } from './dictation-insert-win'
 import { currentDictationMemory } from './dictation-memory-registry'
 import type { DictationMemory, DictationMemorySink } from './dictation-memory'
 import { UNSUPPORTED_DICTATION_PORTS, type DictationHostPorts } from './dictation-ports'
@@ -156,7 +157,13 @@ export function createDictationRuntime(deps: DictationRuntimeDeps): DictationRun
             now: deps.now,
             audit: (detail) => auditLog('dictation.insert', { ...detail })
           })
-        : UNSUPPORTED_DICTATION_PORTS),
+        : platform === 'win32'
+          ? createWinDictationPorts({
+              platform,
+              now: deps.now,
+              audit: (detail) => auditLog('dictation.insert', { ...detail, platform })
+            })
+          : UNSUPPORTED_DICTATION_PORTS),
     memory: memorySink,
     push: {
       begin: (payload) => send(VOICE_ACTIONS_IPC.begin, payload),

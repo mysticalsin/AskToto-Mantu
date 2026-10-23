@@ -102,6 +102,9 @@ extraResources:
     to: tray
   - from: resources/graphify_runner.py
     to: graphify_runner.py
+  # G24: Windows dictation helper script (UI Automation + SendInput), run by powershell.exe -File. Harmless on macOS.
+  - from: resources/win-ax
+    to: win-ax
   - from: THIRD_PARTY_NOTICES.md
     to: THIRD_PARTY_NOTICES.md
   # The existing compact Local AI default ships ready for offline opt-in. Copy only its reviewed

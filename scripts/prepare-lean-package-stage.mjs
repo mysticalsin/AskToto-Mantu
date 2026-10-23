@@ -72,6 +72,8 @@ await copyTree('build/managed-config.enterprise.example.json', 'managed-config.e
 await copyTree('build/icon.png', 'icon.png')
 await copyTree('build/tray', 'tray')
 await copyTree('resources/graphify_runner.py', 'graphify_runner.py')
+// G24: the Windows dictation helper (UI Automation focus snapshot + SendInput insert), launched by powershell.exe -File.
+await copyTree('resources/win-ax', 'win-ax')
 await copyTree('resources/speech-pack-fixtures/en.wav', 'speech-pack-fixtures/en.wav')
 await copyTree('resources/runtime-catalog.json', 'runtime-catalog.json')
 await copyTree('resources/runtime-trust/sigstore-trusted-root.json', 'runtime-trust/sigstore-trusted-root.json')

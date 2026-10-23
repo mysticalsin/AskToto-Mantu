@@ -305,7 +305,11 @@ export function runHelperOnce<T>(
     const label = spec.args[0]
     let proc: ReturnType<typeof spawn>
     try {
-      proc = spawn(spec.command, spec.args, { stdio: [input === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'] })
+      proc = spawn(spec.command, spec.args, {
+        stdio: [input === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'],
+        // No effect off Windows; on Windows a console child of a GUI app would otherwise flash a window.
+        windowsHide: true
+      })
     } catch (e) {
       mainLog.warn(`[mac-helper] ${label} spawn failed`, e instanceof Error ? e.message : String(e))
       resolve(null)

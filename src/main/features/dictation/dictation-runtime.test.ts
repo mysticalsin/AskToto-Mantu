@@ -18,6 +18,13 @@ vi.mock('../../mac-helper', () => ({
   runHelperOnce: (...args: unknown[]) => helper.run(...(args as []))
 }))
 
+// The Windows script gateway (G24) is replaced the same way: no test here ever spawns powershell.exe.
+const winAx = vi.hoisted(() => ({ present: false, snapshot: vi.fn(async (): Promise<unknown> => null) }))
+vi.mock('../../win-ax-helper', () => ({
+  winAxHelperPresent: () => winAx.present,
+  winAxHelperClient: { snapshot: () => winAx.snapshot(), insert: async () => null }
+}))
+
 const wiringCalls: VoiceChordWiringDeps[] = []
 const chordFake = {
   start: vi.fn(),
@@ -237,6 +244,43 @@ describe('dictation runtime: a held chord opens a dictation capture, never a voi
     expect(bound.runtime.snapshot().state).toBe('listening')
     helper.present = false
     helper.run.mockReset()
+  })
+
+  it('on Windows the default ports are the UI Automation adapter (G24): no script is unsupported, a focused field binds', async () => {
+    winAx.present = false
+    const missing = setup({ ports: undefined, platform: 'win32' })
+    missing.runtime.start()
+    missing.wiring().onChordEvent?.(armed)
+    await flush()
+    expect(missing.runtime.snapshot()).toMatchObject({ state: 'failed', reason: 'target_unsupported' })
+    expect(winAx.snapshot).not.toHaveBeenCalled()
+
+    winAx.present = true
+    winAx.snapshot.mockResolvedValue({
+      status: 'ok',
+      pid: 5150,
+      bundleId: 'win:synthetic-editor',
+      processStartMs: 1,
+      windowId: 'w263950',
+      role: 'Edit',
+      subrole: null,
+      token: '42.263950.4.1',
+      secure: false,
+      editable: true,
+      terminal: false,
+      valueHash: 'a'.repeat(64),
+      valueLength: 3,
+      valueTooLarge: false,
+      selection: { location: 3, length: 0 }
+    })
+    const bound = setup({ ports: undefined, platform: 'win32' })
+    bound.runtime.start()
+    bound.wiring().onChordEvent?.(armed)
+    await flush()
+    expect(winAx.snapshot).toHaveBeenCalledTimes(1)
+    expect(bound.runtime.snapshot().state).toBe('listening')
+    winAx.present = false
+    winAx.snapshot.mockReset()
   })
 
   it('is refused while a meeting records and nothing is captured', async () => {

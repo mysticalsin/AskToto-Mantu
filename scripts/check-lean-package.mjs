@@ -139,6 +139,7 @@ const requiredResources = [
 ]
 if (platform === 'darwin') requiredResources.push(['mac-helper/metis-mac-helper', 'macOS capture helper'])
 if (platform === 'win32') requiredResources.push(['vcredist/vc_redist.x64.exe', 'Windows VC++ runtime'])
+if (platform === 'win32') requiredResources.push(['win-ax/metis-win-ax.ps1', 'Windows dictation insertion helper'])
 for (const [relativePath, label] of requiredResources) {
   await requireFile(join(resourcesRoot, relativePath), label)
 }
