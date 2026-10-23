@@ -9,7 +9,7 @@ import {
   writeArgsHash,
   type ConnectorHandler
 } from './connector-executor'
-import { singleAccountResolver } from './account-ref'
+import type { AccountRef, ConnectorEffect } from '@shared/connector-catalog'
 
 const READ: ConnectorOperation = {
   opId: 'outlook.calendar.today',
@@ -30,21 +30,35 @@ const WRITE: ConnectorOperation = {
   output: z.object({ id: z.string().min(1) })
 }
 
-function setup(over: { grant?: 'granted' | 'stale'; handler?: ConnectorHandler; revision?: number } = {}) {
+const ACCOUNT_REF = `acct_${'A'.repeat(43)}` as AccountRef
+
+function setup(over: {
+  grant?: 'granted' | 'stale' | 'transient'
+  handler?: ConnectorHandler
+  revision?: number
+  ready?: boolean | ((effect: ConnectorEffect) => boolean)
+} = {}) {
   const publisher = createCatalogPublisher({ revision: over.revision ?? 3, operations: [READ, WRITE] })
   const write = vi.fn<ConnectorHandler>(over.handler ?? (async () => ({ ok: true, output: { id: 'draft-1' } })))
   const read = vi.fn<ConnectorHandler>(async () => ({ ok: true, output: { events: [] } }))
   const grants = { check: vi.fn(async () => over.grant ?? 'granted') }
+  const accounts = {
+    resolve: vi.fn((_kind: 'outlook', requested?: AccountRef) => requested ?? ACCOUNT_REF),
+    isReady: vi.fn((_kind: 'outlook', _ref: AccountRef, effect: ConnectorEffect) =>
+      typeof over.ready === 'function' ? over.ready(effect) : (over.ready ?? over.grant !== 'stale')
+    ),
+    observe: vi.fn(async (_kind: 'outlook', _ref: AccountRef, _signal: string) => true)
+  }
   const audit = vi.fn()
   const executor = createConnectorExecutor({
     catalog: publisher,
     handlers: { 'outlook.calendar.today': read, 'outlook.draft.create': write },
     grants,
-    accounts: singleAccountResolver,
+    accounts,
     writeGate: createActionGuardWriteGate(),
     audit
   })
-  return { publisher, executor, write, read, grants, audit }
+  return { publisher, executor, write, read, grants, accounts, audit }
 }
 
 const approval = (opId: string, revision: number, input: unknown) => ({
@@ -92,14 +106,44 @@ describe('connector executor', () => {
     expect(read).not.toHaveBeenCalled()
   })
 
-  it('refuses a stale grant, honestly, with the required scopes checked', async () => {
+  it('marks a stale grant as not ready, with the required scopes checked', async () => {
     const { executor, grants, read } = setup({ grant: 'stale' })
     const r = await executor.execute({ opId: 'outlook.calendar.today', revision: 3, input: {} })
-    expect(r).toMatchObject({ ok: false, reason: 'grant_stale', needsConsent: true })
+    expect(r).toMatchObject({ ok: false, reason: 'account_not_ready', needsConsent: true })
     expect(grants.check).toHaveBeenCalledWith(
       expect.objectContaining({ connectorKind: 'outlook', opId: 'outlook.calendar.today', scopes: ['Calendars.Read'] })
     )
     expect(read).not.toHaveBeenCalled()
+  })
+
+  it('refuses operations with account_not_ready after a real grant result if health is not ready', async () => {
+    const { executor, read } = setup({ ready: false })
+    const result = await executor.execute({ opId: 'outlook.calendar.today', revision: 3, input: {} })
+    expect(result).toMatchObject({ ok: false, reason: 'account_not_ready' })
+    expect(read).not.toHaveBeenCalled()
+  })
+
+  it('allows reads but refuses writes while the resolved account is degraded', async () => {
+    const { executor, read, write, accounts } = setup({ ready: (effect) => effect === 'read' })
+    const readResult = await executor.execute({ opId: 'outlook.calendar.today', revision: 3, input: {} })
+    const writeResult = await executor.execute({
+      opId: 'outlook.draft.create',
+      revision: 3,
+      input: { subject: 'x' },
+      approval: approval('outlook.draft.create', 3, { subject: 'x' })
+    })
+    expect(readResult.ok).toBe(true)
+    expect(writeResult).toMatchObject({ ok: false, reason: 'account_not_ready' })
+    expect(read).toHaveBeenCalledOnce()
+    expect(write).not.toHaveBeenCalled()
+    expect(accounts.isReady).toHaveBeenCalledWith('outlook', ACCOUNT_REF, 'create')
+  })
+
+  it('passes an explicit opaque account reference to the registry instead of choosing another account', async () => {
+    const { executor, accounts } = setup()
+    const requested = `acct_${'B'.repeat(43)}` as AccountRef
+    await executor.execute({ opId: 'outlook.calendar.today', revision: 3, input: {}, accountRef: requested })
+    expect(accounts.resolve).toHaveBeenCalledWith('outlook', requested)
   })
 
   it('returns provenance with every result, including refusals after resolution', async () => {
@@ -109,7 +153,7 @@ describe('connector executor', () => {
       ok: true,
       provenance: { connectorKind: 'outlook', opId: 'outlook.calendar.today', revision: 3 }
     })
-    if (ok.ok) expect(ok.provenance.accountRef).toMatch(/^acct_[a-f0-9]{16}$/)
+    if (ok.ok) expect(ok.provenance.accountRef).toMatch(/^acct_[A-Za-z0-9_-]{43}$/)
     const stale = setup({ grant: 'stale' })
     const refused = await stale.executor.execute({ opId: 'outlook.calendar.today', revision: 3, input: {} })
     expect(!refused.ok && refused.provenance?.opId).toBe('outlook.calendar.today')

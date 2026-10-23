@@ -16,6 +16,7 @@ import { createSpokenRepliesPreloadApi } from './spoken-replies'
 import { createArtifactsPreloadApi } from './artifacts'
 import { createAssistantsPreloadApi } from './assistants'
 import { createUserMemoryPreloadApi } from './user-memory'
+import { createConnectorAccountsPreloadApi } from './connector-accounts'
 
 /** The preload bridges that are one self-contained feature each, composed here so index.ts stays under its size cap. */
 export function createFeaturePreloadApis(ipc: IpcRenderer) {
@@ -36,6 +37,7 @@ export function createFeaturePreloadApis(ipc: IpcRenderer) {
     ...createSpokenRepliesPreloadApi(ipc),
     ...createArtifactsPreloadApi(ipc),
     ...createAssistantsPreloadApi(ipc),
-    ...createUserMemoryPreloadApi(ipc)
+    ...createUserMemoryPreloadApi(ipc),
+    ...createConnectorAccountsPreloadApi(ipc)
   }
 }

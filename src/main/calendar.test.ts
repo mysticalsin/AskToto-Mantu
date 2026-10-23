@@ -1,9 +1,10 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 
-vi.mock('./auth', () => ({ getGraphToken: vi.fn(async () => 'graph-token') }))
+const getGraphToken = vi.hoisted(() => vi.fn(async () => 'graph-token' as string | null))
+vi.mock('./auth', () => ({ getGraphToken }))
 vi.mock('./logger', () => ({ auditLog: vi.fn() }))
 
-import { calendarToday, safeTimeZone } from './calendar'
+import { calendarToday, calendarTodayForConnector, safeTimeZone } from './calendar'
 
 // MQA-026 — "today's agenda" must be the user's LOCAL day. Graph interprets calendarView's
 // startDateTime/endDateTime by the offset carried in the value and ignores Prefer: outlook.timezone for
@@ -70,6 +71,31 @@ describe('calendarToday — local-day window (MQA-026)', () => {
     const { start, end } = await boundsAt('2026-08-08T19:15:00Z', '')
     expect(start).toBe('2026-08-08T00:00:00.000Z')
     expect(end).toBe('2026-08-09T00:00:00.000Z')
+  })
+})
+
+describe('calendarTodayForConnector — observed account health signals', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    vi.clearAllMocks()
+  })
+
+  it('uses real token and provider outcomes to classify health', async () => {
+    getGraphToken.mockResolvedValue(null)
+    await expect(calendarTodayForConnector('UTC')).resolves.toMatchObject({ healthSignal: 'consent_required' })
+
+    getGraphToken.mockResolvedValue('graph-token')
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: false, status: 503, json: async () => ({}) })))
+    await expect(calendarTodayForConnector('UTC')).resolves.toMatchObject({ healthSignal: 'transient_failure' })
+
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: false, status: 403, json: async () => ({}) })))
+    await expect(calendarTodayForConnector('UTC')).resolves.toMatchObject({ healthSignal: 'consent_required' })
+
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, status: 200, json: async () => ({ value: [] }) })))
+    await expect(calendarTodayForConnector('UTC')).resolves.toMatchObject({
+      ok: true,
+      healthSignal: 'operation_succeeded'
+    })
   })
 })
 

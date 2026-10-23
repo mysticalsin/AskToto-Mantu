@@ -21,10 +21,7 @@ export function isWriteEffect(effect: ConnectorEffect): boolean {
   return effect !== 'read'
 }
 
-/**
- * Opaque account reference. Never an email address or a provider id. G61 makes it multi-account; until then the
- * resolver hands out one stable ref per kind. Typed as a brand so a plain string cannot be passed by accident.
- */
+/** Main derives owner- and tenant-scoped opaque references; multiple refs may exist for one connector kind. */
 export type AccountRef = string & { readonly __brand: 'ConnectorAccountRef' }
 
 export interface ConnectorOperation {
@@ -110,6 +107,7 @@ export type ConnectorRefusalReason =
   | 'catalog_changed'
   | 'input_invalid'
   | 'account_unavailable'
+  | 'account_not_ready'
   | 'grant_stale'
   | 'not_approved'
   | 'handler_failed'
