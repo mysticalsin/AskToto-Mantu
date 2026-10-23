@@ -20,6 +20,7 @@ import { VOICE_ACTIONS_IPC } from '@shared/voice/voice-turn'
 import type { VoiceActionsRuntimeDeps } from './voice-actions-runtime'
 import { randomUUID } from 'node:crypto'
 import type { ClarifyDropReason } from './clarify-protocol'
+import { createWalkthroughRuntime } from '../features/walkthrough'
 import { createVoiceTurnPipeline, type VoiceTurnOutcome } from './voice-turn-handler'
 
 interface WindowLike {
@@ -35,6 +36,11 @@ export interface MainVoiceTurnsDeps {
   platform?: NodeJS.Platform
   /** Defaults to the shared durable task bridge. */
   execute?: CommandExecutor
+  /**
+   * G44 feature switch (Preview rule): ON in the QA identity build, OFF in release until the owner checklist.
+   * Absent means off. Read on every turn.
+   */
+  walkthroughEnabled?(): boolean
   /** V04 and V05 render the outcome (card, pill). Nothing in main depends on it. */
   onOutcome?(outcome: VoiceTurnOutcome): void
 }
@@ -51,7 +57,21 @@ export function createMainVoiceTurns(deps: MainVoiceTurnsDeps): NonNullable<Voic
   // G35 lineage: one clarification belongs to one owner window, one voice session and one task. Dropping the
   // pending question rotates both ids, so nothing minted before a Stop or sign-out can answer after it.
   let lineage = { sessionId: randomUUID(), taskId: randomUUID() }
+  const ownerKey = (): string | null => {
+    const id = live()?.ownerWebContentsId
+    return typeof id === 'number' ? `wc:${id}` : null
+  }
+  // G44: guides only. No observer or planner is bound yet (G46/G38 and the R114 teaching packs are later tickets), so
+  // a started walkthrough says plainly that it cannot guide that yet and does nothing.
+  const walkthrough = createWalkthroughRuntime({
+    enabled: () => deps.walkthroughEnabled?.() === true,
+    ownerKey,
+    meetingActive: () => deps.authority.hasMeetingReservation,
+    // The renderer-safe view reaches the UI through the turn outcome (V04/V05 subscribe); G45 draws it.
+    audit: (_event, data) => auditLog('walkthrough.event', data)
+  })
   const pipeline = createVoiceTurnPipeline({
+    walkthrough,
     clarify: {
       binding() {
         const id = live()?.ownerWebContentsId
@@ -106,6 +126,13 @@ export function createMainVoiceTurns(deps: MainVoiceTurnsDeps): NonNullable<Voic
     handle: (text, claim) => pipeline.handle(text, claim),
     dropClarification(reason: ClarifyDropReason) {
       pipeline.dropClarification(reason)
+      // A walkthrough ends or pauses on the same signals (G44): Stop, sign-out and an owner switch abandon it and
+      // release its lease; a meeting or a lost window pauses it, and resume will look again first.
+      if (reason === 'stop') walkthrough.stop('owner_stop')
+      else if (reason === 'sign_out') walkthrough.stop('sign_out')
+      else if (reason === 'owner_switch') walkthrough.stop('owner_switch')
+      else if (reason === 'meeting') walkthrough.pause('meeting')
+      else if (reason === 'revoked') walkthrough.pause('interrupted')
       lineage = { sessionId: randomUUID(), taskId: randomUUID() }
     }
   }

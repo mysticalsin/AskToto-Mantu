@@ -407,6 +407,8 @@ export type AuditEvent =
   | 'dictation.memory'
   // V03: one voice action decision and its outcome (action id, class, source, status; never a title, query or words).
   | 'voice.action'
+  // G44: one walkthrough event (started, planned, advanced, paused, completed, abandoned; step number and enum reason only, never the goal, an instruction or screen text).
+  | 'walkthrough.event'
   | 'task.recovered'
   | 'task.effect_uncertain'
   | 'task.dispatch_denied'

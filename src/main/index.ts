@@ -1510,7 +1510,12 @@ voiceActions = createVoiceActionsRuntime({
   availability: commandMicAvailability,
   parakeet: { refreshPresence, ensure: ensureParakeetModel, release: parakeetRelease },
   speechBusy: () => listeningActive || importJobs?.hasMemoryHeavyWork() === true,
-  turns: createMainVoiceTurns({ commandControl, authority: inputSessionAuthority, window: () => win })
+  turns: createMainVoiceTurns({
+    commandControl,
+    authority: inputSessionAuthority,
+    window: () => win,
+    walkthroughEnabled: () => QA_IDENTITY_BUILD // G44 Preview rule: on in QA, off in release
+  })
 })
 function activationFrameFromEvent(event: Electron.IpcMainInvokeEvent): MeetingStartActivationFrame | null {
   const frame = event.senderFrame
