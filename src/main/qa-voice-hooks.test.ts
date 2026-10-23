@@ -300,7 +300,8 @@ describe.skipIf(process.platform === 'win32')('createQaChordFifoSource on a real
       onExit: () => undefined
     })
     const until = async (check: () => boolean): Promise<void> => {
-      for (let i = 0; i < 100 && !check(); i += 1) await new Promise((resolve) => setTimeout(resolve, 20))
+      // Bounded at 10 s: a loaded hosted runner can take seconds to deliver the FIFO close (run 39971510784).
+      for (let i = 0; i < 500 && !check(); i += 1) await new Promise((resolve) => setTimeout(resolve, 20))
     }
     await until(() => audits.includes('open'))
     for (const text of ['m 32 0\n', 'm 0 0\n']) {
@@ -314,7 +315,7 @@ describe.skipIf(process.platform === 'win32')('createQaChordFifoSource on a real
     handle.kill()
     await until(() => audits.includes('closed'))
     expect(audits).toEqual(['open', 'closed'])
-  })
+  }, 30_000)
 
   it('refuses a symlink in the profile that points at a FIFO outside it', async () => {
     const f = profileFixture()
