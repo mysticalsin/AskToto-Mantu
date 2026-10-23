@@ -1,0 +1,86 @@
+/* G45 walkthrough coach card in the sidecar (DESIGN.md "Transient pointers"). Tokens only. */
+.coach-card {
+  flex: 0 0 auto;
+  margin: 0 14px 8px;
+  border: 1px solid var(--color-hair);
+  border-left: 3px solid var(--color-accent-2);
+  border-radius: 10px;
+  padding: 9px 10px 9px 11px;
+  background: var(--color-hair-soft);
+  color: var(--color-ink-2);
+  animation: coach-card-enter 180ms var(--ease-spring) both;
+}
+.coach-card[data-coach-tone="paused"] {
+  border-left-color: var(--color-warn);
+}
+.coach-card[data-coach-tone="ended"] {
+  border-left-color: var(--color-hair-strong);
+}
+.coach-card__heading {
+  margin: 0;
+  color: var(--color-ink-3);
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.01em;
+  font-variant-numeric: tabular-nums;
+}
+.coach-card__instruction {
+  margin: 3px 0 0;
+  color: var(--color-ink);
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.35;
+}
+.coach-card__status,
+.coach-card__budget {
+  margin: 4px 0 0;
+  color: var(--color-ink-3);
+  font-size: 11px;
+  line-height: 1.4;
+}
+.coach-card__controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+.coach-card__control {
+  min-height: 24px;
+  border: 0;
+  border-radius: 7px;
+  padding: 4px 10px;
+  background: var(--color-hair);
+  color: var(--color-ink);
+  font-size: 11px;
+  font-weight: 650;
+  cursor: pointer;
+  transition: background var(--duration-hover) ease;
+}
+.coach-card__control:hover {
+  background: var(--color-hair-strong);
+}
+.coach-card__control--primary {
+  background: var(--color-accent);
+  color: var(--color-ink);
+}
+.coach-card__control--primary:hover {
+  background: var(--color-accent-2);
+}
+@keyframes coach-card-enter {
+  from {
+    opacity: 0;
+    transform: translateY(2px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .coach-card {
+    animation: none;
+  }
+  .coach-card__control {
+    transition: none;
+  }
+}

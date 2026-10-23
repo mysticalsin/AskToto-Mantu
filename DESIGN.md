@@ -173,6 +173,16 @@ Each built-in mode (`BUILTIN_MODE_LABELS`: general, meeting, sales, interview, r
 
 The Summary / recap body Tony reads after a session (Review inside `Panel`, plus History / Agenda / Brain in that same shell) must **fit or scroll**. Never clip under the overlay Bar, a fixed footer, window chrome, or a parent `overflow: hidden` with no scroller. `Panel` is the one overflow-y surface; its cap leaves room for Bar chrome (including the 64 thinking-orb), root padding, gap, resize quantization, and main's `workArea - 48` ceiling. Last paragraph, actions, and footer chips stay reachable. No "scroll here" hint.
 
+## Transient pointers (D-04)
+
+Persistent UI stays at the **top edge** (bar, island, pill, confirm card, Home, peek). Only a **transient pointer** may sit away from it, and only where it must point at a target: a screen mark (point, box, arrow, numbered step anchor), a walkthrough coach mark, or a dictation caret hint. Never a panel, an answer, a menu or a button beside the cursor.
+
+- **Where.** Marks are drawn by the per-display annotation window (G43): click-through, never focusable, `showInactive` only, content-protected always, so Métis never captures or records its own marks. A mark sits exactly on its target in display points; it is never offset to follow the cursor.
+- **What a mark says.** Nothing but a step number (1–15). Instructions and status live in the **coach card** in the sidecar, never on the screen next to the target. A mark never carries text read from the screen.
+- **Contrast.** Every mark has a dark halo outside its accent stroke so it reads on white documents and dark apps alike. Fill is at most `--color-accent-soft`; the target under a box stays legible.
+- **Motion.** Enter 180 ms (fade + scale 0.94 → 1, `--ease-spring`). One focus pulse on the current step's mark (a single 600 ms ring), then still — no looping animation, no idle CPU. Exit 140 ms fade. A stale mark disappears at once (it never animates onto a different screenshot). `prefers-reduced-motion`: no scale, no pulse, opacity only.
+- **Coach card.** In the sidecar with the task cards: "Step 2 of 6", the instruction Métis wrote, one status sentence, and only the controls that work now (I did it / Pause or Resume / Stop). Paused and stopped states say why in one sentence. The 15-step budget is visible only when it matters ("Step 15 of 15 — the last one Métis can guide").
+
 ## Copy
 
 Métis voice. Do not clone Vibe Island strings.

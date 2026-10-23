@@ -70,3 +70,14 @@ export const IDLE_WALKTHROUGH_VIEW: WalkthroughView = Object.freeze({
   canResume: false,
   canStop: false
 })
+
+/** G45: main pushes the view to the owner window; the coach card asks for one of the owner's own actions. */
+export const WALKTHROUGH_IPC = {
+  view: 'walkthrough:view',
+  current: 'walkthrough:current',
+  act: 'walkthrough:act'
+} as const
+
+export const WALKTHROUGH_CARD_ACTIONS = ['check', 'pause', 'resume', 'stop'] as const
+export type WalkthroughCardAction = (typeof WALKTHROUGH_CARD_ACTIONS)[number]
+export const WalkthroughActInputSchema = z.object({ action: z.enum(WALKTHROUGH_CARD_ACTIONS) }).strict()

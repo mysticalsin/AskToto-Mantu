@@ -1,4 +1,4 @@
-/* The annotation window's stylesheet: design tokens plus placeholder mark rules (visuals are G45's). */
+/* The annotation window (G43 lifecycle, G45 visuals; DESIGN.md "Transient pointers"). Tokens only. */
 @import "tailwindcss";
 @import "../tokens.css";
 
@@ -17,30 +17,124 @@ body,
   position: fixed;
   inset: 0;
 }
-.annotation-box {
+
+/* Every mark: enters once, pulses once, then holds still (no idle animation). */
+.annotation-mark {
   position: absolute;
-  box-sizing: border-box;
-  border: 2px solid var(--color-accent-2);
-  background: var(--color-accent-soft);
-  border-radius: 4px;
+  animation: annotation-enter 180ms var(--ease-spring) both;
 }
+.annotation-mark[data-leaving="true"] {
+  animation: annotation-exit 140ms ease-in both;
+}
+
+.annotation-box {
+  box-sizing: border-box;
+  border: 2px solid var(--color-mark-stroke);
+  border-radius: 6px;
+  background: var(--color-mark-fill);
+  box-shadow:
+    0 0 0 1px var(--color-mark-halo),
+    inset 0 0 0 1px var(--color-mark-halo);
+}
+
 .annotation-dot {
-  position: absolute;
-  width: 16px;
-  height: 16px;
-  margin: -8px 0 0 -8px;
+  width: 14px;
+  height: 14px;
+  margin: -7px 0 0 -7px;
+  border-radius: 50%;
+  background: var(--color-mark-stroke);
+  box-shadow: 0 0 0 2px var(--color-mark-halo);
+}
+
+.annotation-step {
+  width: 22px;
+  height: 22px;
+  margin: -11px 0 0 -11px;
   border-radius: 50%;
   background: var(--color-accent);
-  box-shadow: 0 0 0 4px var(--color-accent-glow);
-  color: white;
+  color: var(--color-mark-ink);
+  box-shadow:
+    0 0 0 2px var(--color-mark-ink),
+    0 0 0 3px var(--color-mark-halo);
   font:
-    600 10px / 16px system-ui,
+    700 12px / 22px system-ui,
+    -apple-system,
     sans-serif;
+  font-variant-numeric: tabular-nums;
   text-align: center;
 }
-.annotation-arrow {
+
+/* The single focus pulse: a ring that grows and fades once, drawn by a pseudo-element so the mark itself is still. */
+.annotation-dot::after,
+.annotation-step::after,
+.annotation-box::after {
+  content: "";
   position: absolute;
-  height: 2px;
+  inset: -4px;
+  border-radius: inherit;
+  box-shadow: 0 0 0 0 var(--color-mark-pulse);
+  animation: annotation-pulse 600ms ease-out 180ms 1 both;
+}
+
+.annotation-arrow {
+  transform: var(--mark-rotate, rotate(0deg));
+  height: 3px;
   transform-origin: 0 50%;
-  background: var(--color-accent-2);
+  border-radius: 2px;
+  background: var(--color-mark-stroke);
+  box-shadow: 0 0 0 1px var(--color-mark-halo);
+}
+/* The head sits at the far end of the shaft and inherits the shaft's rotation. */
+.annotation-arrow::after {
+  content: "";
+  position: absolute;
+  right: -2px;
+  top: 50%;
+  width: 0;
+  height: 0;
+  margin-top: -6px;
+  border-top: 6px solid transparent;
+  border-bottom: 6px solid transparent;
+  border-left: 10px solid var(--color-mark-stroke);
+  filter: drop-shadow(0 0 1px var(--color-mark-halo));
+}
+
+@keyframes annotation-enter {
+  from {
+    opacity: 0;
+    transform: var(--mark-rotate, rotate(0deg)) scale(0.94);
+  }
+  to {
+    opacity: 1;
+    transform: var(--mark-rotate, rotate(0deg)) scale(1);
+  }
+}
+@keyframes annotation-exit {
+  to {
+    opacity: 0;
+  }
+}
+@keyframes annotation-pulse {
+  from {
+    box-shadow: 0 0 0 0 var(--color-mark-pulse);
+  }
+  to {
+    box-shadow: 0 0 0 10px transparent;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .annotation-mark {
+    animation-name: annotation-fade;
+  }
+  .annotation-dot::after,
+  .annotation-step::after,
+  .annotation-box::after {
+    animation: none;
+  }
+}
+@keyframes annotation-fade {
+  from {
+    opacity: 0;
+  }
 }
