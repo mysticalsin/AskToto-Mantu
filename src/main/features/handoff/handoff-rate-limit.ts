@@ -1,6 +1,6 @@
 /**
  * Rate limit for outside handoffs (G37). A handoff is unauthenticated, so main caps how often one may put a card in
- * front of the owner. PROPOSED numbers (not yet owner-approved): at most 1 per 10 s and 3 per 5 min.
+ * front of the owner. Owner-approved 2026-10-23: at most 1 per 10 s and 3 per 5 min.
  */
 export const HANDOFF_MIN_GAP_MS = 10_000
 export const HANDOFF_WINDOW_MS = 5 * 60_000
