@@ -110,11 +110,15 @@ describe('G16 — revocation drops pending capture work', () => {
   it('lock, unlock, suspend and resume are subscribed at boot beside the input-session hooks', () => {
     const hooks = indexSrc.indexOf('installInputPowerLifecycleHooks()\n')
     expect(hooks).toBeGreaterThan(-1)
-    expect(indexSrc).toMatch(/installScreenObservationLifecycle\(powerMonitor,\s*screenObservation,\s*mainLog\)/)
+    expect(indexSrc).toMatch(
+      /installScreenObservationSignals\(powerMonitor,\s*screen,\s*screenObservation,\s*mainLog\)/
+    )
   })
 
   it('a removed display revokes, and the hover pre-capture is gated by the explicit opt-in setting', () => {
-    expect(indexSrc).toMatch(/installDisplayRemovalRevocation\(screen,\s*screenObservation,\s*mainLog\)/)
+    expect(indexSrc).toMatch(
+      /installScreenObservationSignals\(powerMonitor,\s*screen,\s*screenObservation,\s*mainLog\)/
+    )
     expect(indexSrc).toMatch(/prewarmAllowed:\s*\(\)\s*=>\s*getSettings\(\)\.screenHoverPrewarm === true/)
   })
 

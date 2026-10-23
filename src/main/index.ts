@@ -608,10 +608,8 @@ import { installQaCaptureSource } from './qa-capture-source'
 import { resetDustConversation, prewarmDustConversation, isDustAuthError } from './llm/dust'
 import { getScreenSourcesWithRetry, isUsableScreenSource, screenCaptureUnavailableMessage } from './screen-capture'
 import { cropNormalizedRegion } from './features/screen-observation/crop'
-import {
-  installDisplayRemovalRevocation,
-  installScreenObservationLifecycle
-} from './features/screen-observation/lifecycle'
+import { installScreenObservationSignals } from './features/screen-observation/lifecycle'
+import { createScreenMarksRuntime } from './features/screen-marks/runtime'
 import { captureReasonForPhase, createScreenObservation } from './features/screen-observation/screen-observation'
 import { ScreenScopeSchema, type ScreenRegion, type ScreenScope } from '@shared/screen-observation'
 import {
@@ -4692,8 +4690,10 @@ class PrivateViewBlockedError extends Error {
   }
 }
 
+const screenMarks = createScreenMarksRuntime((m) => mainLog.warn(m), assertMainWindow) // G43 marks + annotation windows
 /** Admission, identity, reuse and revocation of every screen capture (G16, features/screen-observation). */
 const screenObservation = createScreenObservation({
+  ...screenMarks.hooks,
   captureOnce: (request) => captureScreenshotOnce(request.displayId, request.region),
   cursorDisplayId: () => screen.getDisplayNearestPoint(screen.getCursorScreenPoint()).id,
   privateViewOn,
@@ -9176,8 +9176,7 @@ if (!app.requestSingleInstanceLock()) {
       commandControl.initialize(powerMonitor, initLogging, mainLog)
       // Capture admission remains closed unless both suspend and lock-screen invalidation are observed.
       installInputPowerLifecycleHooks()
-      installScreenObservationLifecycle(powerMonitor, screenObservation, mainLog) // lock and sleep drop pending captures
-      installDisplayRemovalRevocation(screen, screenObservation, mainLog) // a removed display drops its captures
+      installScreenObservationSignals(powerMonitor, screen, screenObservation, mainLog) // lock/sleep/display drop captures
       voiceActions?.start()
       const bootWork = createBootWork() // M2-0031: non-first-paint fs work starts after the first show, under the pool cap
       bootWorkGate = bootWork
