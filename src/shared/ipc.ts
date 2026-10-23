@@ -320,9 +320,8 @@ export const IPC = {
   // Local AI (routing) on. Cancel/delete stay off the renderer — main owns the transfer.
   localModelsList: 'localModels:list',
   localModelsEnsure: 'localModels:ensure',
-  // MQA-247: the high-accuracy transcription model. Its own pair rather than folded into the LLM
-  // channel above — different asset, different size, different consent, and a user may want one
-  // and not the other.
+  // MQA-247: the high-accuracy transcription model. Its own pair rather than folded into the LLM channel above:
+  // different asset, different size, different consent, and a user may want one and not the other.
   asrModelState: 'asrModel:state',
   asrModelFetch: 'asrModel:fetch',
   asrModelRemove: 'asrModel:remove',
@@ -801,8 +800,7 @@ const AskStartBaseSchema = z.object({
   id: z.string(),
   mode: z.enum(['answer', 'vision', 'suggest', 'summary', 'recap']),
   prompt: z.string().default(''),
-  /** Validated modality metadata; it records provenance and grants no authority. */
-  inputOrigin: z.enum(['user-typed', 'user-spoken-by-owner']).optional(),
+  inputOrigin: z.enum(['user-typed', 'user-spoken-by-owner']).optional(), // provenance only; grants no authority
   /** base64 image (JPEG from screen capture; no data: prefix) for vision mode. Max ~5.5 MB base64. */
   image: z
     .string()

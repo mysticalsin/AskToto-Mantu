@@ -47,7 +47,11 @@ describe('modeLabel (MQA-325)', () => {
     expect(modeLabel(id, [{ id, label: 'Custom review' }])).toBe('Custom review')
   })
 
-  it.each([['meeting', 'Meeting'], ['general', 'General'], ['cold-call', 'Cold Calling']])('preserves the built-in label for %s', (id, label) => {
+  it.each([
+    ['meeting', 'Meeting'],
+    ['general', 'General'],
+    ['cold-call', 'Cold Calling']
+  ])('preserves the built-in label for %s', (id, label) => {
     expect(modeLabel(id, [{ id, label: 'Custom override' }])).toBe(label)
   })
 
@@ -106,9 +110,9 @@ describe('AskStartSchema', () => {
 
   it('accepts only a UUID localSessionId', () => {
     const base = { id: 'ask-4', mode: 'answer' as const, history: [] }
-    expect(
-      AskStartSchema.safeParse({ ...base, localSessionId: '123e4567-e89b-12d3-a456-426614174000' }).success
-    ).toBe(true)
+    expect(AskStartSchema.safeParse({ ...base, localSessionId: '123e4567-e89b-12d3-a456-426614174000' }).success).toBe(
+      true
+    )
     expect(AskStartSchema.safeParse({ ...base, localSessionId: 'not-a-uuid' }).success).toBe(false)
   })
 
@@ -124,12 +128,8 @@ describe('AskStartSchema', () => {
       text: '',
       regions: []
     }
-    expect(
-      AskStartSchema.safeParse({ id: 'ask-5', mode: 'vision', visionEvidence, history: [] }).success
-    ).toBe(true)
-    expect(
-      AskStartSchema.safeParse({ id: 'ask-6', mode: 'answer', visionEvidence, history: [] }).success
-    ).toBe(false)
+    expect(AskStartSchema.safeParse({ id: 'ask-5', mode: 'vision', visionEvidence, history: [] }).success).toBe(true)
+    expect(AskStartSchema.safeParse({ id: 'ask-6', mode: 'answer', visionEvidence, history: [] }).success).toBe(false)
     expect(
       AskStartSchema.safeParse({
         id: 'ask-7',
@@ -206,7 +206,9 @@ describe('screen-capture self-check IPC', () => {
 
 describe('ScreenContextResultSchema (M13 screen fast-path)', () => {
   it('accepts a description + capturedAt, or null', () => {
-    expect(ScreenContextResultSchema.safeParse({ description: 'a code editor', capturedAt: 1_700_000_000_000 }).success).toBe(true)
+    expect(
+      ScreenContextResultSchema.safeParse({ description: 'a code editor', capturedAt: 1_700_000_000_000 }).success
+    ).toBe(true)
     expect(ScreenContextResultSchema.safeParse(null).success).toBe(true)
     expect(ScreenContextResultSchema.safeParse({ description: 'x', capturedAt: -1 }).success).toBe(false)
   })
@@ -271,9 +273,7 @@ describe('SettingsSchema', () => {
     // Local AI is also off by default — both must stay false so a fresh install never starts
     // continuous screen capture as a side effect of another default.
     expect(DEFAULT_SETTINGS.localLlm.enabled).toBe(false)
-    expect(
-      DEFAULT_SETTINGS.localLlm.enabled && DEFAULT_SETTINGS.backgroundScreenContext
-    ).toBe(false)
+    expect(DEFAULT_SETTINGS.localLlm.enabled && DEFAULT_SETTINGS.backgroundScreenContext).toBe(false)
   })
 
   it('a fresh install labels speakers in the meeting but saves no voiceprints', () => {
@@ -285,8 +285,10 @@ describe('SettingsSchema', () => {
 
   it('a profile saved before the voiceprint opt-in keeps its speaker-ID choice and saves no voiceprints', () => {
     for (const enabled of [true, false]) {
-      expect(SettingsSchema.parse({ ...DEFAULT_SETTINGS, speakerId: { enabled } }).speakerId)
-        .toEqual({ enabled, saveVoiceprints: false })
+      expect(SettingsSchema.parse({ ...DEFAULT_SETTINGS, speakerId: { enabled } }).speakerId).toEqual({
+        enabled,
+        saveVoiceprints: false
+      })
     }
   })
 
@@ -356,7 +358,7 @@ describe('SettingsSchema', () => {
     expect(SettingsSchema.safeParse(valid).success).toBe(true)
   })
 
-  it("selecting Cloudflare before its URL is set still parses — readiness is enforced at request time", () => {
+  it('selecting Cloudflare before its URL is set still parses — readiness is enforced at request time', () => {
     // Deliberately unlike provider:'custom', whose cross-field refine makes a bare provider patch fail the
     // full-object re-parse — which is why Settings.tsx has to seed a placeholder URL for it. Cloudflare
     // needs no such workaround: publicSettings().providerReady, attempt()'s eligibility chain and
@@ -499,17 +501,20 @@ describe('McpConnectionSchema', () => {
   // credential is encrypted under. Constrained to the kind enum at every entry point.
   it('rejects a path-traversing connection id everywhere a connectionId is accepted', () => {
     for (const id of ['../../secret-key', '..\\..\\secret-key', 'a/b', 'bidstack/../x']) {
-      expect(McpConnectionSchema.safeParse({ id, kind: 'bidstack', label: 'X' }).success, `McpConnection ${id}`).toBe(false)
+      expect(McpConnectionSchema.safeParse({ id, kind: 'bidstack', label: 'X' }).success, `McpConnection ${id}`).toBe(
+        false
+      )
       expect(McpDisconnectPayloadSchema.safeParse({ connectionId: id }).success, `disconnect ${id}`).toBe(false)
-      expect(
-        McpPushPayloadSchema.safeParse({ connectionId: id, toolName: 't', args: {} }).success,
-        `push ${id}`
-      ).toBe(false)
+      expect(McpPushPayloadSchema.safeParse({ connectionId: id, toolName: 't', args: {} }).success, `push ${id}`).toBe(
+        false
+      )
     }
     // The real ids still pass on each of those entry points.
     for (const id of ['bidstack', 'plane', 'clickup']) {
       expect(McpDisconnectPayloadSchema.safeParse({ connectionId: id }).success, `disconnect ${id}`).toBe(true)
-      expect(McpPushPayloadSchema.safeParse({ connectionId: id, toolName: 't', args: {} }).success, `push ${id}`).toBe(true)
+      expect(McpPushPayloadSchema.safeParse({ connectionId: id, toolName: 't', args: {} }).success, `push ${id}`).toBe(
+        true
+      )
     }
   })
 
@@ -563,11 +568,18 @@ describe('McpTestConnectionPayloadSchema / McpSaveConnectionPayloadSchema / McpD
   })
 
   it('rejects a missing connectionId, an empty endpoint URL, and an empty API key', () => {
-    expect(McpTestConnectionPayloadSchema.safeParse({ endpointUrl: 'http://localhost:4001/mcp', apiKey: 'x' }).success).toBe(false)
-    expect(McpTestConnectionPayloadSchema.safeParse({ connectionId: 'bidstack', endpointUrl: '', apiKey: 'sk-abc' }).success).toBe(false)
     expect(
-      McpTestConnectionPayloadSchema.safeParse({ connectionId: 'bidstack', endpointUrl: 'http://localhost:4001/mcp', apiKey: '' })
-        .success
+      McpTestConnectionPayloadSchema.safeParse({ endpointUrl: 'http://localhost:4001/mcp', apiKey: 'x' }).success
+    ).toBe(false)
+    expect(
+      McpTestConnectionPayloadSchema.safeParse({ connectionId: 'bidstack', endpointUrl: '', apiKey: 'sk-abc' }).success
+    ).toBe(false)
+    expect(
+      McpTestConnectionPayloadSchema.safeParse({
+        connectionId: 'bidstack',
+        endpointUrl: 'http://localhost:4001/mcp',
+        apiKey: ''
+      }).success
     ).toBe(false)
   })
 
@@ -621,9 +633,9 @@ describe('McpPushPayloadSchema', () => {
 
   it('rejects args that is not a record (e.g. an array or string)', () => {
     expect(McpPushPayloadSchema.safeParse({ connectionId: 'bidstack', toolName: 'x', args: [] }).success).toBe(false)
-    expect(McpPushPayloadSchema.safeParse({ connectionId: 'bidstack', toolName: 'x', args: 'not-an-object' }).success).toBe(
-      false
-    )
+    expect(
+      McpPushPayloadSchema.safeParse({ connectionId: 'bidstack', toolName: 'x', args: 'not-an-object' }).success
+    ).toBe(false)
   })
 
   it('rejects a nested object/array value inside args — flat primitives only', () => {
@@ -693,7 +705,9 @@ describe('RecapExportSchema.actionItems dueDateText', () => {
 // brain:commitmentReject handlers run every incoming payload through before ever touching the store.
 describe('EntityRenamePayloadSchema', () => {
   it('accepts a valid rename, with and without alsoFixAsr', () => {
-    expect(EntityRenamePayloadSchema.safeParse({ kind: 'account', id: 'acme-corp', newName: 'Acme' }).success).toBe(true)
+    expect(EntityRenamePayloadSchema.safeParse({ kind: 'account', id: 'acme-corp', newName: 'Acme' }).success).toBe(
+      true
+    )
     expect(
       EntityRenamePayloadSchema.safeParse({ kind: 'person', id: 'm-silva', newName: 'Maria Silva', alsoFixAsr: true })
         .success
@@ -717,9 +731,9 @@ describe('EntityRenamePayloadSchema', () => {
   // MI-2.5 Fix B: a path-traversal/non-slug id is rejected OUTRIGHT here, before the payload ever reaches
   // the main-process handler — defense in depth alongside corrections.ts's own slugify sanitization.
   it('rejects a path-traversal or otherwise non-slug id', () => {
-    expect(EntityRenamePayloadSchema.safeParse({ kind: 'account', id: '../../../etc/hosts', newName: 'Y' }).success).toBe(
-      false
-    )
+    expect(
+      EntityRenamePayloadSchema.safeParse({ kind: 'account', id: '../../../etc/hosts', newName: 'Y' }).success
+    ).toBe(false)
     expect(EntityRenamePayloadSchema.safeParse({ kind: 'account', id: 'Acme Corp', newName: 'Y' }).success).toBe(false) // spaces/uppercase — not a slug
     expect(EntityRenamePayloadSchema.safeParse({ kind: 'account', id: 'acme-corp', newName: 'Y' }).success).toBe(true) // a real slug still passes
   })
@@ -799,16 +813,28 @@ describe('EntityUpdateFieldPayloadSchema', () => {
 describe('FieldDecisionPayloadSchema (brain:field-decision — dashboard suggestion accept/dismiss)', () => {
   it('accepts a valid accept/dismiss decision for any entity kind', () => {
     expect(
-      FieldDecisionPayloadSchema.safeParse({ entityKind: 'deal', entityId: 'acme-core', field: 'stage', decision: 'accept' })
-        .success
+      FieldDecisionPayloadSchema.safeParse({
+        entityKind: 'deal',
+        entityId: 'acme-core',
+        field: 'stage',
+        decision: 'accept'
+      }).success
     ).toBe(true)
     expect(
-      FieldDecisionPayloadSchema.safeParse({ entityKind: 'person', entityId: 'maria-silva', field: 'role', decision: 'dismiss' })
-        .success
+      FieldDecisionPayloadSchema.safeParse({
+        entityKind: 'person',
+        entityId: 'maria-silva',
+        field: 'role',
+        decision: 'dismiss'
+      }).success
     ).toBe(true)
     expect(
-      FieldDecisionPayloadSchema.safeParse({ entityKind: 'account', entityId: 'acme-corp', field: 'sector', decision: 'accept' })
-        .success
+      FieldDecisionPayloadSchema.safeParse({
+        entityKind: 'account',
+        entityId: 'acme-corp',
+        field: 'sector',
+        decision: 'accept'
+      }).success
     ).toBe(true)
   })
 
@@ -818,10 +844,12 @@ describe('FieldDecisionPayloadSchema (brain:field-decision — dashboard suggest
         .success
     ).toBe(false)
     expect(
-      FieldDecisionPayloadSchema.safeParse({ entityKind: 'deal', entityId: 'x', field: 'stage', decision: 'maybe' }).success
+      FieldDecisionPayloadSchema.safeParse({ entityKind: 'deal', entityId: 'x', field: 'stage', decision: 'maybe' })
+        .success
     ).toBe(false)
     expect(
-      FieldDecisionPayloadSchema.safeParse({ entityKind: 'deal', entityId: '', field: 'stage', decision: 'accept' }).success
+      FieldDecisionPayloadSchema.safeParse({ entityKind: 'deal', entityId: '', field: 'stage', decision: 'accept' })
+        .success
     ).toBe(false)
     expect(
       FieldDecisionPayloadSchema.safeParse({ entityKind: 'deal', entityId: 'x', field: '', decision: 'accept' }).success
@@ -829,7 +857,9 @@ describe('FieldDecisionPayloadSchema (brain:field-decision — dashboard suggest
   })
 
   it('rejects a missing field entirely and a non-object payload', () => {
-    expect(FieldDecisionPayloadSchema.safeParse({ entityId: 'x', field: 'stage', decision: 'accept' }).success).toBe(false)
+    expect(FieldDecisionPayloadSchema.safeParse({ entityId: 'x', field: 'stage', decision: 'accept' }).success).toBe(
+      false
+    )
     expect(FieldDecisionPayloadSchema.safeParse(null).success).toBe(false)
   })
 
@@ -837,14 +867,28 @@ describe('FieldDecisionPayloadSchema (brain:field-decision — dashboard suggest
   // rejected outright here, before the payload ever reaches the main-process handler.
   it('rejects a path-traversal or otherwise non-slug entityId', () => {
     expect(
-      FieldDecisionPayloadSchema.safeParse({ entityKind: 'deal', entityId: '../../../etc/hosts', field: 'stage', decision: 'accept' })
-        .success
+      FieldDecisionPayloadSchema.safeParse({
+        entityKind: 'deal',
+        entityId: '../../../etc/hosts',
+        field: 'stage',
+        decision: 'accept'
+      }).success
     ).toBe(false)
     expect(
-      FieldDecisionPayloadSchema.safeParse({ entityKind: 'deal', entityId: 'Acme Corp', field: 'stage', decision: 'accept' }).success
+      FieldDecisionPayloadSchema.safeParse({
+        entityKind: 'deal',
+        entityId: 'Acme Corp',
+        field: 'stage',
+        decision: 'accept'
+      }).success
     ).toBe(false) // spaces/uppercase — not a slug
     expect(
-      FieldDecisionPayloadSchema.safeParse({ entityKind: 'deal', entityId: 'acme-core', field: 'stage', decision: 'accept' }).success
+      FieldDecisionPayloadSchema.safeParse({
+        entityKind: 'deal',
+        entityId: 'acme-core',
+        field: 'stage',
+        decision: 'accept'
+      }).success
     ).toBe(true) // a real slug still passes
   })
 })
@@ -1007,9 +1051,9 @@ describe('local AI IPC channel constants', () => {
 describe('observability IPC schemas', () => {
   it('rejects a HistoryTrace requestId that is not a UUID', () => {
     expect(HistoryTraceSchema.safeParse({ requestId: 'history-1', sentAt: 1 }).success).toBe(false)
-    expect(
-      HistoryTraceSchema.safeParse({ requestId: '123e4567-e89b-12d3-a456-426614174000', sentAt: 1 }).success
-    ).toBe(true)
+    expect(HistoryTraceSchema.safeParse({ requestId: '123e4567-e89b-12d3-a456-426614174000', sentAt: 1 }).success).toBe(
+      true
+    )
   })
 
   it('rejects negative HistorySettled milliseconds and unknown outcomes', () => {
