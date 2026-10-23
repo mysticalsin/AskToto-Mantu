@@ -50,6 +50,7 @@ export const UserMemoryItemSchema = z
     text: UserMemoryTextSchema,
     source: z.enum(USER_MEMORY_SOURCES),
     at: z.number().int().nonnegative(),
+    turnId: z.string().max(200).nullable(),
     revision: z.number().int().positive(),
     /** Project context: when it lapses unless used again. Null for a preference. */
     expiresAt: z.number().int().nonnegative().nullable(),

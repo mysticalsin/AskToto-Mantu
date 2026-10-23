@@ -429,6 +429,23 @@ describe('useAsk completion and cancellation ownership', () => {
     expect(view.result.answer).toMatchObject({ id, text: 'Completed notes', completion: 'complete', streaming: false })
   })
 
+  it('forwards the recognized owner-input provenance to the main ask request', async () => {
+    const view = renderAsk()
+    const id = view.result.run({
+      mode: 'answer',
+      prompt: 'Call me Ada',
+      inputOrigin: 'user-spoken-by-owner'
+    })
+    await host.__settle()
+
+    expect(toto.ask).toHaveBeenCalledWith(expect.objectContaining({
+      id,
+      mode: 'answer',
+      prompt: 'Call me Ada',
+      inputOrigin: 'user-spoken-by-owner'
+    }))
+  })
+
   it('drains the current pending frame before marking an error incomplete', async () => {
     const view = renderAsk()
     const id = view.result.run({ mode: 'summary' })

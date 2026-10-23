@@ -801,6 +801,8 @@ const AskStartBaseSchema = z.object({
   id: z.string(),
   mode: z.enum(['answer', 'vision', 'suggest', 'summary', 'recap']),
   prompt: z.string().default(''),
+  /** Validated modality metadata; it records provenance and grants no authority. */
+  inputOrigin: z.enum(['user-typed', 'user-spoken-by-owner']).optional(),
   /** base64 image (JPEG from screen capture; no data: prefix) for vision mode. Max ~5.5 MB base64. */
   image: z
     .string()

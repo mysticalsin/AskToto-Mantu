@@ -240,6 +240,7 @@ export interface AnswerState {
 export interface AskRequest {
   mode: AskMode
   prompt?: string
+  inputOrigin?: 'user-typed' | 'user-spoken-by-owner'
   label?: string
   kind?: 'answer' | 'factcheck'
   /** When true, main runs secret-redaction over `prompt` (not just `transcript`). Set only when the
@@ -448,6 +449,7 @@ export function useAsk(): {
           id,
           mode: req.mode,
           prompt: req.prompt ?? '',
+          inputOrigin: req.inputOrigin,
           image: req.image,
           transcript: req.transcript,
           context: req.context,

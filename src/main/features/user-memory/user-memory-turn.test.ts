@@ -54,7 +54,11 @@ describe('user memory in the ask path (G57)', () => {
       ['prompt', 'user-typed', 'instruction', 'ask']
     ])
     expect(JSON.stringify(manifest)).not.toContain('Tony')
-    expect((await e.store.list()).items[0]).toMatchObject({ source: 'owner-typed' })
+    expect((await e.store.list()).items[0]).toMatchObject({
+      source: 'owner-typed',
+      at: 1_800_000_000_000,
+      turnId: 'ask-1'
+    })
   })
 
   it('a later turn carries both classes, each as its own data block, and project context names the conversation', async () => {
@@ -89,10 +93,20 @@ describe('user memory in the ask path (G57)', () => {
     const { runtime, e } = setup()
     await runtime.prepareTurn(turn('What did we decide about pricing?'), [])
     expect((await e.store.list()).items).toEqual([])
-    await runtime.prepareTurn(turn('From now on answer in Portuguese', { id: 'ask-2' }), [], {
-      inputOrigin: 'user-spoken-by-owner'
+    await runtime.prepareTurn(turn('From now on answer in Portuguese', { id: 'ask-1' }), [])
+    expect((await e.store.list()).items[0]).toMatchObject({ source: 'owner-typed', turnId: 'ask-1' })
+    e.now += 1
+    await runtime.prepareTurn(
+      turn('From now on answer in Portuguese', { id: 'ask-2', inputOrigin: 'user-spoken-by-owner' }),
+      []
+    )
+    const items = (await e.store.list()).items
+    expect(items).toHaveLength(1)
+    expect(items[0]).toMatchObject({
+      source: 'owner-spoken',
+      at: e.now,
+      turnId: 'ask-2'
     })
-    expect((await e.store.list()).items[0]).toMatchObject({ source: 'owner-spoken' })
   })
 
   it('a deleted preference is gone from the next prompt', async () => {

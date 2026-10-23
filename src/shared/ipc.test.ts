@@ -70,6 +70,15 @@ describe('AskStartSchema', () => {
     expect(result.success).toBe(true)
   })
 
+  it('preserves only the two supported owner-input provenance values', () => {
+    const base = { id: 'ask-voice', mode: 'answer' as const, history: [] }
+    expect(AskStartSchema.parse({ ...base, inputOrigin: 'user-spoken-by-owner' }).inputOrigin).toBe(
+      'user-spoken-by-owner'
+    )
+    expect(AskStartSchema.parse({ ...base, inputOrigin: 'user-typed' }).inputOrigin).toBe('user-typed')
+    expect(AskStartSchema.safeParse({ ...base, inputOrigin: 'meeting-transcript' }).success).toBe(false)
+  })
+
   it('rejects an oversized image', () => {
     // The string is both longer than the 5 MB limit and not base64-valid,
     // so it is rejected. Using a valid multi-megabyte base64 string would

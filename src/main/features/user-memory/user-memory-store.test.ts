@@ -1,9 +1,11 @@
-import { readdirSync, readFileSync } from 'node:fs'
+import { createHash } from 'node:crypto'
+import { readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { contextRecord, ownerCommand } from '@shared/context-authority'
 import { PROJECT_CONTEXT_TTL_MS } from '@shared/user-memory'
-import { DAY, PARTITION_B, makeEnv, type Env } from './__fixtures__/user-memory-fixtures'
+import { createMemoryKeyring } from '../dictation/dictation-memory-crypto'
+import { DAY, PARTITION_A, PARTITION_B, makeEnv, syntheticKeys, type Env } from './__fixtures__/user-memory-fixtures'
 
 const envs: Env[] = []
 const env = (): Env => {
@@ -26,9 +28,18 @@ describe('typed classes (G57)', () => {
     const { items } = await e.store.list()
     const p = items.find((i) => i.kind === 'preference')!
     const c = items.find((i) => i.kind === 'project-context')!
-    expect(p).toMatchObject({ source: 'owner-typed', expiresAt: null, revision: 1, conversation: null })
+    expect(p).toMatchObject({
+      source: 'owner-typed',
+      at: e.now,
+      turnId: 'turn-1',
+      expiresAt: null,
+      revision: 1,
+      conversation: null
+    })
     expect(c).toMatchObject({
       source: 'owner-spoken',
+      at: e.now,
+      turnId: 'turn-2',
       expiresAt: e.now + PROJECT_CONTEXT_TTL_MS,
       conversation: 'meeting 7'
     })
@@ -40,7 +51,8 @@ describe('typed classes (G57)', () => {
       'kind',
       'revision',
       'source',
-      'text'
+      'text',
+      'turnId'
     ])
   })
 
@@ -127,6 +139,77 @@ describe('correct, delete and tombstones', () => {
     expect(after.tombstones).toBe(1)
     expect(await e.store.admitDerived({ kind: 'project-context', text: '  working on PROJECT atlas ' })).toBe(false)
     expect((await e.store.list()).items.map((i) => i.text)).toEqual(['Working on Project Borealis'])
+  })
+
+  it('correcting to an existing item still writes one new revision and tombstones the old text', async () => {
+    const e = env()
+    await e.store.remember(typed('Working on Project Atlas'), ctx)
+    await e.store.remember(typed('Working on Project Borealis'), { ...ctx, turnId: 'turn-3' })
+    const before = await e.store.list()
+    const old = before.items.find((item) => item.text === 'Working on Project Atlas')!
+    const duplicate = before.items.find((item) => item.text === 'Working on Project Borealis')!
+
+    expect(await e.store.correct(old.id, duplicate.text)).toBe(true)
+
+    const after = await e.store.list()
+    expect(after.items).toHaveLength(1)
+    expect(after.items[0]).toMatchObject({
+      kind: 'project-context',
+      text: duplicate.text,
+      source: 'settings',
+      at: e.now,
+      turnId: null,
+      conversation: null,
+      revision: Math.max(old.revision, duplicate.revision) + 1,
+      expiresAt: e.now + PROJECT_CONTEXT_TTL_MS
+    })
+    expect(after.items[0].id).not.toBe(old.id)
+    expect(after.items[0].id).not.toBe(duplicate.id)
+    expect(after.tombstones).toBe(1)
+    expect(await e.store.admitDerived({ kind: 'project-context', text: old.text })).toBe(false)
+  })
+
+  it('keeps old deletion hashes after more than one thousand later tombstones', async () => {
+    const e = env()
+    // Initialize the fixture key before seeding a realistic encrypted v1 file with a long tombstone history.
+    await e.store.rememberFromSettings('Temporary seed')
+    const seedKeyring = createMemoryKeyring({ keyPath: join(e.root, 'user-memory', 'key.v1'), keys: syntheticKeys() })
+    const expiredCandidate = 'Working on Project Previously Deleted'
+    const expiredHash = createHash('sha256')
+      .update(`${PARTITION_A}\0project-context\0${expiredCandidate.toLowerCase()}`)
+      .digest('hex')
+    const fillerTombstones = Array.from({ length: 999 }, (_, index) => ({
+      h: createHash('sha256').update(`synthetic-tombstone-${index}`).digest('hex'),
+      at: e.now
+    }))
+    const state = {
+      v: 1,
+      partition: PARTITION_A,
+      items: [
+        {
+          id: 'f'.repeat(32),
+          kind: 'project-context',
+          text: 'Working on Current Project',
+          source: 'owner-typed',
+          at: e.now,
+          turnId: 'seed-turn',
+          conversation: null,
+          revision: 1,
+          expiresAt: e.now + PROJECT_CONTEXT_TTL_MS,
+          lastUsedAt: e.now
+        }
+      ],
+      tombstones: [{ h: expiredHash, at: e.now }, ...fillerTombstones],
+      tombstoneCount: 1_000
+    }
+    const sealed = await seedKeyring.seal(Buffer.from(JSON.stringify(state)), `user-memory:${PARTITION_A}`)
+    seedKeyring.dispose()
+    expect(sealed).not.toBeNull()
+    writeFileSync(join(e.root, 'user-memory', `${PARTITION_A}.um1`), sealed!)
+
+    expect(await e.store.delete('f'.repeat(32))).toBe(true)
+    expect(await e.store.admitDerived({ kind: 'project-context', text: expiredCandidate })).toBe(false)
+    expect((await e.store.list()).tombstones).toBe(1_001)
   })
 
   it('deleting writes a tombstone: a derived re-ingest cannot resurrect it, but the owner can say it again', async () => {

@@ -10,6 +10,8 @@ export interface TurnInput {
   id: string
   mode: string
   prompt: string
+  /** AskStart modality metadata; only a classification, never an authorization signal. */
+  inputOrigin?: 'user-typed' | 'user-spoken-by-owner'
   brainContext?: string
   screenContext?: string
   image?: string
@@ -59,6 +61,7 @@ export function createContextRuntime(deps: ContextRuntimeDeps): ContextRuntime {
       const entries: ContextManifestEntry[] = []
       const blocks: string[] = []
       const questionBytes = utf8Bytes(input.prompt)
+      const inputOrigin = extras.inputOrigin ?? input.inputOrigin ?? 'user-typed'
       let memoryPrefix = ''
 
       if (input.brainContext) {
@@ -84,7 +87,7 @@ export function createContextRuntime(deps: ContextRuntimeDeps): ContextRuntime {
       if (memory) {
         const conversation = deps.conversation?.()
         // The owner's own turn may state a preference; what is remembered then joins this very turn as quoted data.
-        await memory.observeTurn(ownerCommand(extras.inputOrigin ?? 'user-typed', input.prompt), {
+        await memory.observeTurn(ownerCommand(inputOrigin, input.prompt), {
           turnId: input.id,
           conversation: conversation && conversation !== 'idle' ? `conversation ${conversation}`.slice(0, 80) : null
         })
@@ -128,7 +131,7 @@ export function createContextRuntime(deps: ContextRuntimeDeps): ContextRuntime {
 
       entries.push(...collected)
       entries.push({
-        origin: extras.inputOrigin ?? 'user-typed',
+        origin: inputOrigin,
         authority: 'instruction',
         sourceId: 'prompt',
         bytes: questionBytes,
