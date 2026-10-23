@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Check, ExternalLink, RefreshCw } from 'lucide-react'
-import type { UpdateCheckResult } from '@shared/ipc'
+import type { DiagnosticsExportResult, UpdateCheckResult } from '@shared/ipc'
+import { ExportReceiptNotice } from '../export/ExportReceiptNotice'
 import { TextButton } from '../../components/ui'
 import { Section } from '../../ui/Section'
 import { AgentStatus } from '../../components/AgentStatus'
@@ -10,7 +11,7 @@ import { AgentStatus } from '../../components/AgentStatus'
  *  dumps and the boot sentinel into a folder they choose — never meetings, the brain, or settings. */
 export function SupportBundleSection(): JSX.Element {
   const [busy, setBusy] = useState(false)
-  const [result, setResult] = useState<{ ok: boolean; path?: string; files?: number; error?: string; cancelled?: boolean } | null>(null)
+  const [result, setResult] = useState<DiagnosticsExportResult | null>(null)
   const exportBundle = async (): Promise<void> => {
     setBusy(true)
     try {
@@ -25,11 +26,7 @@ export function SupportBundleSection(): JSX.Element {
         <TextButton onClick={() => void exportBundle()} disabled={busy}>
           {busy ? 'Exporting…' : 'Export diagnostics bundle'}
         </TextButton>
-        {result?.ok && (
-          <span className="text-[12px] text-[color:var(--cl-muted-foreground)]">
-            Exported {result.files} file{result.files === 1 ? '' : 's'} to {result.path}
-          </span>
-        )}
+        {result?.ok && result.receipt && <ExportReceiptNotice receipt={result.receipt} />}
         {result && !result.ok && !result.cancelled && (
           <span className="text-[12px] text-[var(--color-danger)]">{result.error}</span>
         )}

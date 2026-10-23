@@ -8,7 +8,7 @@
  * write come in through the dependencies so this module stays free of window state and synchronous fs.
  */
 import { basename, join } from 'node:path'
-import type { IpcMain, IpcMainInvokeEvent, MessageBoxOptions, SaveDialogOptions } from 'electron'
+import type { IpcMain, IpcMainInvokeEvent, MessageBoxOptions } from 'electron'
 import {
   IPC,
   RenameMeetingPayloadSchema,
@@ -44,6 +44,7 @@ import {
   deleteAllMeetings
 } from '../recall'
 import { purgeGraphArtifacts, scheduleRebuild } from '../graphify'
+import type { ExportService } from '../features/export/export-service'
 
 export interface RecallIpcDependencies {
   ipcMain: Pick<IpcMain, 'handle'>
@@ -52,11 +53,9 @@ export interface RecallIpcDependencies {
   requireAuth: () => boolean
   /** Native confirm dialog, attached to the overlay window when it exists. */
   showMessageBox: (options: MessageBoxOptions) => Promise<{ response: number }>
-  /** Native save dialog, attached to the overlay window when it exists. */
-  showSaveDialog: (options: SaveDialogOptions) => Promise<{ canceled: boolean; filePath?: string }>
+  /** The shared export service: destination preview, conflict policy, atomic write, digest and receipt. */
+  exporter: ExportService
   downloadsPath: () => string
-  /** Writes the user-chosen plaintext export copy. */
-  writeTextFile: (path: string, text: string) => void
   backfillSpeakerNames: (file: string) => Promise<{ ok: boolean; named?: number; error?: string }>
 }
 
@@ -72,7 +71,7 @@ async function acknowledgeEdit(s: Settings, file: string): Promise<void> {
 }
 
 export function registerRecallIpc(deps: RecallIpcDependencies): void {
-  const { ipcMain, assertMainWindow, requireAuth, showMessageBox, showSaveDialog, downloadsPath, writeTextFile } = deps
+  const { ipcMain, assertMainWindow, requireAuth, showMessageBox, exporter, downloadsPath } = deps
   const { backfillSpeakerNames } = deps
   // Recall read: load a saved meeting back for "Resume session" (decode + parse the markdown).
   ipcMain.handle(IPC.recallRead, async (e, file: unknown) => {
@@ -103,16 +102,19 @@ export function registerRecallIpc(deps: RecallIpcDependencies): void {
       // readSavedMeeting returns '' (never throws) when the envelope can't be decrypted on this device —
       // without this guard the export would "succeed" as a 0-byte file (adversarial review finding).
       if (!text) return { ok: false, error: 'Meeting file could not be decrypted on this device.' }
-      const dialogOpts = {
-        title: 'Export meeting copy',
-        defaultPath: join(downloadsPath(), safeName),
-        filters: [{ name: 'Markdown', extensions: ['md'] }]
-      }
-      const res = await showSaveDialog(dialogOpts)
-      if (res.canceled || !res.filePath) return { ok: false, cancelled: true }
-      writeTextFile(res.filePath, text)
+      const result = await exporter.exportFile({
+        kind: 'meeting-markdown',
+        bytes: Buffer.from(text, 'utf8'),
+        label: 'meeting copy',
+        dialog: {
+          title: 'Export meeting copy',
+          defaultPath: join(downloadsPath(), safeName),
+          filters: [{ name: 'Markdown', extensions: ['md'] }]
+        }
+      })
+      if (!result.ok) return 'cancelled' in result ? { ok: false, cancelled: true } : { ok: false, error: result.error }
       auditLog('recall.export', { file: safeName })
-      return { ok: true, path: res.filePath }
+      return { ok: true, path: result.receipt.destination, receipt: result.receipt }
     } catch (err) {
       // Sanitized like recall.ts's siblings — never the raw err.message (it can carry absolute paths).
       return { ok: false, error: exportFailureMessage(err) }

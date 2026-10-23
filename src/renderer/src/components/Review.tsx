@@ -2,7 +2,6 @@ import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExt
 import {
   Copy,
   Check,
-  FileText,
   ListTree,
   FolderOpen,
   RotateCcw,
@@ -32,6 +31,7 @@ import { talkStats } from '@shared/talkstats'
 import { Markdown } from './Markdown'
 import { Chip, TextButton, Spinner } from './ui'
 import { AgentStatus, InlineOrb } from './AgentStatus'
+import { RecapPdfExportButton } from '../features/export/RecapPdfExportButton'
 import { ReviewEntityStrip } from './ReviewEntityStrip'
 import { useFlash } from '../lib/useFlash'
 import { accelLabel } from '../lib/keys'
@@ -495,18 +495,6 @@ export const Review = memo(function Review({
         flashJsonCopied()
       })
       .catch((e) => setExportError(`Export failed: ${e instanceof Error ? e.message : String(e)}`))
-  }
-
-  const [pdfBusy, setPdfBusy] = useState(false)
-  const exportPdf = (): void => {
-    const md = recapText
-    if (!md) return
-    setPdfBusy(true)
-    setExportError(null)
-    window.toto
-      .recapPdf({ markdown: md, title: meetingMeta?.title })
-      .catch((e) => setExportError(`PDF export failed: ${e instanceof Error ? e.message : String(e)}`))
-      .finally(() => setPdfBusy(false))
   }
 
   // Editable follow-up draft: seeded from the streaming followupDraft.text until the user edits it, so
@@ -1130,10 +1118,7 @@ export const Review = memo(function Review({
                     {jsonCopied ? <Check size={11} className="text-[var(--color-success)]" /> : <Download size={11} />}
                     {jsonCopied ? 'Copied' : 'Export JSON'}
                   </TextButton>
-                  <TextButton onClick={exportPdf} disabled={pdfBusy} title="Save this summary as a PDF">
-                    {pdfBusy ? <InlineOrb kind="loading" /> : <FileText size={11} />}
-                    Export PDF
-                  </TextButton>
+                  <RecapPdfExportButton markdown={recapText} title={meetingMeta?.title} />
                 </>
               )}
             </div>

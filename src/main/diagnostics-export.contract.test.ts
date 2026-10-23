@@ -8,14 +8,19 @@
 import { readFileSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
+import { readModuleSource } from '../test-helpers/module-source'
 
 const indexSrc = readFileSync(join(__dirname, 'index.ts'), 'utf8')
 const preloadSrc = readFileSync(join(__dirname, '..', 'preload', 'index.ts'), 'utf8')
 
+// G58: the handler moved out of index.ts into the export feature; the bundle contents live beside it.
+const exportIpcSrc = readModuleSource(__dirname, './ipc/export-ipc').text
+const bundleSrc = readModuleSource(__dirname, './features/export/diagnostics-bundle').text
+
 function handler(): string {
-  const start = indexSrc.indexOf('ipcMain.handle(IPC.diagnosticsExport')
+  const start = exportIpcSrc.indexOf('ipcMain.handle(IPC.diagnosticsExport')
   expect(start, 'diagnosticsExport handler must exist').toBeGreaterThan(-1)
-  return indexSrc.slice(start, indexSrc.indexOf('registerDiscardSavedTranscriptIpc(', start + 1))
+  return exportIpcSrc.slice(start) + '\n' + bundleSrc
 }
 
 describe('diagnostics export — logs out, content never', () => {
@@ -48,9 +53,14 @@ describe('diagnostics export — logs out, content never', () => {
   })
 
   it('audits the export (metadata only) and the event is a declared AuditEvent', () => {
-    expect(handler()).toMatch(/auditLog\('diagnostics\.export', \{ files: copied\.length \}\)/)
+    expect(handler()).toMatch(/audit\('diagnostics\.export', \{ files: bundle\.files \}\)/)
     const loggerSrc = readFileSync(join(__dirname, 'logger.ts'), 'utf8')
     expect(loggerSrc).toMatch(/\| 'diagnostics\.export'/)
+  })
+
+  it('routes through the shared export service and is wired from index.ts', () => {
+    expect(exportIpcSrc).toMatch(/exporter\.exportDirectory\(/)
+    expect(indexSrc).toMatch(/registerExportIpc\(/)
   })
 
   it('is exposed to the renderer through the preload bridge', () => {

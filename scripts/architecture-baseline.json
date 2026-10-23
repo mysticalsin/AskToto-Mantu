@@ -43,7 +43,7 @@
     "src/main/brain/store.ts": 1061,
     "src/main/cli.ts": 1690,
     "src/main/import-jobs.ts": 999,
-    "src/main/index.ts": 9814,
+    "src/main/index.ts": 9771,
     "src/main/store.ts": 1339,
     "src/main/transcripts.ts": 968,
     "src/renderer/src/App.tsx": 4575,
@@ -51,13 +51,13 @@
     "src/renderer/src/components/BrainRecordPage.tsx": 831,
     "src/renderer/src/components/BrainView.tsx": 1364,
     "src/renderer/src/components/OnboardingExperience.tsx": 1632,
-    "src/renderer/src/components/RecallView.tsx": 935,
-    "src/renderer/src/components/Review.tsx": 1770,
+    "src/renderer/src/components/RecallView.tsx": 932,
+    "src/renderer/src/components/Review.tsx": 1755,
     "src/renderer/src/features/settings/AiSection.tsx": 2278,
     "src/renderer/src/features/settings/DustSetup.tsx": 928,
     "src/renderer/src/features/settings/SettingsRoot.tsx": 1026,
     "src/renderer/src/lib/listen.ts": 2982,
-    "src/shared/ipc.ts": 2193
+    "src/shared/ipc.ts": 2183
   },
   "FF-05a": {
     "src/main/apple-speech.ts": 2,
@@ -76,12 +76,13 @@
     "src/main/cli.ts": 4,
     "src/main/dust-cli-chat.ts": 3,
     "src/main/embedded-cloudflare-key.ts": 6,
+    "src/main/features/export/export-destination.ts": 3,
     "src/main/ffmpeg-decoder.ts": 2,
     "src/main/graphify.ts": 17,
     "src/main/import-audio.ts": 2,
     "src/main/import-job-store.ts": 1,
     "src/main/import-magic.ts": 3,
-    "src/main/index.ts": 20,
+    "src/main/index.ts": 11,
     "src/main/infra/observability/stall-sampler.ts": 1,
     "src/main/infra/process/reaper.ts": 3,
     "src/main/infra/process/registry.ts": 3,
@@ -306,7 +307,7 @@
     "src/shared/reset-time.test.ts": 2
   },
   "FF-09": {
-    "src/main/index.ts": 105
+    "src/main/index.ts": 104
   },
   "FF-10": {
     "src/main/apple-speech.ts": 1,

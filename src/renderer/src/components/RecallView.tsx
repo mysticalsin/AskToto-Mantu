@@ -31,6 +31,7 @@ import { useRowKeyboard } from './history/use-row-keyboard'
 import { armSlowNotice, degradedBanner, listBody, nextListPhase, type ListPhase } from './history/list-status'
 import { RECALL_SEARCH_MAX_CHARS, searchCapNotice } from '@shared/recall-search'
 import type { MeetingSummary, RecallHit } from '@shared/ipc'
+import { useExportNotice } from '../features/export/ExportReceiptNotice'
 
 import {
   formatDurationMin,
@@ -530,18 +531,13 @@ export function RecallView({
     },
     [onTrash]
   )
-  // Export a decrypted .md copy: the save dialog in main IS the interaction — only a real failure needs
-  // inline surfacing here (a cancelled dialog is a non-event, same contract as recallDelete's confirm).
+  // Export a decrypted .md copy: main owns the save dialog, preview and conflict choice; this shows the receipt.
+  const exportNotice = useExportNotice()
   const exportMeeting = useCallback(
     (file: string): void => {
-      void window.toto
-        .recallExportPlain(file)
-        .then((r) => {
-          if (!r.ok && !r.cancelled) flagRowError(file, r.error || 'Could not export the meeting.')
-        })
-        .catch((e) => flagRowError(file, e instanceof Error ? e.message : String(e)))
+      void window.toto.recallExportPlain(file).then(exportNotice.report).catch(exportNotice.fail)
     },
-    [flagRowError]
+    [exportNotice.report, exportNotice.fail]
   )
   const toggleConnections = useCallback((file: string): void => setOpen((o) => (o === file ? null : file)), [])
 
@@ -849,6 +845,7 @@ export function RecallView({
         ) : (
           <>
             {capNotice && <div className="px-1 pt-2 text-[11px] text-[color:var(--color-ink-3)]">{capNotice}</div>}
+            {exportNotice.node}
             {groups.map(([date, meetingsForDate]) => (
               <div key={date}>
                 {/* Date group header */}

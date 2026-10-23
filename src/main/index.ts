@@ -725,6 +725,8 @@ import { registerMeetingMicIpc } from './ipc/meeting-mic-ipc'
 import { registerBrainIpc } from './ipc/brain-ipc'
 import { registerOperatorReportingIpc } from './ipc/operator-reporting-ipc'
 import { registerRecallIpc } from './ipc/recall-ipc'
+import { createExportService } from './features/export/export-service'
+import { registerExportIpc } from './ipc/export-ipc'
 import { registerHistoryIpc } from './ipc/history-ipc'
 import { registerWorkspaceIpc } from './ipc/workspace-ipc'
 import { registerImportAudioIpc } from './ipc/import-audio-ipc'
@@ -7039,77 +7041,34 @@ function registerIpc(): void {
   })
 
   // --- Recall (meeting history): read/delete ---
+  const exportReceiptLogPath = (): string => join(app.getPath('userData'), 'export-receipts.jsonl')
+  const exporter = createExportService({
+    showSaveDialog: (options) => (win ? dialog.showSaveDialog(win, options) : dialog.showSaveDialog(options)),
+    showMessageBox: showMessageBoxOnOverlay,
+    receiptLogPath: exportReceiptLogPath
+  })
   registerRecallIpc({
     ipcMain,
     assertMainWindow,
     requireAuth,
     showMessageBox: showMessageBoxOnOverlay,
-    showSaveDialog: (options) => (win ? dialog.showSaveDialog(win, options) : dialog.showSaveDialog(options)),
+    exporter,
     downloadsPath: () => app.getPath('downloads'),
-    writeTextFile: (path, text) => writeFileSync(path, text, 'utf8'),
     backfillSpeakerNames
   })
 
-  // Support diagnosability: nothing in this app uploads anywhere by design (crashReporter
-  // uploadToServer:false, zero telemetry), so the ONLY way the log trail reaches support is the user
-  // exporting it. Copies logs/ (main + audit + rotated audit generations), crash-*.log dumps, and the
-  // boot sentinel into a user-chosen folder, plus a MANIFEST naming the app version and every file
-  // copied. Deliberately NEVER copies meetings, .brain/, wiki/, or settings.json — diagnostics must not
-  // become an accidental data-exfiltration path for content.
-  ipcMain.handle(IPC.diagnosticsExport, async (e): Promise<DiagnosticsExportResult> => {
-    assertMainWindow(e)
-    if (!requireAuth()) return { ok: false, error: 'Sign in with your Mantu account first.' }
-    try {
-      const stamp = new Date().toISOString().slice(0, 16).replace(/[:T]/g, '-')
-      const dialogOpts = {
-        title: 'Export diagnostics bundle',
-        defaultPath: join(app.getPath('downloads'), `Metis-diagnostics-${stamp}`),
-        buttonLabel: 'Export here'
-      }
-      const res = win ? await dialog.showSaveDialog(win, dialogOpts) : await dialog.showSaveDialog(dialogOpts)
-      if (res.canceled || !res.filePath) return { ok: false, cancelled: true }
-      const dest = res.filePath
-      mkdirSync(dest, { recursive: true })
-      const userData = app.getPath('userData')
-      const copied: string[] = []
-      const copy = (src: string, name: string): void => {
-        try {
-          copyFileSync(src, join(dest, name))
-          copied.push(name)
-        } catch {
-          /* a locked/absent file is skipped, and the manifest shows exactly what made it */
-        }
-      }
-      const logsDir = join(userData, 'logs')
-      if (existsSync(logsDir)) {
-        for (const f of readdirSync(logsDir)) {
-          if (/\.log$|^responsiveness-report\.json$/.test(f)) copy(join(logsDir, f), f)
-        }
-      }
-      for (const f of readdirSync(userData)) {
-        if (/^crash-.*\.log$/.test(f)) copy(join(userData, f), f)
-      }
-      const sentinel = join(userData, 'boot-incomplete.json')
-      if (existsSync(sentinel)) copy(sentinel, 'boot-incomplete.json')
-      const manifest = [
-        `Métis diagnostics bundle`,
-        `exported: ${new Date().toISOString()}`,
-        `version: ${app.getVersion()}`,
-        `platform: ${process.platform} ${process.arch}`,
-        `packaged: ${app.isPackaged}`,
-        ``,
-        `files (${copied.length}):`,
-        ...copied.map((f) => `  ${f}`),
-        ``,
-        `Deliberately NOT included: meeting transcripts, the .brain/ knowledge store, the wiki mirror,`,
-        `and settings.json — this bundle is for diagnosing the app, never for moving content.`
-      ].join('\n')
-      writeFileSync(join(dest, 'MANIFEST.txt'), manifest, 'utf8')
-      auditLog('diagnostics.export', { files: copied.length })
-      return { ok: true, path: dest, files: copied.length }
-    } catch {
-      return { ok: false, error: 'Could not export the diagnostics bundle.' }
-    }
+  registerExportIpc({
+    ipcMain,
+    assertMainWindow,
+    requireAuth,
+    exporter,
+    receiptLogPath: exportReceiptLogPath,
+    downloadsPath: () => app.getPath('downloads'),
+    userDataPath: () => app.getPath('userData'),
+    appInfo: () => ({ version: app.getVersion(), platform: process.platform, arch: process.arch, packaged: app.isPackaged }),
+    openPath: (path) => shell.openPath(path),
+    showItemInFolder: (path) => shell.showItemInFolder(path),
+    audit: auditLog
   })
 
   registerDiscardSavedTranscriptIpc({
@@ -8853,19 +8812,6 @@ function registerIpc(): void {
     const md = typeof input?.markdown === 'string' ? input.markdown : ''
     if (!md.trim()) throw new Error('No recap to export.')
     const safeName = (input?.title || 'Meeting recap').replace(/[\\/:*?"<>|]/g, '-')
-    // Métis is an LSUIElement (accessory) app — no Dock icon, not a normal foreground app. A dialog
-    // opened with no parent BrowserWindow has nothing to attach its sheet to and no window to activate,
-    // so it can silently fail to ever surface on screen: the promise just hangs forever with no error and
-    // no visible dialog. Anchoring it to `win` (already on screen) is what every other dialog in this
-    // file does — this one was the one exception.
-    const dialogOwner = win ?? undefined
-    const r = dialogOwner
-      ? await dialog.showSaveDialog(dialogOwner, {
-          defaultPath: `${safeName}.pdf`,
-          filters: [{ name: 'PDF', extensions: ['pdf'] }]
-        })
-      : await dialog.showSaveDialog({ defaultPath: `${safeName}.pdf`, filters: [{ name: 'PDF', extensions: ['pdf'] }] })
-    if (r.canceled || !r.filePath) return { ok: false as const }
     const html = recapMarkdownToHtml(md, input?.title)
     const pdfWin = new BrowserWindow({
       title: 'Métis',
@@ -8878,14 +8824,25 @@ function registerIpc(): void {
         webSecurity: true
       }
     })
+    let buffer: Buffer
     try {
       await pdfWin.loadURL('data:text/html;charset=UTF-8,' + encodeURIComponent(html))
-      const buffer = await pdfWin.webContents.printToPDF({ printBackground: true })
-      writeFileSync(r.filePath, buffer)
+      buffer = await pdfWin.webContents.printToPDF({ printBackground: true })
+    } catch {
+      return { ok: false as const, error: 'Could not render the recap PDF.' }
     } finally {
       pdfWin.destroy()
     }
-    return { ok: true as const, path: r.filePath }
+    // The shared export service owns the save dialog (anchored to `win`: Métis is an accessory app, so an
+    // unanchored dialog can fail to surface), the destination preview, the conflict policy and the receipt.
+    const result = await exporter.exportFile({
+      kind: 'recap-pdf',
+      bytes: buffer,
+      label: 'recap PDF',
+      dialog: { defaultPath: `${safeName}.pdf`, filters: [{ name: 'PDF', extensions: ['pdf'] }] }
+    })
+    if (result.ok) return { ok: true as const, path: result.receipt.destination, receipt: result.receipt }
+    return 'cancelled' in result ? { ok: false as const, cancelled: true as const } : { ok: false as const, error: result.error }
   })
 
   // --- Recall (meeting history): list/search/open ---
