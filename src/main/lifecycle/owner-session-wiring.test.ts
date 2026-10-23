@@ -75,7 +75,8 @@ describe('owner session wiring', () => {
       ...Object.values(DICTATION_MEMORY_IPC),
       ARTIFACT_IPC.forTurn,
       ARTIFACT_IPC.open,
-      ARTIFACT_IPC.reveal
+      ARTIFACT_IPC.reveal,
+      ARTIFACT_IPC.arm
     ])
     expect(ipcMain.on.mock.calls.map((call) => call[0])).toEqual([ARTIFACT_IPC.dragStart])
   })
@@ -115,7 +116,7 @@ describe('owner session wiring', () => {
     // Every handler (owner-session status, ledger line seam, live journal seam, the dictation memory seam) registers
     // after the policy is installed.
     expect(installedAtFirstHandler).toEqual(
-      Array.from({ length: 3 + Object.values(DICTATION_MEMORY_IPC).length }, () => true)
+      Array.from({ length: 3 + Object.values(DICTATION_MEMORY_IPC).length + 4 }, () => true)
     )
     expect(getMeetingSpeechLimits()).toEqual(MEETING_SPEECH_LIMITS)
     expect(getMeetingSpeechReadLimitBytes()).toBe(MEETING_SPEECH_WORKER_BOUNDS.maxInputBytes)

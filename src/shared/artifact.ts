@@ -72,6 +72,7 @@ export const ARTIFACT_IPC = {
   forTurn: 'artifacts:forTurn',
   open: 'artifacts:open',
   reveal: 'artifacts:reveal',
+  arm: 'artifacts:arm',
   dragStart: 'artifacts:dragStart'
 } as const
 

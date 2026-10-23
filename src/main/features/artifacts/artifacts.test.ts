@@ -21,8 +21,9 @@ function setup(fs: ArtifactFs = nodeArtifactFs) {
   const registry = createArtifactRegistry({ owner: () => owner, fs, now: () => 1000, newId: () => `art-${++n}` })
   const openPath = vi.fn(async () => '')
   const showItemInFolder = vi.fn()
-  const service = createArtifactService({ registry, fs, openPath, showItemInFolder })
-  return { registry, service, openPath, showItemInFolder }
+  const clock = { now: 1000 }
+  const service = createArtifactService({ registry, fs, openPath, showItemInFolder, now: () => clock.now })
+  return { registry, service, openPath, showItemInFolder, clock }
 }
 
 function makeFile(name: string, text = 'hello'): string {
@@ -142,38 +143,57 @@ describe('artifact service: existence and digest check', () => {
 })
 
 describe('artifact service: drag-out', () => {
-  it('starts a drag for the recorded file only, after verification', async () => {
+  it('starts a drag for the recorded file only, after verification and arming', async () => {
     const { registry, service } = setup()
     const file = makeFile('a.md')
     await reg(registry, file)
     const begin = vi.fn()
-    expect(service.dragStart('art-1', begin)).toEqual({ ok: false, reason: 'changed' }) // never verified
+    expect(await service.arm('art-1')).toEqual({ ok: false, reason: 'changed' }) // never verified
+    expect(service.dragStart('art-1', begin)).toEqual({ ok: false, reason: 'changed' }) // never armed
     await service.forTurn('turn-1')
+    expect(service.dragStart('art-1', begin)).toEqual({ ok: false, reason: 'changed' }) // verified, not armed
+    expect(await service.arm('art-1')).toEqual({ ok: true })
     expect(service.dragStart('art-1', begin)).toEqual({ ok: true })
     expect(begin).toHaveBeenCalledExactlyOnceWith({ file })
+  })
+
+  it('refuses once the arming window has passed', async () => {
+    const { registry, service, clock } = setup()
+    await reg(registry, makeFile('a.md'))
+    await service.forTurn('turn-1')
+    await service.arm('art-1')
+    clock.now += 6000
+    const begin = vi.fn()
+    expect(service.dragStart('art-1', begin)).toEqual({ ok: false, reason: 'changed' })
+    expect(begin).not.toHaveBeenCalled()
   })
 
   it('refuses a forged id and another owner', async () => {
     const { registry, service } = setup()
     await reg(registry, makeFile('a.md'))
     await service.forTurn('turn-1')
+    await service.arm('art-1')
     const begin = vi.fn()
     expect(service.dragStart('/etc/passwd', begin)).toEqual({ ok: false, reason: 'not-found' })
+    expect(await service.arm('../x')).toEqual({ ok: false, reason: 'not-found' })
     owner = 'owner-b'
     expect(service.dragStart('art-1', begin)).toEqual({ ok: false, reason: 'not-found' })
     expect(begin).not.toHaveBeenCalled()
   })
 
-  it('refuses when the file is gone or was rewritten after it was verified', async () => {
+  it('refuses to arm when the file was rewritten or removed after it was verified', async () => {
     const { registry, service } = setup()
     const file = makeFile('a.md')
     await reg(registry, file)
     await service.forTurn('turn-1')
     utimesSync(file, new Date(5_000_000), new Date(5_000_000)) // same bytes, new mtime: not what was verified
     const begin = vi.fn()
+    expect(await service.arm('art-1')).toEqual({ ok: false, reason: 'changed' })
     expect(service.dragStart('art-1', begin)).toEqual({ ok: false, reason: 'changed' })
     await service.forTurn('turn-1')
+    expect(await service.arm('art-1')).toEqual({ ok: true })
     unlinkSync(file)
+    await service.forTurn('turn-1') // a later verification that finds it gone disarms the drag
     expect(service.dragStart('art-1', begin)).toEqual({ ok: false, reason: 'changed' })
     expect(begin).not.toHaveBeenCalled()
   })
@@ -183,6 +203,7 @@ describe('artifact service: drag-out', () => {
     const file = makeFile('a.md', 'hello')
     await reg(registry, file)
     await service.forTurn('turn-1')
+    await service.arm('art-1')
     writeFileSync(file, 'other contents')
     await service.forTurn('turn-1')
     const begin = vi.fn()

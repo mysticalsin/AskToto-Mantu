@@ -9,12 +9,14 @@ export function createArtifactsPreloadApi(ipc: Pick<IpcRenderer, 'invoke' | 'sen
   getTurnArtifacts(turnId: string): Promise<TurnArtifacts>
   openArtifact(artifactId: string): Promise<ArtifactActionResult>
   revealArtifact(artifactId: string): Promise<ArtifactActionResult>
+  armArtifactDrag(artifactId: string): Promise<ArtifactActionResult>
   startArtifactDrag(artifactId: string): void
 } {
   return {
     getTurnArtifacts: (turnId) => ipc.invoke(ARTIFACT_IPC.forTurn, { turnId }),
     openArtifact: (artifactId) => ipc.invoke(ARTIFACT_IPC.open, { artifactId }),
     revealArtifact: (artifactId) => ipc.invoke(ARTIFACT_IPC.reveal, { artifactId }),
+    armArtifactDrag: (artifactId) => ipc.invoke(ARTIFACT_IPC.arm, { artifactId }),
     startArtifactDrag: (artifactId) => ipc.send(ARTIFACT_IPC.dragStart, { artifactId })
   }
 }

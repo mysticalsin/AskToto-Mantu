@@ -25,7 +25,8 @@ export function composeArtifacts(deps: ComposeArtifactsDeps): { registry: Artifa
     registry,
     fs: nodeArtifactFs,
     openPath: (path) => shell.openPath(path),
-    showItemInFolder: (path) => shell.showItemInFolder(path)
+    showItemInFolder: (path) => shell.showItemInFolder(path),
+    now: Date.now
   })
   registerArtifactsIpc({
     ipcMain: deps.ipcMain,
