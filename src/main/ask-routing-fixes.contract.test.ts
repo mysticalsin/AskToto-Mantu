@@ -11,6 +11,8 @@ import { settleCommitment } from './brain/ingest'
 import { useStorageForTests } from './infra/storage/meetings-storage'
 import { sourceIndexOf } from '../../scripts/lib/source-layout'
 import { ipcModuleSource } from '../../scripts/lib/ipc-module-source'
+import { applyAmbientScreenContext, createContextRuntime, createManifestLog } from './features/context-grants'
+import { readModuleSource } from '../test-helpers/module-source'
 
 vi.mock('electron')
 
@@ -20,6 +22,7 @@ vi.mock('electron')
 // test.ts — while the behavior each handler now depends on is proven for real against the live functions.
 const indexSrc = readFileSync(join(__dirname, 'index.ts'), 'utf8')
 const brainIpcSrc = ipcModuleSource('brain-ipc')
+const ambientSrc = readModuleSource(join(__dirname, 'features', 'context-grants'), './ambient-screen').text
 
 /** Source text of the block opened by the first `{` at/after `marker`, brace-matched to its close. The
  *  regions matched below contain no unbalanced brace in a string or comment (template-literal `${…}`
@@ -56,19 +59,52 @@ describe('MQA-009 — a fact-check ask still receives screenContext', () => {
     expect(indexSrc).toMatch(/req\.brainContext = undefined/)
   })
 
-  it("the injector's own guard admits a fact-check ask and still excludes non-answer / non-screen asks", () => {
-    // Evaluates the guard condition lifted verbatim out of index.ts, so a future edit that re-adds a
-    // fact-check exclusion to the moved block fails here rather than silently at runtime.
-    const injectorAt = sourceIndexOf(indexSrc, 'const ctx = screenPreprocess.currentFreshContext()')
-    expect(injectorAt).toBeGreaterThan(-1)
-    const condition = [...indexSrc.slice(0, injectorAt).matchAll(/if \(([^\n]*)\) \{/g)].pop()?.[1]
-    expect(condition, 'no if-guard found above the screen injector').toBeTruthy()
-    const guard = new Function('req', `return !!(${condition})`) as (req: Partial<AskStart>) => boolean
+  it('the injector now lives in the ambient-screen module and index.ts calls it outside the brainContext gate', () => {
+    const module = ambientSrc.replace(/\r\n/g, '\n')
+    // No fact-check exclusion anywhere in the moved injector (a re-added exclusion would fail here and below).
+    expect(module).not.toMatch(/factcheck/)
+    expect(blockAfter(indexSrc, BRAIN_GATE)).not.toMatch(/applyAmbientScreenContext/)
+    expect(indexSrc).toMatch(/const screenGrounded = applyAmbientScreenContext\(req, \{/)
+  })
 
-    expect(guard({ mode: 'answer', kind: 'factcheck', wantsScreenContext: true })).toBe(true)
-    expect(guard({ mode: 'answer', wantsScreenContext: true })).toBe(true)
-    expect(guard({ mode: 'answer', kind: 'factcheck' })).toBe(false)
-    expect(guard({ mode: 'suggest', wantsScreenContext: true })).toBe(false)
+  it("the injector's guard admits a fact-check ask and still excludes non-answer / non-screen asks (behaviour)", () => {
+    const run = (req: Partial<AskStart> & { mode: string }): string | undefined => {
+      const target = { ...req } as {
+        mode: string
+        wantsScreenContext?: boolean
+        transcript?: string
+        screenContext?: string
+      }
+      applyAmbientScreenContext(target, {
+        fresh: () => ({ description: 'A slide.' }),
+        redact: false,
+        log: () => undefined
+      })
+      return target.screenContext
+    }
+    expect(run({ mode: 'answer', kind: 'factcheck', wantsScreenContext: true })).toBe('A slide.')
+    expect(run({ mode: 'answer', wantsScreenContext: true })).toBe('A slide.')
+    expect(run({ mode: 'answer', kind: 'factcheck' })).toBeUndefined()
+    expect(run({ mode: 'suggest', wantsScreenContext: true })).toBeUndefined()
+  })
+
+  it('brainContext is still fact-check-excluded while a fact-check ask keeps screenContext through prepareTurn (behaviour)', async () => {
+    const store = { metas: () => [], read: async () => null, remove: async () => true } as never
+    const grants = { active: () => [] } as never
+    const manifests = createManifestLog({ owner: () => 'a', now: () => 1 })
+    const runtime = createContextRuntime({ store, grants, manifests })
+    const req = {
+      id: 'f1',
+      mode: 'answer',
+      kind: 'factcheck',
+      prompt: 'Check it.',
+      history: [],
+      screenContext: 'A slide.'
+    } as AskStart
+    await runtime.prepareTurn(req, [])
+    expect(req.screenContext).toBe('A slide.')
+    expect(req.brainContext).toBeUndefined()
+    expect(manifests.get('f1')?.entries.map((e) => e.sourceId)).toEqual(['ambient-screen', 'prompt'])
   })
 
   it('a fact-check request carrying screenContext reaches the provider with the screen block attached', () => {

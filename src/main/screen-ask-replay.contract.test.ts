@@ -3,6 +3,7 @@ import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { StreamMetaSchema } from '@shared/ipc'
 import { readModuleSource } from '../test-helpers/module-source'
+import { applyAmbientScreenContext } from './features/context-grants'
 
 /**
  * Source contract for the screen-ask REPLAY path — Retry / "Go deeper" on an answer that saw the screen.
@@ -23,6 +24,10 @@ import { readModuleSource } from '../test-helpers/module-source'
 // Windows checkout with core.autocrlf yields CRLF and every marker containing a literal \n stops
 // matching. The assertion is about the shipped expression, never about how git wrote the line ends.
 const indexSrc = readFileSync(join(__dirname, 'index.ts'), 'utf8').replace(/\r\n/g, '\n')
+const ambientSrc = readModuleSource(join(__dirname, 'features', 'context-grants'), './ambient-screen').text.replace(
+  /\r\n/g,
+  '\n'
+)
 const stateSrc = readFileSync(join(__dirname, '..', 'renderer', 'src', 'state.ts'), 'utf8').replace(/\r\n/g, '\n')
 const askContextSrc = readModuleSource(join(__dirname, '..', 'renderer', 'src'), './lib/ask-context').text.replace(
   /\r\n/g,
@@ -64,13 +69,28 @@ describe('MQA-182 — Private View blocks a REPLAYED screenshot at the ask bound
 
 describe('MQA-180 — main reports whether the answer actually saw the screen', () => {
   it('derives the verdict from what was really injected, not from the renderer intent flag', () => {
-    expect(askStartBody).toMatch(
-      /const screenGrounded =\s*[\s\S]{0,200}req\.wantsScreenContext[\s\S]{0,80}!!req\.screenContext/
-    )
-    // The verdict is derived AFTER the injection block that may or may not fill req.screenContext.
-    expect(askStartBody.indexOf("if (req.mode === 'answer' && req.wantsScreenContext) {")).toBeLessThan(
-      askStartBody.indexOf('const screenGrounded =')
-    )
+    // The verdict is the injector's own return value, computed from what it put in req.screenContext.
+    expect(askStartBody).toMatch(/const screenGrounded = applyAmbientScreenContext\(req, \{/)
+    const body = ambientSrc.slice(ambientSrc.indexOf('export function applyAmbientScreenContext'))
+    expect(body).toMatch(/if \(req\.mode !== 'answer' \|\| !req\.wantsScreenContext\) return undefined/)
+    expect(body).toMatch(/return !!req\.screenContext/)
+  })
+
+  it('is true only when screen text was injected, false on a replay with an empty cache, undefined without the flag (behaviour)', () => {
+    const run = (
+      req: { mode: string; wantsScreenContext?: boolean; screenContext?: string },
+      description: string | null
+    ) =>
+      applyAmbientScreenContext(req, {
+        fresh: () => (description === null ? null : { description }),
+        redact: false,
+        log: () => undefined
+      })
+    expect(run({ mode: 'answer', wantsScreenContext: true }, 'An editor')).toBe(true)
+    expect(run({ mode: 'answer', wantsScreenContext: true }, null)).toBe(false)
+    expect(run({ mode: 'answer', wantsScreenContext: true }, '')).toBe(false)
+    expect(run({ mode: 'answer' }, 'An editor')).toBeUndefined()
+    expect(run({ mode: 'vision', wantsScreenContext: true }, 'An editor')).toBeUndefined()
   })
 
   it('every stream:meta announcement carries the verdict, including the hedge re-assert', () => {
