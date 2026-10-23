@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { contextRecord, ownerCommand } from '@shared/context-authority'
 import { PROJECT_CONTEXT_TTL_MS } from '@shared/user-memory'
-import { createMemoryKeyring } from '../dictation/dictation-memory-crypto'
+import { createMemoryKeyring } from '../dictation'
 import { DAY, PARTITION_A, PARTITION_B, makeEnv, syntheticKeys, type Env } from './__fixtures__/user-memory-fixtures'
 
 const envs: Env[] = []

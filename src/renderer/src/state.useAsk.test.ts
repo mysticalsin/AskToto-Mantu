@@ -438,12 +438,14 @@ describe('useAsk completion and cancellation ownership', () => {
     })
     await host.__settle()
 
-    expect(toto.ask).toHaveBeenCalledWith(expect.objectContaining({
-      id,
-      mode: 'answer',
-      prompt: 'Call me Ada',
-      inputOrigin: 'user-spoken-by-owner'
-    }))
+    expect(toto.ask).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id,
+        mode: 'answer',
+        prompt: 'Call me Ada',
+        inputOrigin: 'user-spoken-by-owner'
+      })
+    )
   })
 
   it('drains the current pending frame before marking an error incomplete', async () => {
