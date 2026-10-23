@@ -13,6 +13,7 @@
 import { useEffect, useRef, useState } from 'react'
 import type { VoiceStateSnapshot } from '@shared/voice/voice-turn'
 import { playCue } from '../../lib/sound'
+import { ActivityPill } from './ActivityPill'
 import { type VoicePillView, voiceCueFor, voicePillView } from './voice-pill-model'
 
 /** The exit leg; matches overlay-spring-out (280 ms) so the pill and the overlay leave alike. */
@@ -138,7 +139,8 @@ export function VoiceActionsLayer({
     return () => window.clearTimeout(t)
   }, [leaving])
 
-  if (!shown) return null
+  // G30: with no voice-action turn on screen, the same place shows dictation, a conversation or a spoken reply.
+  if (!shown) return provided === undefined ? <ActivityPill placement={placement} /> : null
   return (
     <div className={`voice-layer voice-layer--${placement}`} data-voice-placement={placement}>
       <div

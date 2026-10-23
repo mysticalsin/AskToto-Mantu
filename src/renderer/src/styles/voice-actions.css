@@ -145,3 +145,32 @@
     stroke-dashoffset: 0;
   }
 }
+
+/* G30 activity pill: same capsule as the voice pill, plus at most one Stop control. */
+.activity-pill__action {
+  flex: 0 0 auto;
+  margin-left: 2px;
+  min-height: 24px;
+  border: 0;
+  border-radius: 999px;
+  padding: 3px 11px;
+  background: var(--color-hair);
+  color: var(--color-ink);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background var(--duration-hover) ease;
+}
+.activity-pill__action:hover {
+  background: var(--color-hair-strong);
+}
+/* Speaking reuses the listening bars, slower and in the accent, so "Métis is talking" never reads as "listening". */
+.activity-pill__bars--speaking > span {
+  background: var(--color-accent-2);
+  animation-duration: 1.4s;
+}
+@media (prefers-reduced-motion: reduce) {
+  .activity-pill__action {
+    transition: none;
+  }
+}
