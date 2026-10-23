@@ -18,6 +18,7 @@ import type { InputSessionAuthority } from '../../input-session-authority'
 import { auditLog } from '../../logger'
 import type { ChordWatcherEvent } from '../../voice/chord-watcher'
 import { createVoiceChordWiring, type VoiceChordWiring } from '../../voice/chord-wiring'
+import { createMacDictationPorts } from './dictation-insert-mac'
 import { currentDictationMemory } from './dictation-memory-registry'
 import type { DictationMemory, DictationMemorySink } from './dictation-memory'
 import { UNSUPPORTED_DICTATION_PORTS, type DictationHostPorts } from './dictation-ports'
@@ -53,7 +54,10 @@ export interface DictationRuntimeDeps {
   chordRecorderActive(): boolean
   /** The dictation chord's watcher. Defaults to the real one; tests may replace it. */
   chord?: VoiceChordWiring
-  /** The OS ports. Absent in production until G23 and G24: dictation is then refused before the microphone opens. */
+  /**
+   * The OS ports. Absent: macOS binds the focused field through the helper's Accessibility commands (G23), every
+   * other platform is refused before the microphone opens until G24.
+   */
   ports?: DictationHostPorts
   /**
    * The encrypted segment journal and dictionary (G26). Resolved on every use, because the owner-session wiring that
@@ -144,7 +148,15 @@ export function createDictationRuntime(deps: DictationRuntimeDeps): DictationRun
       if (isDictationLease(deps.authority.activeLease)) deps.authority.hardStop(reason)
     },
     speech: { prewarm: () => deps.parakeet.ensure() },
-    ports: deps.ports ?? UNSUPPORTED_DICTATION_PORTS,
+    ports:
+      deps.ports ??
+      (platform === 'darwin'
+        ? createMacDictationPorts({
+            platform,
+            now: deps.now,
+            audit: (detail) => auditLog('dictation.insert', { ...detail })
+          })
+        : UNSUPPORTED_DICTATION_PORTS),
     memory: memorySink,
     push: {
       begin: (payload) => send(VOICE_ACTIONS_IPC.begin, payload),

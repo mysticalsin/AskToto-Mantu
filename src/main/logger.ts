@@ -403,6 +403,8 @@ export type AuditEvent =
   | 'voice.turn'
   // G22: one dictation turn (phase and machine reason only, never speech, text, an app name or a field).
   | 'dictation.turn'
+  // G23: one dictation insertion attempt into another app (outcome enum, method, flags and a length; never text, a hash of it, an app or a field).
+  | 'dictation.insert'
   // G26: the dictation memory (journal sweeps and refusals, recovery offers, dictionary changes). Phase, enum reason and counts only; never text, a term, a path or an id.
   | 'dictation.memory'
   // V03: one voice action decision and its outcome (action id, class, source, status; never a title, query or words).

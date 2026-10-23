@@ -82,6 +82,20 @@
 //                     read can never turn into an uncertain effect. tcc-status stays read-only.
 //   activate-pid <pid>  One-shot (V04). Brings the running application with that pid to the front again, so a
 //                     confirmation card hands focus back to the app the person was in. Prints {activated}.
+//   ax-focus-snapshot  One-shot, read-only (G23). Looks at the frontmost application's focused element WITHOUT any
+//                     prompt (AXIsProcessTrusted) and prints ONE JSON object: status (ok|permission|no_focus), pid,
+//                     bundle id, process start, an opaque window id and element token, role/subrole, secure,
+//                     editable and terminal flags, and the value as a SHA-256 hash plus its UTF-16 length and the
+//                     selection range. The text of the field is never printed, and the value of a secure field
+//                     (AXSecureTextField, or secure keyboard input on) is never even read.
+//   ax-insert         One-shot (G23). Reads ONE JSON request on stdin (pid, window id, element token, value hash and
+//                     length, selection, text): it looks again, refuses secure fields always, refuses unless process,
+//                     window, element, value hash and selection all still match (compare-and-insert), then writes by
+//                     replacing the selected text through Accessibility, reads the value back and reports whether
+//                     it is exactly the expected one. Only when Accessibility refused the write does it fall back to
+//                     a paste: it writes the clipboard, keeps the change count as an ownership token, pastes, and
+//                     restores the previous clipboard only if the change count is still its token. Terminals take
+//                     the paste only, with control characters removed and no Return. Prints ONE JSON object.
 //   watch-modifiers [--interval-ms N]  Long-running, permission-free (V01, the voice hold chord). Polls two idle
 //                     state queries every N ms (default 40, clamped to 20-200): which modifier keys are down
 //                     (CGEventSource.flagsState, device-dependent bits kept so Right Command differs from Left)
@@ -92,6 +106,9 @@
 //                     code: a key press only moves the counter. src/shared/voice/modifier-mask.ts owns the
 //                     line format and the bit values below.
 import AppKit
+import ApplicationServices
+import Carbon.HIToolbox
+import CryptoKit
 import Darwin
 import Security
 import Speech
@@ -942,11 +959,387 @@ func runActivatePid(pidText: String) -> Never {
     emitJson(ActivatePidResult(activated: activated), command: "activate-pid")
 }
 
+// MARK: - ax-focus-snapshot / ax-insert (G23, dictation insertion)
+
+/// Applications that are terminals whatever their elements say. Anything else is classified from its element.
+let axTerminalBundleIds: Set<String> = [
+    "com.apple.Terminal", "com.googlecode.iterm2", "net.kovidgoyal.kitty", "com.github.wez.wezterm",
+    "io.alacritty", "org.alacritty", "dev.warp.Warp-Stable", "dev.warp.Warp", "com.mitchellh.ghostty",
+    "co.zeit.hyper", "org.tabby", "com.raphaelamorim.rio", "com.cmuxterm.app", "net.sourceforge.iTerm"
+]
+let axMaxValueUnits = 4_000_000
+let axMaxInsertUnits = 32_768
+let axMaxClipboardBytes = 16 * 1_024 * 1_024
+
+func sha256Hex(_ data: Data) -> String {
+    SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+}
+
+func sha256Hex(_ text: String) -> String {
+    sha256Hex(Data(text.utf8))
+}
+
+struct AxSnapshot {
+    let element: AXUIElement
+    let pid: pid_t
+    let bundleId: String
+    let processStartMs: Int64
+    let windowId: String
+    let role: String
+    let subrole: String
+    let token: String
+    let secure: Bool
+    let editable: Bool
+    let terminal: Bool
+    /// Never set for a secure field: the value of one is not read.
+    let value: String?
+    let valueTooLarge: Bool
+    let selection: CFRange?
+}
+
+enum AxResolution {
+    case permission
+    case noFocus
+    case secure(AxSnapshot)
+    case found(AxSnapshot)
+}
+
+func axCopy(_ element: AXUIElement, _ attribute: String) -> CFTypeRef? {
+    var value: CFTypeRef?
+    return AXUIElementCopyAttributeValue(element, attribute as CFString, &value) == .success ? value : nil
+}
+
+func axText(_ element: AXUIElement, _ attribute: String) -> String {
+    (axCopy(element, attribute) as? String) ?? ""
+}
+
+func axRange(_ element: AXUIElement) -> CFRange? {
+    guard let raw = axCopy(element, kAXSelectedTextRangeAttribute as String),
+          CFGetTypeID(raw) == AXValueGetTypeID() else { return nil }
+    var range = CFRange()
+    guard AXValueGetValue(raw as! AXValue, .cfRange, &range), range.location >= 0, range.length >= 0 else { return nil }
+    return range
+}
+
+func axSettable(_ element: AXUIElement, _ attribute: String) -> Bool {
+    var settable: DarwinBoolean = false
+    return AXUIElementIsAttributeSettable(element, attribute as CFString, &settable) == .success && settable.boolValue
+}
+
+/// Looks at the frontmost application's focused element. Read-only; Accessibility trust is checked without a prompt.
+func resolveFocusedElement() -> AxResolution {
+    guard AXIsProcessTrusted() else { return .permission }
+    guard let app = NSWorkspace.shared.frontmostApplication, app.processIdentifier > 0 else { return .noFocus }
+    let appElement = AXUIElementCreateApplication(app.processIdentifier)
+    guard let raw = axCopy(appElement, kAXFocusedUIElementAttribute as String),
+          CFGetTypeID(raw) == AXUIElementGetTypeID() else { return .noFocus }
+    let element = raw as! AXUIElement
+    var owner: pid_t = 0
+    guard AXUIElementGetPid(element, &owner) == .success, owner == app.processIdentifier else { return .noFocus }
+
+    let bundleId = app.bundleIdentifier ?? "pid-\(app.processIdentifier)"
+    let role = axText(element, kAXRoleAttribute as String)
+    let subrole = axText(element, kAXSubroleAttribute as String)
+    let roleDescription = axText(element, kAXRoleDescriptionAttribute as String).lowercased()
+    let description = axText(element, kAXDescriptionAttribute as String).lowercased()
+    // Secure: a secure text field, or the system says secure keyboard input is on (a password prompt anywhere).
+    let secure = subrole == (kAXSecureTextFieldSubrole as String)
+        || subrole.localizedCaseInsensitiveContains("secure")
+        || roleDescription.contains("secure")
+        || IsSecureEventInputEnabled()
+    let terminal = axTerminalBundleIds.contains(bundleId)
+        || description.contains("terminal") || roleDescription.contains("terminal") || description == "shell"
+
+    var windowHash = "none"
+    if let windowRaw = axCopy(element, kAXWindowAttribute as String), CFGetTypeID(windowRaw) == AXUIElementGetTypeID() {
+        windowHash = String(CFHash(windowRaw))
+    }
+    let windowId = "w" + String(sha256Hex("\(owner)|\(windowHash)").prefix(16))
+    let token = String(sha256Hex("\(owner)|\(windowHash)|\(role)|\(subrole)|\(CFHash(element))").prefix(32))
+    let textRole = role == (kAXTextFieldRole as String) || role == (kAXTextAreaRole as String)
+        || role == (kAXComboBoxRole as String)
+    let editable = textRole && axSettable(element, kAXValueAttribute as String) || terminal && textRole
+
+    var value: String?
+    var tooLarge = false
+    var selection: CFRange?
+    if !secure {
+        if let text = axCopy(element, kAXValueAttribute as String) as? String {
+            if text.utf16.count > axMaxValueUnits { tooLarge = true } else { value = text }
+        }
+        selection = axRange(element)
+    }
+    let launch = app.launchDate.map { Int64($0.timeIntervalSince1970 * 1000) } ?? 0
+    let snapshot = AxSnapshot(
+        element: element, pid: owner, bundleId: bundleId, processStartMs: launch, windowId: windowId,
+        role: role, subrole: subrole, token: token, secure: secure, editable: editable, terminal: terminal,
+        value: value, valueTooLarge: tooLarge, selection: selection
+    )
+    return secure ? .secure(snapshot) : .found(snapshot)
+}
+
+struct AxSelectionOut: Encodable {
+    let location: Int
+    let length: Int
+}
+
+struct AxSnapshotResult: Encodable {
+    /// ok | permission | no_focus
+    let status: String
+    let pid: Int32?
+    let bundleId: String?
+    let processStartMs: Int64?
+    let windowId: String?
+    let role: String?
+    let subrole: String?
+    let token: String?
+    let secure: Bool
+    let editable: Bool
+    let terminal: Bool
+    let valueHash: String?
+    let valueLength: Int?
+    let valueTooLarge: Bool
+    let selection: AxSelectionOut?
+}
+
+func axSnapshotResult(_ resolution: AxResolution) -> AxSnapshotResult {
+    func empty(_ status: String) -> AxSnapshotResult {
+        AxSnapshotResult(status: status, pid: nil, bundleId: nil, processStartMs: nil, windowId: nil, role: nil,
+                         subrole: nil, token: nil, secure: false, editable: false, terminal: false, valueHash: nil,
+                         valueLength: nil, valueTooLarge: false, selection: nil)
+    }
+    switch resolution {
+    case .permission: return empty("permission")
+    case .noFocus: return empty("no_focus")
+    case .secure(let s), .found(let s):
+        return AxSnapshotResult(
+            status: "ok", pid: s.pid, bundleId: s.bundleId, processStartMs: s.processStartMs, windowId: s.windowId,
+            role: s.role, subrole: s.subrole, token: s.token, secure: s.secure, editable: s.editable,
+            terminal: s.terminal, valueHash: s.value.map { sha256Hex($0) }, valueLength: s.value?.utf16.count,
+            valueTooLarge: s.valueTooLarge,
+            selection: s.selection.map { AxSelectionOut(location: $0.location, length: $0.length) }
+        )
+    }
+}
+
+func runAxFocusSnapshot() -> Never {
+    emitJson(axSnapshotResult(resolveFocusedElement()), command: "ax-focus-snapshot")
+}
+
+/// The terminal sink: a dictation can never run a command. Control characters (newline, return, tab, escape, the
+/// C1 range, DEL), line and paragraph separators and bidi overrides become a space (line breaks) or are dropped,
+/// then trailing blanks are trimmed, so no Return can be sent.
+func terminalSafe(_ text: String) -> String {
+    var out = String.UnicodeScalarView()
+    for scalar in text.unicodeScalars {
+        let v = scalar.value
+        switch v {
+        case 0x0A, 0x0D, 0x09, 0x0B, 0x0C, 0x85, 0x2028, 0x2029:
+            out.append(" ")
+        case 0x00...0x1F, 0x7F...0x9F, 0x200E, 0x200F, 0x202A...0x202E, 0x2066...0x2069:
+            continue
+        default:
+            out.append(scalar)
+        }
+    }
+    var result = String(out)
+    while let last = result.last, last == " " { result.removeLast() }
+    return result
+}
+
+struct AxInsertRequest: Decodable {
+    let pid: Int32
+    let windowId: String
+    let token: String
+    let valueHash: String
+    let valueLength: Int
+    let selectionLocation: Int
+    let selectionLength: Int
+    let text: String
+    let allowPaste: Bool
+}
+
+struct AxInsertResult: Encodable {
+    /// verified | unverified | refused | unsupported
+    let outcome: String
+    /// secure_field | target_changed | permission | unsupported | invalid_request
+    let reason: String?
+    /// ax | paste | none
+    let method: String
+    let terminal: Bool
+    /// The text was changed by the terminal sink before it was written.
+    let sanitized: Bool
+    let textHash: String?
+    let textLength: Int
+    /// not_used | restored | kept_newer | left_unrestored
+    let clipboard: String
+}
+
+func axInsertResult(
+    _ outcome: String, reason: String? = nil, method: String = "none", terminal: Bool = false,
+    sanitized: Bool = false, text: String = "", clipboard: String = "not_used"
+) -> AxInsertResult {
+    AxInsertResult(
+        outcome: outcome, reason: reason, method: method, terminal: terminal, sanitized: sanitized,
+        textHash: text.isEmpty ? nil : sha256Hex(text), textLength: text.utf16.count, clipboard: clipboard
+    )
+}
+
+/// The value after replacing the range [location, location+length) of `value` (UTF-16 units) with `text`.
+func axExpectedValue(_ value: String, location: Int, length: Int, text: String) -> String? {
+    let units = Array(value.utf16)
+    guard location >= 0, length >= 0, location + length <= units.count else { return nil }
+    let merged = Array(units[0..<location]) + Array(text.utf16) + Array(units[(location + length)...])
+    return String(utf16CodeUnits: merged, count: merged.count)
+}
+
+/// Polls the element's value until it hashes to `expected` or the time is up.
+func axWaitForValue(_ element: AXUIElement, expectedHash: String, seconds: TimeInterval) -> Bool {
+    let deadline = Date().addingTimeInterval(seconds)
+    repeat {
+        if let now = axCopy(element, kAXValueAttribute as String) as? String, sha256Hex(now) == expectedHash { return true }
+        RunLoop.current.run(until: Date().addingTimeInterval(0.03))
+    } while Date() < deadline
+    return false
+}
+
+struct SavedPasteboard {
+    let items: [[(NSPasteboard.PasteboardType, Data)]]
+}
+
+func savePasteboard(_ pasteboard: NSPasteboard) -> SavedPasteboard? {
+    var total = 0
+    var items: [[(NSPasteboard.PasteboardType, Data)]] = []
+    for item in pasteboard.pasteboardItems ?? [] {
+        var entries: [(NSPasteboard.PasteboardType, Data)] = []
+        for type in item.types {
+            guard let data = item.data(forType: type) else { continue }
+            total += data.count
+            if total > axMaxClipboardBytes { return nil }
+            entries.append((type, data))
+        }
+        items.append(entries)
+    }
+    return SavedPasteboard(items: items)
+}
+
+func restorePasteboard(_ pasteboard: NSPasteboard, _ saved: SavedPasteboard) {
+    pasteboard.clearContents()
+    let restored = saved.items.map { entries -> NSPasteboardItem in
+        let item = NSPasteboardItem()
+        for (type, data) in entries { item.setData(data, forType: type) }
+        return item
+    }
+    if !restored.isEmpty { pasteboard.writeObjects(restored) }
+}
+
+func axSameTarget(_ snapshot: AxSnapshot, _ request: AxInsertRequest) -> Bool {
+    snapshot.pid == request.pid && snapshot.windowId == request.windowId && snapshot.token == request.token
+}
+
+func runAxInsert() -> Never {
+    let input = FileHandle.standardInput.readDataToEndOfFile()
+    guard let request = try? JSONDecoder().decode(AxInsertRequest.self, from: input),
+          request.pid > 0, request.selectionLocation >= 0, request.selectionLength >= 0, !request.text.isEmpty,
+          request.text.utf16.count <= axMaxInsertUnits else {
+        emitJson(axInsertResult("refused", reason: "invalid_request"), command: "ax-insert")
+    }
+    // 1. Look again, right now. Secure and permission win over everything else.
+    let snapshot: AxSnapshot
+    switch resolveFocusedElement() {
+    case .permission: emitJson(axInsertResult("refused", reason: "permission"), command: "ax-insert")
+    case .noFocus: emitJson(axInsertResult("refused", reason: "target_changed"), command: "ax-insert")
+    case .secure: emitJson(axInsertResult("refused", reason: "secure_field"), command: "ax-insert")
+    case .found(let found): snapshot = found
+    }
+    // 2. Compare: process, window, element and the exact value and selection the guard bound.
+    guard axSameTarget(snapshot, request), let before = snapshot.value, sha256Hex(before) == request.valueHash,
+          before.utf16.count == request.valueLength, let selection = snapshot.selection,
+          selection.location == request.selectionLocation, selection.length == request.selectionLength else {
+        emitJson(axInsertResult("refused", reason: "target_changed", terminal: snapshot.terminal), command: "ax-insert")
+    }
+    guard snapshot.editable else {
+        emitJson(axInsertResult("unsupported", reason: "unsupported", terminal: snapshot.terminal), command: "ax-insert")
+    }
+    let terminal = snapshot.terminal
+    let text = terminal ? terminalSafe(request.text) : request.text
+    let sanitized = text != request.text
+    guard !text.isEmpty else {
+        emitJson(axInsertResult("refused", reason: "invalid_request", terminal: terminal, sanitized: sanitized), command: "ax-insert")
+    }
+    guard let expected = axExpectedValue(before, location: selection.location, length: selection.length, text: text) else {
+        emitJson(axInsertResult("refused", reason: "target_changed", terminal: terminal), command: "ax-insert")
+    }
+    let expectedHash = sha256Hex(expected)
+
+    // 3. AX insertion by selected-text replacement. Terminals never take this path: their text area is the
+    //    scrollback, not the shell, so only a paste reaches the command line.
+    if !terminal, axSettable(snapshot.element, kAXSelectedTextAttribute as String) {
+        let status = AXUIElementSetAttributeValue(snapshot.element, kAXSelectedTextAttribute as CFString, text as CFString)
+        if status == .success {
+            let verified = axWaitForValue(snapshot.element, expectedHash: expectedHash, seconds: 0.5)
+            // A success the field does not show is NOT retried by paste: it may still apply late.
+            emitJson(axInsertResult(verified ? "verified" : "unverified", method: "ax", sanitized: sanitized, text: text),
+                     command: "ax-insert")
+        }
+        // Any other status means nothing was written: only then may the paste fallback run.
+    }
+    guard request.allowPaste else {
+        emitJson(axInsertResult("unsupported", reason: "unsupported", terminal: terminal), command: "ax-insert")
+    }
+
+    // 4. Paste fallback with a clipboard ownership token.
+    let pasteboard = NSPasteboard.general
+    guard let saved = savePasteboard(pasteboard) else {
+        emitJson(axInsertResult("unsupported", reason: "unsupported", terminal: terminal), command: "ax-insert")
+    }
+    // The front application and the field must still be the same one at the moment of the paste.
+    switch resolveFocusedElement() {
+    case .found(let again) where axSameTarget(again, request) && again.value.map({ sha256Hex($0) }) == request.valueHash:
+        break
+    case .permission:
+        emitJson(axInsertResult("refused", reason: "permission", terminal: terminal), command: "ax-insert")
+    case .secure:
+        emitJson(axInsertResult("refused", reason: "secure_field", terminal: terminal), command: "ax-insert")
+    default:
+        emitJson(axInsertResult("refused", reason: "target_changed", terminal: terminal), command: "ax-insert")
+    }
+    let concealed = NSPasteboard.PasteboardType("org.nspasteboard.ConcealedType")
+    let transient = NSPasteboard.PasteboardType("org.nspasteboard.TransientType")
+    let token = pasteboard.declareTypes([.string, concealed, transient], owner: nil)
+    let wrote = pasteboard.setString(text, forType: .string)
+        && pasteboard.setData(Data(), forType: concealed) && pasteboard.setData(Data(), forType: transient)
+    guard wrote, pasteboard.changeCount == token else {
+        // Someone else wrote in between: nothing of ours is left to take back, and nothing was pasted.
+        emitJson(axInsertResult("refused", reason: "target_changed", terminal: terminal), command: "ax-insert")
+    }
+    guard let source = CGEventSource(stateID: .hidSystemState),
+          let down = CGEvent(keyboardEventSource: source, virtualKey: 9, keyDown: true),
+          let up = CGEvent(keyboardEventSource: source, virtualKey: 9, keyDown: false) else {
+        if pasteboard.changeCount == token { restorePasteboard(pasteboard, saved) }
+        emitJson(axInsertResult("unsupported", reason: "unsupported", terminal: terminal), command: "ax-insert")
+    }
+    down.flags = .maskCommand
+    up.flags = .maskCommand
+    down.postToPid(request.pid)
+    up.postToPid(request.pid)
+    let verified = terminal ? false : axWaitForValue(snapshot.element, expectedHash: expectedHash, seconds: 0.6)
+    if terminal { RunLoop.current.run(until: Date().addingTimeInterval(0.4)) }
+    // Restore only while the clipboard is still exactly what this helper wrote. A newer copy is never touched.
+    var clipboard = "kept_newer"
+    if pasteboard.changeCount == token {
+        restorePasteboard(pasteboard, saved)
+        clipboard = "restored"
+    }
+    emitJson(axInsertResult(verified ? "verified" : "unverified", method: "paste", terminal: terminal,
+                            sanitized: sanitized, text: text, clipboard: clipboard), command: "ax-insert")
+}
+
 // MARK: - entry point
 
 let arguments = CommandLine.arguments
 guard arguments.count >= 2 else {
-    fail("usage: metis-mac-helper <watch-frontmost|ocr|transcribe|screen-metrics|stat-flags|proc-info|supervise|stall-watch|code-identity|bundle-copies|tcc-status|automation-ask|activate-pid|watch-modifiers> [path|-]")
+    fail("usage: metis-mac-helper <watch-frontmost|ocr|transcribe|screen-metrics|stat-flags|proc-info|supervise|stall-watch|code-identity|bundle-copies|tcc-status|automation-ask|activate-pid|ax-focus-snapshot|ax-insert|watch-modifiers> [path|-]")
 }
 switch arguments[1] {
 case "watch-frontmost":
@@ -995,6 +1388,10 @@ case "activate-pid":
         fail("usage: metis-mac-helper activate-pid <pid>")
     }
     runActivatePid(pidText: arguments[2])
+case "ax-focus-snapshot":
+    runAxFocusSnapshot()
+case "ax-insert":
+    runAxInsert()
 default:
     fail("unknown command: \(arguments[1])")
 }

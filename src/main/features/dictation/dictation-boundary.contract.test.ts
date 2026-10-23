@@ -52,13 +52,17 @@ describe('dictation boundary (G22)', () => {
     expect(index).not.toMatch(/createDictationRuntime|features\/dictation/)
   })
 
-  it('production ships unsupported ports until G23 and G24: nothing real is bound here', () => {
+  it('only macOS binds real ports (G23, through the helper adapter); every other platform ships unsupported until G24', () => {
     const ports = readModuleSource(__dirname, './dictation-ports').text
     expect(ports).toMatch(/UNSUPPORTED_DICTATION_PORTS/)
     expect(ports).toMatch(/reason: 'unsupported'/)
     expect(ports).toMatch(/outcome: 'unsupported'/)
     const runtime = readModuleSource(__dirname, './dictation-runtime').text
-    expect(runtime).toContain('deps.ports ?? UNSUPPORTED_DICTATION_PORTS')
+    expect(runtime).toMatch(/deps\.ports \?\?\s*\(platform === 'darwin'\s*\? createMacDictationPorts\(/)
+    expect(runtime).toMatch(/:\s*UNSUPPORTED_DICTATION_PORTS\)/)
+    // The adapter is a sibling in this feature and its only native reach is the helper gateway.
+    const mac = readModuleSource(__dirname, './dictation-insert-mac').text
+    expect(mac).not.toMatch(/child_process|NSPasteboard|robotjs|sendKeys/i)
   })
 
   it('the desktop contract barrel exports the guard but not the routine coordinator (no dead consumer)', () => {
