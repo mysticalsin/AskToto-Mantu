@@ -42,7 +42,13 @@ function wiring(state: { owner: string | null; tenant: string | null; partition:
     open,
     audit: () => undefined
   })
-  return { root, handlers, service, switched: () => partitionListener?.(), call: (c: string, raw?: unknown) => handlers.get(c)!({}, raw) }
+  return {
+    root,
+    handlers,
+    service,
+    switched: () => partitionListener?.(),
+    call: (c: string, raw?: unknown) => handlers.get(c)!({}, raw)
+  }
 }
 
 describe('assistants wiring (G48)', () => {
@@ -61,9 +67,15 @@ describe('assistants wiring (G48)', () => {
   })
 
   it('has no scope without both keys and a partition in force, and a partition change drops pending proposals', async () => {
-    const state = { owner: KEY_A as string | null, tenant: TENANT as string | null, partition: 'a1'.repeat(12) as string | null }
+    const state = {
+      owner: KEY_A as string | null,
+      tenant: TENANT as string | null,
+      partition: 'a1'.repeat(12) as string | null
+    }
     const w = wiring(state)
-    const proposal = (await w.call(ASSISTANT_IPC.propose, { drafts: [{ name: 'X', base: 'general', instructions: '' }] })) as {
+    const proposal = (await w.call(ASSISTANT_IPC.propose, {
+      drafts: [{ name: 'X', base: 'general', instructions: '' }]
+    })) as {
       proposalId: string
       previewHash: string
     }

@@ -1,5 +1,10 @@
 import { z } from 'zod'
-import { AssistantEntitySchema, MigrationRecordSchema, type AssistantEntity, type MigrationRecord } from './assistant-model'
+import {
+  AssistantEntitySchema,
+  MigrationRecordSchema,
+  type AssistantEntity,
+  type MigrationRecord
+} from './assistant-model'
 
 /** The partition in force and the verified owner and tenant keys, or null when nobody is verified. */
 export interface AssistantScope {
@@ -86,7 +91,10 @@ export function createAssistantStore(deps: AssistantStoreDeps): AssistantStore {
     }
   }
 
-  const run = async <T>(fn: (view: StoreView) => TxOutcome<T>, expectedScope?: AssistantScope): Promise<TxResult<T>> => {
+  const run = async <T>(
+    fn: (view: StoreView) => TxOutcome<T>,
+    expectedScope?: AssistantScope
+  ): Promise<TxResult<T>> => {
     const scope = deps.scope()
     if (scope === null) return { ok: false, reason: 'signed-out' }
     if (expectedScope && !sameScope(expectedScope, scope)) return { ok: false, reason: 'stale' }
@@ -98,7 +106,8 @@ export function createAssistantStore(deps: AssistantStoreDeps): AssistantStore {
     }
     if (!sameScope(scope, deps.scope())) return { ok: false, reason: 'stale' }
     if (doc === null) return { ok: false, reason: 'unavailable' }
-    const mine = (entity: AssistantEntity): boolean => entity.ownerKey === scope.ownerKey && entity.tenantKey === scope.tenantKey
+    const mine = (entity: AssistantEntity): boolean =>
+      entity.ownerKey === scope.ownerKey && entity.tenantKey === scope.tenantKey
     const own = doc.entities.filter(mine)
     let outcome: TxOutcome<T>
     try {

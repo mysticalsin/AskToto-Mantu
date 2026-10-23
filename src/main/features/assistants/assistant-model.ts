@@ -58,7 +58,11 @@ export interface CustomMode {
 const CONTROL = new RegExp('[\\u0000-\\u0008\\u000b-\\u001f\\u007f-\\u009f\\u2028\\u2029]', 'g')
 
 /** The canonical form of a draft: what the owner previews, what is hashed and what is stored. */
-export function normalizeDraft(draft: { name: string; base: AssistantPreviewItem['base']; instructions?: string }): AssistantPreviewItem {
+export function normalizeDraft(draft: {
+  name: string
+  base: AssistantPreviewItem['base']
+  instructions?: string
+}): AssistantPreviewItem {
   const name = draft.name.normalize('NFC').replace(CONTROL, ' ').replace(/\s+/g, ' ').trim()
   const instructions = (draft.instructions ?? '').normalize('NFC').replace(/\r\n?/g, '\n').replace(CONTROL, '').trim()
   return { name, base: draft.base, instructions }

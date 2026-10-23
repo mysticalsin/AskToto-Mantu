@@ -25,7 +25,12 @@ describe('assistants preload bridge (G48)', () => {
     ])
     expect(invoke.mock.calls[1]![1]).toEqual({ drafts: [{ name: 'A', base: 'sales', instructions: '' }] })
     expect(invoke.mock.calls[2]![1]).toEqual({ proposalId: 'a'.repeat(32), previewHash: 'b'.repeat(64) })
-    expect(invoke.mock.calls[3]![1]).toEqual({ assistantId: 'sys-sales', expectedRevision: 1, name: 'n', base: 'support' })
+    expect(invoke.mock.calls[3]![1]).toEqual({
+      assistantId: 'sys-sales',
+      expectedRevision: 1,
+      name: 'n',
+      base: 'support'
+    })
   })
 
   it('replaces a malformed or key-bearing reply with a content-free refusal', async () => {

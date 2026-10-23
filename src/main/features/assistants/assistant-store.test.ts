@@ -1,7 +1,17 @@
 import { describe, expect, it } from 'vitest'
 import { createAssistantStore } from './assistant-store'
 import { assistantIdFor, idempotencyKeyFor, normalizeDraft, type AssistantEntity } from './assistant-model'
-import { harness, KEY_A, KEY_B, memoryIo, open, scopeOf, seal, TENANT_1, TENANT_2 } from './__fixtures__/assistant-harness'
+import {
+  harness,
+  KEY_A,
+  KEY_B,
+  memoryIo,
+  open,
+  scopeOf,
+  seal,
+  TENANT_1,
+  TENANT_2
+} from './__fixtures__/assistant-harness'
 
 function entityFor(scope: { ownerKey: string; tenantKey: string }, name: string): AssistantEntity {
   const draft = normalizeDraft({ name, base: 'sales', instructions: 'synthetic-private-instruction' })
@@ -35,7 +45,11 @@ describe('assistant store (G48)', () => {
 
   it('hides everything when another owner or another tenant is in force', async () => {
     const h = harness()
-    await h.store.transact((view) => ({ commit: true, own: [...view.own, entityFor(scopeOf(KEY_A, TENANT_1), 'Mine')], value: 0 }))
+    await h.store.transact((view) => ({
+      commit: true,
+      own: [...view.own, entityFor(scopeOf(KEY_A, TENANT_1), 'Mine')],
+      value: 0
+    }))
     const readOwn = () => h.store.transact((view) => ({ commit: false, value: view.own.length }))
     expect(await readOwn()).toEqual({ ok: true, value: 1 })
     h.current.scope = scopeOf(KEY_B, TENANT_1)
@@ -97,14 +111,22 @@ describe('assistant store (G48)', () => {
       return data
     }
     const store = createAssistantStore({ io: slow, seal, open, scope: () => h.current.scope })
-    const result = await store.transact((view) => ({ commit: true, own: [...view.own, entityFor(scopeOf(KEY_A, TENANT_1), 'X')], value: 0 }))
+    const result = await store.transact((view) => ({
+      commit: true,
+      own: [...view.own, entityFor(scopeOf(KEY_A, TENANT_1), 'X')],
+      value: 0
+    }))
     expect(result).toEqual({ ok: false, reason: 'stale' })
     expect(slow.writes).toBe(0)
   })
 
   it('does not return a read taken under another owner either', async () => {
     const h = harness()
-    await h.store.transact((view) => ({ commit: true, own: [...view.own, entityFor(scopeOf(KEY_A, TENANT_1), 'Mine')], value: 0 }))
+    await h.store.transact((view) => ({
+      commit: true,
+      own: [...view.own, entityFor(scopeOf(KEY_A, TENANT_1), 'Mine')],
+      value: 0
+    }))
     const racing = memoryIo()
     racing.files = h.io.files
     const original = racing.read.bind(racing)
@@ -114,7 +136,10 @@ describe('assistant store (G48)', () => {
       return data
     }
     const store = createAssistantStore({ io: racing, seal, open, scope: () => h.current.scope })
-    expect(await store.transact((view) => ({ commit: false, value: view.own.length }))).toEqual({ ok: false, reason: 'stale' })
+    expect(await store.transact((view) => ({ commit: false, value: view.own.length }))).toEqual({
+      ok: false,
+      reason: 'stale'
+    })
   })
 
   it('does not return a committed result if the owner switches while the write is in flight', async () => {
@@ -152,7 +177,8 @@ describe('assistant store (G48)', () => {
     const mine = scopeOf(KEY_A, TENANT_1)
     const garbage = Buffer.from('not sealed by this profile')
     h.io.files.set(mine.partitionId, garbage)
-    const write = () => h.store.transact((view) => ({ commit: true, own: [...view.own, entityFor(mine, 'Mine')], value: 0 }))
+    const write = () =>
+      h.store.transact((view) => ({ commit: true, own: [...view.own, entityFor(mine, 'Mine')], value: 0 }))
     expect(await write()).toEqual({ ok: false, reason: 'unavailable' })
     h.io.files.set(
       mine.partitionId,
@@ -181,6 +207,9 @@ describe('assistant store (G48)', () => {
         h.store.transact((view) => ({ commit: true, own: [...view.own, entityFor(mine, name)], value: 0 }))
       )
     )
-    expect(await h.store.transact((view) => ({ commit: false, value: view.own.length }))).toEqual({ ok: true, value: 3 })
+    expect(await h.store.transact((view) => ({ commit: false, value: view.own.length }))).toEqual({
+      ok: true,
+      value: 3
+    })
   })
 })

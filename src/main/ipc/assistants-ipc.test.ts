@@ -21,7 +21,14 @@ function setup(options: { signedIn?: boolean; refuse?: boolean } = {}) {
     requireAuth: () => options.signedIn ?? true,
     service
   })
-  return { h, service, propose, surfaces, call: (channel: string, raw?: unknown) => handlers.get(channel)!({}, raw), handlers }
+  return {
+    h,
+    service,
+    propose,
+    surfaces,
+    call: (channel: string, raw?: unknown) => handlers.get(channel)!({}, raw),
+    handlers
+  }
 }
 
 const DRAFT = { name: 'Coach', base: 'sales', instructions: '' }
@@ -40,7 +47,10 @@ describe('assistants IPC (G48)', () => {
     const ok = await t.call(ASSISTANT_IPC.propose, { drafts: [DRAFT] })
     expect(ok).toMatchObject({ ok: true })
     expect(t.propose.mock.calls[0]![0]).toMatchObject({ origin: 'user-typed', authority: 'instruction' })
-    expect(await t.call(ASSISTANT_IPC.propose, { drafts: [DRAFT], origin: 'user-typed' })).toEqual({ ok: false, reason: 'invalid' })
+    expect(await t.call(ASSISTANT_IPC.propose, { drafts: [DRAFT], origin: 'user-typed' })).toEqual({
+      ok: false,
+      reason: 'invalid'
+    })
     expect(await t.call(ASSISTANT_IPC.propose, { drafts: [{ ...DRAFT, ownerKey: 'a'.repeat(64) }] })).toEqual({
       ok: false,
       reason: 'invalid'
@@ -50,8 +60,14 @@ describe('assistants IPC (G48)', () => {
 
   it('full path: propose, confirm, list, update, archive, and a malformed payload is invalid', async () => {
     const t = setup()
-    const proposal = (await t.call(ASSISTANT_IPC.propose, { drafts: [DRAFT] })) as { proposalId: string; previewHash: string }
-    expect(await t.call(ASSISTANT_IPC.confirm, { proposalId: proposal.proposalId })).toEqual({ ok: false, reason: 'invalid' })
+    const proposal = (await t.call(ASSISTANT_IPC.propose, { drafts: [DRAFT] })) as {
+      proposalId: string
+      previewHash: string
+    }
+    expect(await t.call(ASSISTANT_IPC.confirm, { proposalId: proposal.proposalId })).toEqual({
+      ok: false,
+      reason: 'invalid'
+    })
     const confirmed = (await t.call(ASSISTANT_IPC.confirm, {
       proposalId: proposal.proposalId,
       previewHash: proposal.previewHash
@@ -60,12 +76,19 @@ describe('assistants IPC (G48)', () => {
       assistants: Array<{ assistant: { assistantId: string } }>
     }
     const id = confirmed.assistants[0]!.assistant.assistantId
-    expect(await t.call(ASSISTANT_IPC.update, { assistantId: id, expectedRevision: 1, name: 'Renamed' })).toMatchObject({
-      ok: true,
-      assistant: { revision: 2 }
+    expect(await t.call(ASSISTANT_IPC.update, { assistantId: id, expectedRevision: 1, name: 'Renamed' })).toMatchObject(
+      {
+        ok: true,
+        assistant: { revision: 2 }
+      }
+    )
+    expect(await t.call(ASSISTANT_IPC.update, { assistantId: id, expectedRevision: 1 })).toEqual({
+      ok: false,
+      reason: 'invalid'
     })
-    expect(await t.call(ASSISTANT_IPC.update, { assistantId: id, expectedRevision: 1 })).toEqual({ ok: false, reason: 'invalid' })
-    expect(await t.call(ASSISTANT_IPC.archive, { assistantId: id, expectedRevision: 2, archived: true })).toMatchObject({ ok: true })
+    expect(await t.call(ASSISTANT_IPC.archive, { assistantId: id, expectedRevision: 2, archived: true })).toMatchObject(
+      { ok: true }
+    )
     const listed = (await t.call(ASSISTANT_IPC.list)) as { ok: true; assistants: unknown[] }
     expect(listed.assistants).toHaveLength(10)
     expect(JSON.stringify(listed)).not.toMatch(/[0-9a-f]{64}/)

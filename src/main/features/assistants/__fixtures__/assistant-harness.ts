@@ -7,7 +7,8 @@ export const TENANT_1 = '1'.repeat(64)
 export const TENANT_2 = '2'.repeat(64)
 
 export const scopeOf = (ownerKey: string, tenantKey: string): AssistantScope => ({
-  partitionId: `p${ownerKey.slice(0, 4)}${tenantKey.slice(0, 4)}`,
+  // The real G19 partition id shape: 24 lowercase hex characters.
+  partitionId: `${ownerKey.slice(0, 2)}${tenantKey.slice(0, 2)}`.repeat(6),
   ownerKey,
   tenantKey
 })
