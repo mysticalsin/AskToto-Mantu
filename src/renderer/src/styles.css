@@ -16,6 +16,7 @@
 @import './styles/orb.css';
 @import './styles/panel-loading.css';
 @import './styles/voice-actions.css';
+@import './styles/task-cards.css';
 
 /* streamdown styles itself with Tailwind utilities — Tailwind v4 must scan its dist to emit them */
 @source "../../../node_modules/streamdown/dist";

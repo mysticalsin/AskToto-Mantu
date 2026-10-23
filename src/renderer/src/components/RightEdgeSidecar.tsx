@@ -19,6 +19,7 @@ import { RIGHT_EDGE_DRAWER_WIDTH, RIGHT_EDGE_TAB_WIDTH } from '@shared/right-edg
 import { RIGHT_EDGE_STRINGS, type RightEdgeStrings } from '../lib/right-edge/strings'
 import { ElapsedClock } from './Bar'
 import { MantuMark } from './MantuMark'
+import { TaskCardsHost } from './TaskCardsHost'
 
 export interface SidecarChatProps {
   /** Controlled by App so the dock uses the existing conversation state and submission route. */
@@ -581,6 +582,7 @@ export function RightEdgeSidecar({
               {intelligence.error}
             </p>
           ) : null}
+          <TaskCardsHost />
           {commandState.proposalId && !commandState.preview ? (
             <section
               className="right-edge-sidecar__pending"
