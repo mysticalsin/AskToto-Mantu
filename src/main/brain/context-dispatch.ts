@@ -8,9 +8,14 @@
  * proof settles. Without a `ready` envelope nothing is awaited and dispatch stays synchronous.
  */
 import type { Settings } from '@shared/ipc'
+import { contextRecord, quoteAsData } from '@shared/context-authority'
+import { redactSecrets } from '@shared/redact'
+import type { ContextManifestEntry } from '@shared/context-manifest'
 import { areBrainContextRecordsCurrent, areBrainContextSourcesCurrent } from './context'
 import { brainContextForProvider, isBrainContextEnvelopeCurrent, staleBrainContextEnvelope } from './context-envelope'
 import type { BrainContextEnvelope, BrainContextOwner } from './context-envelope'
+import { MemoryServerRecordSchema, type MemoryServerRecord, type MemoryServerResult } from '../memory-server/contract'
+import { memoryServerClientEnabled, recallMemoryForCurrentOwner } from '../memory-server/client'
 
 /** Fresh proof that every entity record and meeting source behind a `ready` envelope still matches disk. */
 export async function brainContextFilesCurrent(
@@ -60,15 +65,17 @@ export interface BrainContextDispatchDeps {
   getSettings: () => Settings
   currentOwner: (settings: Settings) => BrainContextOwner
   /** The provider request whose main-only `brainContext` is refreshed. */
-  req: { id: string; brainContext?: string }
+  req: { id: string; prompt?: string; transcript?: string; brainContext?: string }
   streams: CancelRegistry
   onError: (err: unknown) => void
   /** The ask's conversation-context gate (G13): checked at every provider dispatch, before anything is sent. */
   gate?: { refusal(): string | null }
   /** Told once, with the gate's message, when the gate refuses; the ask is then cancelled. */
   onRefused?: (message: string) => void
-  /** G46: told what memory text this dispatch really attached (undefined = none), for the turn's context manifest. */
-  onApplied?: (brainContext: string | undefined) => void
+  /** G46: exactly the recalled memory records attached on this dispatch, with content-free provenance. */
+  onApplied?: (brainContext: string | undefined, sources?: readonly ContextManifestEntry[]) => void
+  /** Test seam for a deterministic contract adapter; production calls the Main-configured client above. */
+  memoryServer?: { recall(query: string): Promise<MemoryServerResult<MemoryServerRecord[]>> }
 }
 
 /** Owns one ask's brain-context envelope and re-proves it before every provider dispatch. */
@@ -89,12 +96,12 @@ export function createBrainContextDispatch(deps: BrainContextDispatchDeps) {
     return true
   }
 
-  // The owner comparison and the request update are synchronous and run last, in the same tick as the
-  // dispatch that follows; only the file proofs (`filesCurrent`) are awaited beforehand.
-  const apply = (filesCurrent: boolean): void => {
+  // Local owner comparison and the request update stay in the same tick as dispatch. When the owner-configured
+  // server adapter is enabled, its ACL-checked recall completes first and the owner is checked again before use.
+  const applyLocal = (filesCurrent: boolean): string | undefined => {
     if (!envelope) {
       deps.req.brainContext = undefined
-      return
+      return undefined
     }
     try {
       const current = deps.currentOwner(deps.getSettings())
@@ -109,7 +116,107 @@ export function createBrainContextDispatch(deps: BrainContextDispatchDeps) {
       envelope = staleBrainContextEnvelope(envelope)
       deps.req.brainContext = undefined
     }
-    deps.onApplied?.(deps.req.brainContext)
+    return deps.req.brainContext
+  }
+
+  const ownerStillCurrent = (before: BrainContextOwner): boolean => {
+    try {
+      const after = deps.currentOwner(deps.getSettings())
+      return (
+        before.authSessionGeneration === after.authSessionGeneration &&
+        before.contextRevision === after.contextRevision &&
+        before.brainRevision === after.brainRevision &&
+        before.profileKey === after.profileKey
+      )
+    } catch {
+      return false
+    }
+  }
+
+  const renderServerRecords = (
+    records: readonly MemoryServerRecord[],
+    availableChars: number
+  ): { block: string | undefined; sources: ContextManifestEntry[] } => {
+    const blocks: string[] = []
+    const bytesByOrigin = new Map<'connector' | 'document', number>()
+    let remaining = availableChars
+    for (const candidate of records.slice(0, 32)) {
+      const parsed = MemoryServerRecordSchema.safeParse(candidate)
+      if (!parsed.success) continue
+      const record = parsed.data
+      const block = quoteAsData(contextRecord(record.origin, record.text), `${record.origin} memory`)
+      const bytes = Buffer.byteLength(block, 'utf8')
+      if (bytes > remaining) continue
+      blocks.push(block)
+      remaining -= bytes
+      bytesByOrigin.set(record.origin, (bytesByOrigin.get(record.origin) ?? 0) + bytes)
+    }
+    const sources: ContextManifestEntry[] = [...bytesByOrigin].map(([origin, bytes]) => ({
+      origin,
+      authority: 'data',
+      sourceId: `memory-${origin}`,
+      bytes,
+      via: 'ask'
+    }))
+    return { block: blocks.length ? blocks.join('\n') : undefined, sources }
+  }
+
+  const appliedSources = (
+    local: string | undefined,
+    remote: readonly ContextManifestEntry[]
+  ): ContextManifestEntry[] => {
+    const sources: ContextManifestEntry[] = []
+    if (local) {
+      sources.push({
+        origin: 'document',
+        authority: 'data',
+        sourceId: 'memory-document',
+        bytes: Buffer.byteLength(local, 'utf8'),
+        via: 'ask'
+      })
+    }
+    sources.push(...remote)
+    return sources
+  }
+
+  const apply = (filesCurrent: boolean): void | Promise<void> => {
+    const serverEnabled = deps.memoryServer !== undefined || memoryServerClientEnabled()
+    // Only the owner's own question leaves the device as a recall query, secrets redacted. The live transcript (meeting
+    // content) never does: it stays local unless a later owner decision says otherwise.
+    const query = redactSecrets(deps.req.prompt ?? '')
+      .trim()
+      .slice(0, 4_000)
+    if (!serverEnabled || !query) {
+      const local = applyLocal(filesCurrent)
+      deps.onApplied?.(local, appliedSources(local, []))
+      return
+    }
+
+    let ownerBefore: BrainContextOwner
+    try {
+      ownerBefore = deps.currentOwner(deps.getSettings())
+    } catch {
+      const local = applyLocal(filesCurrent)
+      deps.onApplied?.(local, appliedSources(local, []))
+      return
+    }
+    const recall = deps.memoryServer?.recall ?? recallMemoryForCurrentOwner
+    return recall(query)
+      .catch((err): MemoryServerResult<MemoryServerRecord[]> => {
+        deps.onError(err)
+        return { status: 'unavailable' }
+      })
+      .then((result) => {
+        const local = applyLocal(filesCurrent)
+        const remainingChars = Math.max(0, 8_000 - (local?.length ?? 0))
+        const remote =
+          ownerStillCurrent(ownerBefore) && result.status === 'found'
+            ? renderServerRecords(result.value, remainingChars)
+            : { block: undefined, sources: [] }
+        const parts = [local, remote.block].filter((part): part is string => !!part)
+        deps.req.brainContext = parts.length ? parts.join('\n\n') : undefined
+        deps.onApplied?.(deps.req.brainContext, appliedSources(local, remote.sources))
+      })
   }
 
   /** Synchronous (undefined) unless a ready envelope needs its entity/source files re-proved. */

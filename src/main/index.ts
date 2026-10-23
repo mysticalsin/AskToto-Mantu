@@ -7501,7 +7501,7 @@ function registerIpc(): void {
         onError: failAskStart,
         gate: contextGate,
         onRefused: (message) => askTurns.fail(req.id, message),
-        onApplied: (text) => contextGrants?.manifests.setMemory(req.id, text)
+        onApplied: (text, sources) => contextGrants?.manifests.setMemory(req.id, text, sources)
       })
       // MQA-182: Private View means Métis does not look at OR SEND your screen, and an already-captured frame is
       // still your screen. Retry / "Go deeper" replay the last vision request (state.ts lastReqRef) and used to

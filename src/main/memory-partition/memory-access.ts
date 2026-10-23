@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from 'node:async_hooks'
+import type { MemoryScope } from '@shared/contracts/memory-partition'
 import type { MemoryAccess, MemoryPartitionChange, MemoryPartitions } from './memory-partitions'
 
 /**
@@ -24,6 +25,11 @@ export function memoryPartitionsConfigured(): boolean {
 /** Synchronous: the partition in force, or the typed reason there is none. */
 export function memoryAccess(): MemoryAccess {
   return configured ? configured.access() : UNCONFIGURED
+}
+
+/** Main-only tenant and user HMACs for the active verified memory partition; renderer data is never accepted here. */
+export function verifiedMemoryScope(): MemoryScope | null {
+  return configured?.verifiedScope() ?? null
 }
 
 /**

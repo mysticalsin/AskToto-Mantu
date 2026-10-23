@@ -42,6 +42,7 @@ import { UNREADABLE, isMeetingDocumentType, meetingFiles, readMeetings } from '.
 import { isMeetingConfidentialOnDisk, isOwnedMeetingFile } from './meeting-privacy'
 import { editMeetingIndex, removeMeetingFile } from './meeting-files'
 import { getSettings } from './store'
+import { deleteMemoryForLocalMeeting } from './memory-server/meeting-deletion'
 import { readLegacyTranscript } from './features/meetings/legacy-transcript'
 import { measuredDurationMs } from '@shared/meeting-duration'
 import { readRecapStatus, recapStatusValidationError, type RecapStatus } from '@shared/recap-status'
@@ -326,6 +327,9 @@ async function deleteMeetingUnlocked(folder: string, safeName: string): Promise<
     if (code === 'ENOENT') return { ok: false, error: 'Meeting file not found.' }
     return { ok: false, error: 'Could not delete meeting file.' }
   }
+  // G59: main's configured server adapter receives the source tombstone only after the local delete succeeds.
+  // With D-17 unprovisioned the adapter reports unavailable and the local history deletion remains usable.
+  await deleteMemoryForLocalMeeting(safeName)
   // Remove the matching row from index.md (best-effort — a missing / unreadable index is not fatal).
   try {
     // Each row ends with `| [open](safeName) |` — match the exact filename in the link cell.
@@ -780,6 +784,8 @@ export async function deleteAllMeetings(): Promise<{
     try {
       await removeMeetingFile(folder, file)
       deleted++
+      // Keep whole-account deletion on the same per-source tombstone path as one-at-a-time deletion.
+      await deleteMemoryForLocalMeeting(file)
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code !== 'ENOENT') failed.push(file)
     }

@@ -34,6 +34,8 @@ describe('context grants are wired into main (contract)', () => {
   })
 
   it('the memory slice is reported to the manifest when it is really attached', () => {
-    expect(askStart).toMatch(/onApplied: \(text\) => contextGrants\?\.manifests\.setMemory\(req\.id, text\)/)
+    expect(askStart).toMatch(
+      /onApplied: \(text, sources\) => contextGrants\?\.manifests\.setMemory\(req\.id, text, sources\)/
+    )
   })
 })

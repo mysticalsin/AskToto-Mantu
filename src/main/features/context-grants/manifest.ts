@@ -17,7 +17,7 @@ export interface ManifestLog {
    * The memory slice (past-meeting knowledge) is applied at provider dispatch, after the manifest was recorded, and again
    * on a retry or a failover. This keeps the turn's one `memory` record in step with what was really sent.
    */
-  setMemory(turnId: string, brainContext: string | undefined): void
+  setMemory(turnId: string, brainContext: string | undefined, sources?: readonly ContextManifestEntry[]): void
   /** The manifest of a turn the current owner ran, or null. */
   get(turnId: string): ContextManifest | null
   clear(): void
@@ -48,12 +48,14 @@ export function createManifestLog(deps: ManifestLogDeps): ManifestLog {
       }
       return manifest
     },
-    setMemory(turnId, brainContext) {
+    setMemory(turnId, brainContext, sources) {
       const held = turns.get(turnId)
       if (!held) return
-      const rest = held.manifest.entries.filter((e) => e.sourceId !== 'memory')
+      const rest = held.manifest.entries.filter((e) => e.sourceId !== 'memory' && !e.sourceId.startsWith('memory-'))
       const memory: ContextManifestEntry[] = brainContext
-        ? [{ origin: 'document', authority: 'data', sourceId: 'memory', bytes: utf8Bytes(brainContext), via: 'ask' }]
+        ? sources?.length
+          ? sources.map((entry) => ({ ...entry }))
+          : [{ origin: 'document', authority: 'data', sourceId: 'memory', bytes: utf8Bytes(brainContext), via: 'ask' }]
         : []
       held.manifest = { ...held.manifest, entries: [...memory, ...rest].slice(0, 32) }
     },

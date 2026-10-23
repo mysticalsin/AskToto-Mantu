@@ -15,6 +15,7 @@ import {
 } from 'lucide-react'
 import type { GraphStatus, MeetingSummary, PublicSettings } from '@shared/ipc'
 import { timeSavedFromTotals } from '@shared/time-saved'
+import { wikiPublishDisclosure } from '@shared/wiki-publish-disclosure'
 import { MantuMark } from '../../components/MantuMark'
 import { TimeSavedView } from '../../components/TimeSavedView'
 import { AgentStatus, InlineOrb } from '../../components/AgentStatus'
@@ -323,11 +324,7 @@ export function IntelligenceTab({
         <ToggleRow
           disabled={settings.managedKeys.includes('publishBrainPages')}
           label="Publish meeting intelligence"
-          desc={
-            settings.encryptTranscripts
-              ? 'Publishes readable meeting intelligence to your OneDrive folder, even though transcript encryption stays on. Meetings you flag confidential are always excluded. You will be asked to confirm.'
-              : 'Publishes readable meeting intelligence to your OneDrive folder. Meetings you flag confidential are always excluded.'
-          }
+          desc={wikiPublishDisclosure(settings.encryptTranscripts).copy}
           on={settings.publishBrainPages}
           onChange={(v) => patch({ publishBrainPages: v })}
         />
