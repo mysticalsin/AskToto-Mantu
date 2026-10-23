@@ -5,6 +5,7 @@ import { bindTranscriptCheckpointStore } from '../features/meetings/transcript-c
 import { bindMeetingEndClosure, bindOwnerRevocationClosure } from '../features/meetings/session-closure'
 import { onDraftMeetingFinalizing } from '../infra/storage/draft-transcript-write-state'
 import { createLanguageChangeAudit } from '../ipc/cloud-speech-language-audit'
+import { composeArtifacts } from '../features/artifacts'
 import { createOutputsStalePush } from '../ipc/push-outputs-stale'
 import { registerOwnerSessionIpc } from '../ipc/register-owner-session'
 import type { AuthorizeSender } from '../ipc/sender-auth'
@@ -23,7 +24,7 @@ import { bootMainMemoryPartitions } from './memory-partition-wiring'
 import { createMainOwnerSessionAuthority, type OwnerSessionAuthority } from './owner-session-authority'
 
 export interface OwnerSessionWiringDeps {
-  ipcMain: Pick<IpcMain, 'handle'>
+  ipcMain: Pick<IpcMain, 'handle' | 'on'>
   assertMainWindow(event: IpcMainInvokeEvent): void
   currentInputSessionContext(): { authSessionGeneration: number; contextRevision: number }
   /** The Private View switch (the single authority lives in index.ts); part of the context's permission set. */
@@ -41,6 +42,8 @@ export interface OwnerSessionWiring {
   readonly meetingSpeech: ReturnType<typeof bootstrapMeetingSpeech>
   /** The main-owned transcript ledger and SessionContext per meeting (G13): ask, suggest, screen and follow-up read it. */
   readonly meetingContexts: MeetingContexts['registry']
+  /** G53 artifact records: producers register the real files a turn made here. */
+  readonly artifacts: ReturnType<typeof composeArtifacts>
 }
 
 /** The `meetingSpeechWorker` kill switch from the last published settings (managed policy is already merged in). */
@@ -134,9 +137,12 @@ export function createOwnerSessionWiring(deps: OwnerSessionWiringDeps): OwnerSes
     audit: (record) => auditLog('dictation.memory', { ...record }),
     onWillQuit: (listener) => app.once('will-quit', listener)
   })
+  // G53: real files a turn produced, by artifactId; the registry is the seam producers (export, tools) register into.
+  const artifacts = composeArtifacts({ ipcMain, assertMainWindow, requireAuth: () => requireAuth() })
   return {
     ownerSession,
     authorizeSender,
+    artifacts,
     inputCapture: { ownerSession, authorizeSender },
     meetingSpeech,
     meetingContexts: meetingContexts.registry,

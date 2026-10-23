@@ -5,12 +5,15 @@ import { OWNER_SESSION_IPC } from '@shared/contracts/owner-session'
 import { DICTATION_MEMORY_IPC } from '@shared/dictation-memory'
 import { IPC } from '@shared/ipc'
 import { SESSION_CONTEXT_IPC } from '@shared/session-context-request'
+import { ARTIFACT_IPC } from '@shared/artifact'
 import type { InputSessionStopReason } from '@shared/input-session'
 
 vi.mock('electron', () => ({
   app: { getPath: () => '/nonexistent/user-data', isPackaged: false, once: vi.fn(), on: vi.fn() },
   safeStorage: { isEncryptionAvailable: () => false },
   webContents: {},
+  shell: {},
+  nativeImage: {},
   webFrameMain: { fromId: vi.fn(() => null) }
 }))
 vi.mock('../auth', () => ({ authStatus: vi.fn(() => ({ signedIn: false })), authSessionGeneration: vi.fn(() => 1) }))
@@ -52,7 +55,7 @@ import {
 } from './owner-session-wiring'
 
 function wire() {
-  const ipcMain = { handle: vi.fn() }
+  const ipcMain = { handle: vi.fn(), on: vi.fn() }
   const wiring = createOwnerSessionWiring({
     ipcMain,
     assertMainWindow: vi.fn(),
@@ -69,8 +72,12 @@ describe('owner session wiring', () => {
       OWNER_SESSION_IPC.status,
       SESSION_CONTEXT_IPC.appendLine,
       IPC.appendMeetingJournal,
-      ...Object.values(DICTATION_MEMORY_IPC)
+      ...Object.values(DICTATION_MEMORY_IPC),
+      ARTIFACT_IPC.forTurn,
+      ARTIFACT_IPC.open,
+      ARTIFACT_IPC.reveal
     ])
+    expect(ipcMain.on.mock.calls.map((call) => call[0])).toEqual([ARTIFACT_IPC.dragStart])
   })
 
   it('boots the local memory partitions with the authority it exposes, before it registers any handler (G19)', () => {
@@ -79,7 +86,7 @@ describe('owner session wiring', () => {
       bootedWith.push(ownerSession)
       return undefined as never
     })
-    const ipcMain = { handle: vi.fn(() => expect(bootedWith).toHaveLength(1)) }
+    const ipcMain = { handle: vi.fn(() => expect(bootedWith).toHaveLength(1)), on: vi.fn() }
     const wiring = createOwnerSessionWiring({
       ipcMain,
       assertMainWindow: vi.fn(),
@@ -96,7 +103,8 @@ describe('owner session wiring', () => {
     const ipcMain = {
       handle: vi.fn(() => {
         installedAtFirstHandler.push(getMeetingSpeechLimits() !== undefined)
-      })
+      }),
+      on: vi.fn()
     }
     createOwnerSessionWiring({
       ipcMain,
