@@ -188,6 +188,9 @@ extraResources:
     to: license-lease
 mac:
   category: public.app-category.productivity
+  # D-26: system-audio taps need macOS 14.4. Equals MIN_MACOS.label in src/shared/platform-support.ts (contract-tested);
+  # electron-builder writes it to LSMinimumSystemVersion.
+  minimumSystemVersion: '14.4'
   # electron-builder treats a target-specific `files` override as the complete app allowlist. Keep the
   # same minimal source set here while excluding the Windows Sherpa package before the asar header is
   # written; otherwise a shared checkout can pull in ignored worktrees and leave dangling references.
