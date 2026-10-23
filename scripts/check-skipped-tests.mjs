@@ -125,6 +125,10 @@ const REASONS = [
     why: 'Drives the real PowerShell 7 `pwsh` against scripts/qa/windows/baseline.ps1. Hosted CI runners all ship pwsh and always run these four cases (a missing pwsh fails them there); only an off-CI host without PowerShell skips them, and the baseline below is raised by exactly four for that host so the allowance cannot hide a skip on CI. The workflow-lane cases in the same file run everywhere.'
   },
   {
+    match: 'win-ax-helper.script.test.ts',
+    why: 'Runs the real Windows PowerShell 5.1 (pinned System32 powershell.exe) to parse resources/win-ax/metis-win-ax.ps1 and to start it with an invalid command word (G24). Only a Windows host has that binary; hosted windows-latest runs both cases, so the win32 baseline is unchanged and darwin and linux are raised by exactly two.'
+  },
+  {
     match: 'sandbox-acceptance/session.test.ts',
     why: 'Direct-spawns a fake macOS bundle executable (an extension-less bash script at Contents/MacOS/<name>) to exercise the sandbox launch path. Windows cannot execute that script and the harness launches only the macOS QA bundle; the guard, layout, environment and dry-run logic in the same directory run on every platform.'
   },
@@ -177,7 +181,8 @@ const hostedCi = process.env.CI === 'true' && process.env.GITHUB_ACTIONS === 'tr
 // Q06 added the POSIX read-only Open-copy case to history-actions.test.ts: +1 on win32 only.
 // Q12 added the POSIX-only canned-stderr ffmpeg stand-in case: +1 on win32 only.
 // V08 added three real-FIFO cases to qa-voice-hooks.test.ts (POSIX named pipes): +3 on win32 only.
-const BASELINE = { win32: 49, darwin: hostedCi ? 34 : 9, linux: hostedCi ? 29 : 32 }
+// G24 added two win32-only powershell.exe script cases (win-ax-helper.script.test.ts): +2 on darwin and linux.
+const BASELINE = { win32: 49, darwin: hostedCi ? 36 : 11, linux: hostedCi ? 31 : 34 }
 // windows/baseline.contract.test.ts skips its four pwsh-driven cases only off hosted CI on a host with no
 // `pwsh`; on hosted CI they must run, so the allowance never applies there.
 const PWSH_BASELINE_SKIPS = 4

@@ -77,7 +77,7 @@ function Get-InertText([string]$text, [bool]$trimTrailing) {
 
 if ($Command -ne 'ax-focus-snapshot' -and $Command -ne 'ax-insert') {
   Emit-Insert 'refused' 'invalid_request' 'none' $false $false $null 0
-  exit 0
+  exit 2
 }
 $isInsert = ($Command -eq 'ax-insert')
 
