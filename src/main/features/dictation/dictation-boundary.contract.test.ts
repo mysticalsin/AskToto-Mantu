@@ -13,6 +13,7 @@ const MEMORY_MODULES = [
 ]
 const DICTATION_MODULES = [
   './dictation-session',
+  './dictation-gate',
   './dictation-runtime',
   './dictation-context',
   './dictation-ports',
@@ -76,6 +77,20 @@ describe('dictation boundary (G22)', () => {
     expect(runtime).toMatch(
       /if \(!isVoiceLease\(deps\.authority\.activeLease\)\) return dictation\.onTranscript\(text\)/
     )
+  })
+
+  it('journals and revises before the narrow empty/sentinel gate, which runs before observing a target', () => {
+    const session = readModuleSource(__dirname, './dictation-session').text
+    const journal = session.indexOf('sink.segmentRecognized(turn.id, text)')
+    const revised = session.indexOf('this.#guard.revise(lease, { actor, revision: 1, text })')
+    const gate = session.indexOf('isEmptyOrRecognizerSentinel(text)')
+    const observe = session.indexOf('const first = await this.#observe()')
+    expect(journal).toBeGreaterThanOrEqual(0)
+    expect(journal).toBeLessThan(revised)
+    expect(revised).toBeLessThan(gate)
+    expect(gate).toBeLessThan(observe)
+    const gateModule = readModuleSource(__dirname, './dictation-gate').text
+    expect(gateModule).not.toMatch(/thank you|subscribe|\bum\b|\ber\b|hallucination|word blacklist/i)
   })
 
   it('the dictation memory (G26) uses async fs only, never imports electron or the meeting folders, and never logs text', () => {

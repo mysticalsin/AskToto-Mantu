@@ -40,6 +40,7 @@ import {
   type PriorDraft
 } from '../desktop-contract'
 import { DICTATION_ACTOR, DictationSessionContext } from './dictation-context'
+import { isEmptyOrRecognizerSentinel } from './dictation-gate'
 import type { DictationMemorySink } from './dictation-memory'
 import type {
   DictationHostPorts,
@@ -563,6 +564,12 @@ export class DictationSession {
     } catch (error) {
       this.#abandonDraft()
       settleFailure(reasonForGuardError(error))
+      return
+    }
+
+    if (isEmptyOrRecognizerSentinel(text)) {
+      this.#abandonDraft()
+      settleFailure('no_speech')
       return
     }
 

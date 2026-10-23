@@ -621,3 +621,90 @@ describe('DictationSession: the encrypted segment journal sink (G26)', () => {
     expect(ctx.session.snapshot()).toMatchObject({ state: 'done' })
   })
 })
+
+describe('DictationSession: reject only exact empty recognizer sentinels (G25)', () => {
+  it.each([
+    '',
+    '   \n\t',
+    '[BLANK_AUDIO]',
+    '<|nospeech|>',
+    '<|endoftext|>',
+    '  [blank_audio]\n<|NoSpeech|>  '
+  ])('journals the raw transcript but never observes a target or inserts for %j', async (transcript) => {
+    const memory = recordingMemory()
+    const ctx = setup({ memory: memory.sink })
+    await listenAndRelease(ctx)
+    expect(ctx.captureTarget).toHaveBeenCalledTimes(1) // Initial target binding only.
+    ctx.session.onTranscript(transcript)
+    ctx.session.onTranscript(transcript) // Duplicate callbacks remain one-shot.
+    await flush()
+
+    expect(ctx.captureTarget).toHaveBeenCalledTimes(1)
+    expect(ctx.insert).not.toHaveBeenCalled()
+    expect(ctx.session.snapshot()).toMatchObject({ state: 'failed', reason: 'no_speech' })
+    expect(memory.events.filter(([kind]) => kind === 'segment')).toEqual([['segment', 'turn-1', transcript]])
+    expect(memory.events.some(([kind]) => kind === 'inserted')).toBe(false)
+    expect(memory.events.filter(([kind]) => kind === 'ended')).toEqual([['ended', 'turn-1']])
+    expect(ctx.session.active()).toBe(false)
+  })
+
+  it('preserves a nonempty rejected raw draft across the next activation even when the journal callback throws', async () => {
+    const memory = recordingMemory({
+      draftPreserved: () => {
+        throw new Error('synthetic journal failure')
+      }
+    })
+    const ctx = setup({ memory: memory.sink })
+    await listenAndRelease(ctx)
+    ctx.session.onTranscript('[BLANK_AUDIO]')
+    await flush()
+
+    ctx.session.onChordEvent(armed)
+    await flush()
+    expect(ctx.session.priorDrafts().map((draft) => draft.text)).toEqual(['[BLANK_AUDIO]'])
+    expect(ctx.calls.drafts).toEqual(['[BLANK_AUDIO]'])
+    expect(ctx.insert).not.toHaveBeenCalled()
+  })
+
+  it('preserves a rejected raw draft on disposal even when the journal callback throws', async () => {
+    const memory = recordingMemory({
+      draftPreserved: () => {
+        throw new Error('synthetic journal failure')
+      }
+    })
+    const ctx = setup({ memory: memory.sink })
+    await listenAndRelease(ctx)
+    ctx.session.onTranscript('<|nospeech|>')
+    await flush()
+
+    ctx.session.dispose()
+    expect(ctx.session.priorDrafts().map((draft) => draft.text)).toEqual(['<|nospeech|>'])
+    expect(ctx.calls.drafts).toEqual(['<|nospeech|>'])
+    expect(ctx.insert).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    'Thank you for watching',
+    'Thank you for watching 2',
+    'Please subscribe',
+    'Do not rename McDonald',
+    '谢谢观看',
+    'ご視聴ありがとうございました',
+    'ขอบคุณที่รับชม',
+    'um',
+    'er',
+    '123?!',
+    '.',
+    '(music)',
+    '<|unknown|>',
+    '[BLANK_AUDIO] spoken words',
+    'spoken words <|nospeech|>'
+  ])('passes legitimate or mixed-marker text byte-identically: %j', async (transcript) => {
+    const ctx = setup({ insert: { outcome: 'unsupported' } })
+    await listenAndRelease(ctx)
+    ctx.session.onTranscript(transcript)
+    await flush()
+    expect(ctx.insert).toHaveBeenCalledTimes(1)
+    expect(ctx.insert.mock.calls[0]![0].args.text).toBe(transcript)
+  })
+})

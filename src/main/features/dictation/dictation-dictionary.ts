@@ -113,19 +113,23 @@ export function createDictationDictionary(deps: DictationDictionaryDeps): Dictat
 
   type Load = { status: 'ok'; stored: Stored } | { status: 'unavailable' }
 
-  async function load(partition: string): Promise<Load> {
+  async function load(partition: string, epoch: number): Promise<Load> {
     const empty: Stored = { v: 1, partition, entries: [] }
     let bytes: Buffer
     try {
-      bytes = await readFile(pathOf(partition))
+      const path = pathOf(partition)
+      if (!ownerIsCurrent(partition, epoch)) return { status: 'unavailable' }
+      bytes = await readFile(path)
     } catch (error) {
+      if (!ownerIsCurrent(partition, epoch)) return { status: 'unavailable' }
       return isMissing(error) ? { status: 'ok', stored: empty } : { status: 'unavailable' }
     }
+    if (!ownerIsCurrent(partition, epoch)) return { status: 'unavailable' }
     try {
       const opened = await deps.keyring.open(bytes, aadOf(partition))
-      if (!opened) return { status: 'unavailable' }
+      if (!opened || !ownerIsCurrent(partition, epoch)) return { status: 'unavailable' }
       const parsed = FileSchema.safeParse(JSON.parse(opened.toString('utf8')))
-      return parsed.success && parsed.data.partition === partition
+      return parsed.success && parsed.data.partition === partition && ownerIsCurrent(partition, epoch)
         ? { status: 'ok', stored: parsed.data }
         : { status: 'unavailable' }
     } catch {
@@ -133,13 +137,21 @@ export function createDictationDictionary(deps: DictationDictionaryDeps): Dictat
     }
   }
 
-  async function save(partition: string, stored: Stored): Promise<boolean> {
+  async function save(partition: string, epoch: number, stored: Stored): Promise<boolean> {
     try {
+      if (!ownerIsCurrent(partition, epoch)) return false
       const sealed = await deps.keyring.seal(Buffer.from(JSON.stringify(stored), 'utf8'), aadOf(partition))
-      if (!sealed) return false
-      await mkdir(deps.rootDir(), { recursive: true, mode: 0o700 })
-      await atomicSavedWrite(pathOf(partition), sealed)
-      return true
+      if (!sealed || !ownerIsCurrent(partition, epoch)) return false
+      const root = deps.rootDir()
+      if (!ownerIsCurrent(partition, epoch)) return false
+      await mkdir(root, { recursive: true, mode: 0o700 })
+      if (!ownerIsCurrent(partition, epoch)) return false
+      const path = pathOf(partition)
+      if (!ownerIsCurrent(partition, epoch)) return false
+      await atomicSavedWrite(path, sealed, () => {
+        if (!ownerIsCurrent(partition, epoch)) throw new Error('Dictionary owner changed before replacement.')
+      })
+      return ownerIsCurrent(partition, epoch)
     } catch {
       return false
     }
@@ -160,7 +172,7 @@ export function createDictationDictionary(deps: DictationDictionaryDeps): Dictat
       if (!partition || epoch === null) return { status: 'unavailable', entries: [] }
       const loaded = await serial(async (): Promise<Load> => {
         if (!ownerIsCurrent(partition, epoch)) return { status: 'unavailable' }
-        const result = await load(partition)
+        const result = await load(partition, epoch)
         return result.status === 'ok' && ownerIsCurrent(partition, epoch) ? result : { status: 'unavailable' }
       })
       if (loaded.status !== 'ok' || !ownerIsCurrent(partition, epoch)) return { status: 'unavailable', entries: [] }
@@ -173,14 +185,16 @@ export function createDictationDictionary(deps: DictationDictionaryDeps): Dictat
     async learnFromCorrection(span, correctedText) {
       if (!isOwnedSpan(span) || typeof correctedText !== 'string') return { learned: 0 }
       const partition = partitionOf()
-      if (!partition) return { learned: 0 }
+      const epoch = ownerEpochOf()
+      if (!partition || epoch === null) return { learned: 0 }
       const pairs = extractTermCorrections(span.text, correctedText).filter(
         (pair) => pair.heard.length <= limits.maxTermChars && pair.preferred.length <= limits.maxTermChars
       )
       if (pairs.length === 0) return { learned: 0 }
       return serial(async () => {
-        const loaded = await load(partition)
-        if (loaded.status !== 'ok') return { learned: 0 }
+        if (!ownerIsCurrent(partition, epoch)) return { learned: 0 }
+        const loaded = await load(partition, epoch)
+        if (loaded.status !== 'ok' || !ownerIsCurrent(partition, epoch)) return { learned: 0 }
         const now = deps.now()
         let entries = [...loaded.stored.entries]
         for (const pair of pairs) {
@@ -205,34 +219,43 @@ export function createDictationDictionary(deps: DictationDictionaryDeps): Dictat
         if (entries.length > limits.maxEntries) {
           entries = [...entries].sort((a, b) => b.updatedAtMs - a.updatedAtMs).slice(0, limits.maxEntries)
         }
-        return (await save(partition, { v: 1, partition, entries })) ? { learned: pairs.length } : { learned: 0 }
+        return (await save(partition, epoch, { v: 1, partition, entries })) && ownerIsCurrent(partition, epoch)
+          ? { learned: pairs.length }
+          : { learned: 0 }
       })
     },
 
     async remove(id) {
       const partition = partitionOf()
-      if (!partition || !/^[0-9a-f]{32}$/.test(id)) return false
+      const epoch = ownerEpochOf()
+      if (!partition || epoch === null || !/^[0-9a-f]{32}$/.test(id)) return false
       return serial(async () => {
-        const loaded = await load(partition)
-        if (loaded.status !== 'ok') return false
+        if (!ownerIsCurrent(partition, epoch)) return false
+        const loaded = await load(partition, epoch)
+        if (loaded.status !== 'ok' || !ownerIsCurrent(partition, epoch)) return false
         const entries = loaded.stored.entries.filter((entry) => entry.id !== id)
-        if (entries.length === loaded.stored.entries.length) return false
-        return save(partition, { v: 1, partition, entries })
+        if (entries.length === loaded.stored.entries.length || !ownerIsCurrent(partition, epoch)) return false
+        return (await save(partition, epoch, { v: 1, partition, entries })) && ownerIsCurrent(partition, epoch)
       })
     },
 
     async clear() {
       const partition = partitionOf()
-      if (!partition) return 0
+      const epoch = ownerEpochOf()
+      if (!partition || epoch === null) return 0
       return serial(async () => {
-        const loaded = await load(partition)
+        if (!ownerIsCurrent(partition, epoch)) return 0
+        const loaded = await load(partition, epoch)
+        if (!ownerIsCurrent(partition, epoch)) return 0
         const count = loaded.status === 'ok' ? loaded.stored.entries.length : 0
+        const path = pathOf(partition)
+        if (!ownerIsCurrent(partition, epoch)) return 0
         try {
-          await unlink(pathOf(partition))
+          await unlink(path)
         } catch (error) {
-          if (!isMissing(error)) return 0
+          if (!isMissing(error) || !ownerIsCurrent(partition, epoch)) return 0
         }
-        return count
+        return ownerIsCurrent(partition, epoch) ? count : 0
       })
     }
   }

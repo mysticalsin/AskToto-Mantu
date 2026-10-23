@@ -121,6 +121,10 @@ export function createDictationMemory(deps: DictationMemoryDeps): DictationMemor
   }
   const ownerIsCurrent = (partition: string, epoch: number): boolean =>
     !disposed && currentPartition() === partition && ownerEpoch === epoch
+  const captureOwner = (): { partition: string; epoch: number } | null => {
+    const partition = currentPartition()
+    return disposed || partition === null ? null : { partition, epoch: ownerEpoch }
+  }
   const journal: DictationJournal = createDictationJournal({
     rootDir: () => join(deps.rootDir(), 'journal'),
     keyring,
@@ -132,7 +136,7 @@ export function createDictationMemory(deps: DictationMemoryDeps): DictationMemor
   const dictionary: DictationDictionary = createDictationDictionary({
     rootDir: () => join(deps.rootDir(), 'dictionary'),
     keyring,
-    partition: deps.partition,
+    partition: () => (disposed ? null : currentPartition()),
     ownerEpoch: () => ownerEpoch,
     now: deps.now,
     newId: deps.newId
@@ -182,10 +186,21 @@ export function createDictationMemory(deps: DictationMemoryDeps): DictationMemor
     pending.add(tracked)
   }
 
-  const learn = async (span: OwnedSpan, correctedText: string): Promise<number> => {
-    if (!deps.enabled()) return 0
+  const learn = async (
+    span: OwnedSpan,
+    correctedText: string,
+    owner: { partition: string; epoch: number }
+  ): Promise<number | null> => {
+    if (!ownerIsCurrent(owner.partition, owner.epoch)) return null
+    const enabled = deps.enabled()
+    if (!ownerIsCurrent(owner.partition, owner.epoch)) return null
+    if (!enabled) return 0
     const { learned } = await dictionary.learnFromCorrection(span, correctedText)
-    if (learned > 0) audit({ phase: 'dictionary_learned', count: learned })
+    if (!ownerIsCurrent(owner.partition, owner.epoch)) return null
+    if (learned > 0) {
+      audit({ phase: 'dictionary_learned', count: learned })
+      if (!ownerIsCurrent(owner.partition, owner.epoch)) return null
+    }
     return learned
   }
 
@@ -253,15 +268,14 @@ export function createDictationMemory(deps: DictationMemoryDeps): DictationMemor
     },
 
     async recoveryResolve(input) {
-      const partition = currentPartition()
-      const epoch = ownerEpoch
-      if (disposed || partition === null) return REFUSED
+      const owner = captureOwner()
+      if (!owner) return REFUSED
       const resolved = await journal.resolve(input.id)
-      if (resolved.status !== 'resolved' || !ownerIsCurrent(partition, epoch)) return REFUSED
+      if (resolved.status !== 'resolved' || !ownerIsCurrent(owner.partition, owner.epoch)) return REFUSED
       audit({ phase: 'recovery_resolved', count: 1 })
-      if (!ownerIsCurrent(partition, epoch)) return REFUSED
-      const learned = input.correctedText === undefined ? 0 : await learn(resolved.span, input.correctedText)
-      if (!ownerIsCurrent(partition, epoch)) return REFUSED
+      if (!ownerIsCurrent(owner.partition, owner.epoch)) return REFUSED
+      const learned = input.correctedText === undefined ? 0 : await learn(resolved.span, input.correctedText, owner)
+      if (learned === null || !ownerIsCurrent(owner.partition, owner.epoch)) return REFUSED
       return { ok: true, count: learned }
     },
 
@@ -270,23 +284,39 @@ export function createDictationMemory(deps: DictationMemoryDeps): DictationMemor
     },
 
     async spansCorrect(input) {
+      const owner = captureOwner()
+      if (!owner) return REFUSED
       const span = ledger.claim(input.id)
-      if (!span) return REFUSED
-      return { ok: true, count: await learn(span, input.correctedText) }
+      if (!span || !ownerIsCurrent(owner.partition, owner.epoch)) return REFUSED
+      const learned = await learn(span, input.correctedText, owner)
+      if (learned === null || !ownerIsCurrent(owner.partition, owner.epoch)) return REFUSED
+      return { ok: true, count: learned }
     },
 
-    dictionaryList: () => dictionary.list(),
+    async dictionaryList() {
+      const owner = captureOwner()
+      if (!owner) return { status: 'unavailable', entries: [] }
+      const listed = await dictionary.list()
+      return ownerIsCurrent(owner.partition, owner.epoch) ? listed : { status: 'unavailable', entries: [] }
+    },
 
     async dictionaryRemove(input) {
+      const owner = captureOwner()
+      if (!owner) return REFUSED
       const removed = await dictionary.remove(input.id)
-      if (!removed) return REFUSED
+      if (!ownerIsCurrent(owner.partition, owner.epoch) || !removed) return REFUSED
       audit({ phase: 'dictionary_removed', count: 1 })
+      if (!ownerIsCurrent(owner.partition, owner.epoch)) return REFUSED
       return { ok: true, count: 1 }
     },
 
     async dictionaryClear() {
+      const owner = captureOwner()
+      if (!owner) return REFUSED
       const count = await dictionary.clear()
+      if (!ownerIsCurrent(owner.partition, owner.epoch)) return REFUSED
       audit({ phase: 'dictionary_cleared', count })
+      if (!ownerIsCurrent(owner.partition, owner.epoch)) return REFUSED
       return { ok: true, count }
     },
 
