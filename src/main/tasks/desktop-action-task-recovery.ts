@@ -68,11 +68,34 @@ export class DesktopActionTaskRecovery {
     })
   }
 
-  /** Preserves the historic immediate-ack assumption for settled uncertain effects; late detached delivery is separate. */
-  async acknowledgeSettled(taskId: string): Promise<void> {
+  /** Read the captured principal before checking generation and card identity, so reentrant teardown fails closed. */
+  isSettlementRecipientCurrent(
+    captured: TaskRecoveryOwner | undefined,
+    currentCardAndGeneration: () => boolean
+  ): boolean {
+    try {
+      const current = captured ? this.readPrincipal() : null
+      return (!captured || sameTaskRecoveryOwner(current, captured)) && currentCardAndGeneration()
+    } catch {
+      return false
+    }
+  }
+
+  /** Retains the historic current-recipient auto-ack; eligibility cannot prove display or cover unreported unmounts. */
+  async acknowledgeSettled(taskId: string, eligible: () => boolean): Promise<void> {
+    if (!this.isEligible(eligible)) return
     const acknowledged = await this.loadAcknowledgements()
+    if (!this.isEligible(eligible)) return
     acknowledged.add(taskId)
     await this.persistAcknowledgements()
+  }
+
+  private isEligible(eligible: () => boolean): boolean {
+    try {
+      return eligible()
+    } catch {
+      return false
+    }
   }
 
   private readPrincipal(): TaskRecoveryOwner | null {

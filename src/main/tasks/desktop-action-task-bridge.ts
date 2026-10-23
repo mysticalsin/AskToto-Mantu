@@ -38,7 +38,7 @@ import {
   type TaskProgressState
 } from './task-progress'
 import { archiveHasRoom, pruneState } from './desktop-action-task-archive'
-import { TaskCards } from './desktop-action-task-cards'
+import { TaskCards, type CardRecord } from './desktop-action-task-cards'
 import { TaskScheduler, type SchedulerJob, type SchedulerLimits, type SchedulerResult } from './task-scheduler'
 import { TaskSteeringInbox, type PendingSteer } from './task-steering'
 import { TaskStepLeases, type StepLease } from './task-step-lease'
@@ -319,14 +319,14 @@ export class DesktopActionTaskBridge {
     const recoveryOwner = this.recoveryManager.captureRecoveryPrincipal() ?? undefined
     const bound = this.deps.gesture?.bindingFor(context.owner.webContentsId) ?? null
     const owner = `webContents:${context.owner.webContentsId}`
+    const card = this.taskCards.open(context.proposalId, owner, authSessionGeneration, request.id)
     const job: SchedulerJob<DesktopActionResult> = {
       key: context.proposalId,
       owner,
       effect: 'effect',
       resources: desktopActionResources(request),
-      run: (signal) => this.run(request, context, signal, bound, authSessionGeneration, recoveryOwner)
+      run: (signal) => this.run(request, context, signal, bound, authSessionGeneration, recoveryOwner, card)
     }
-    const card = this.taskCards.open(context.proposalId, owner, authSessionGeneration, request.id)
     let queued: SchedulerResult<DesktopActionResult>
     try {
       queued = await this.scheduler.submit(job)
@@ -392,10 +392,18 @@ export class DesktopActionTaskBridge {
     signal: AbortSignal,
     bound: GestureBinding | null,
     authSessionGeneration: number,
-    recoveryOwner: TaskRecoveryOwner | undefined
+    recoveryOwner: TaskRecoveryOwner | undefined,
+    card: CardRecord | undefined
   ): Promise<DesktopActionResult> {
     const generation = this.stopGeneration
-    const card = this.taskCards.forKey(context.proposalId)
+    const settlementRecipientIsCurrent = (): boolean =>
+      this.recoveryManager.isSettlementRecipientCurrent(
+        recoveryOwner,
+        () =>
+          this.deps.authSessionGeneration() === authSessionGeneration &&
+          card !== undefined &&
+          this.taskCards.forKey(card.key) === card
+      )
     if (this.deps.authSessionGeneration() !== authSessionGeneration) {
       if (card) this.taskCards.drop(card)
       return { id: request.id, ok: false, outcome: 'cancelled', detail: 'stale_owner' }
@@ -449,7 +457,7 @@ export class DesktopActionTaskBridge {
       // Thrown after dispatch began: the effect may have happened. Observe it, never retry it.
       outcome = 'uncertain'
     }
-    await this.settle(begun, request, outcome)
+    await this.settle(begun, request, outcome, settlementRecipientIsCurrent)
     if (card) this.taskCards.finishEffect(card, outcome)
 
     if (!result) return unknownResult(request.id, 'dispatch_threw')
@@ -740,7 +748,8 @@ export class DesktopActionTaskBridge {
   private settle(
     begun: Extract<Begun, { ok: true }>,
     request: DesktopActionRequest,
-    outcome: EffectOutcome
+    outcome: EffectOutcome,
+    settlementRecipientIsCurrent: () => boolean
   ): Promise<void> {
     return this.locked(async () => {
       try {
@@ -759,8 +768,8 @@ export class DesktopActionTaskBridge {
         this.leases.sync(this.state, this.now())
         if (outcome === 'uncertain') {
           this.deps.audit?.('task.effect_uncertain', { taskId: begun.taskId, actionId: request.id })
-          // The person sees this result now, so a later boot does not announce it a second time.
-          await this.recoveryManager.acknowledgeSettled(begun.taskId)
+          // Keep the historical current-recipient auto-ack and suppress known retirement; this does not prove display.
+          await this.recoveryManager.acknowledgeSettled(begun.taskId, settlementRecipientIsCurrent)
         }
         // The step has settled: a steer that waited for this boundary is handed over now, exactly once.
         const waiting = this.steering.take(begun.taskId)
