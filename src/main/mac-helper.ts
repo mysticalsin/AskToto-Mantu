@@ -310,10 +310,12 @@ export function parseBundleCopies(stdout: string): HelperBundleCopy[] | null {
 }
 
 /** Run a one-shot read-only helper command and parse its stdout. Null on any failure, like every mode here. */
-function runHelperOnce<T>(
+export function runHelperOnce<T>(
   spec: { command: string; args: string[] } | null,
   parse: (stdout: string) => T | null,
-  timeoutMs: number
+  timeoutMs: number,
+  /** Written to the helper's stdin (never argv, which any local process can read). Omitted: stdin is closed. */
+  input?: string
 ): Promise<T | null> {
   return new Promise((resolve) => {
     if (!spec) {
@@ -323,7 +325,7 @@ function runHelperOnce<T>(
     const label = spec.args[0]
     let proc: ReturnType<typeof spawn>
     try {
-      proc = spawn(spec.command, spec.args, { stdio: ['ignore', 'pipe', 'pipe'] })
+      proc = spawn(spec.command, spec.args, { stdio: [input === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'] })
     } catch (e) {
       mainLog.warn(`[mac-helper] ${label} spawn failed`, e instanceof Error ? e.message : String(e))
       resolve(null)
@@ -344,6 +346,10 @@ function runHelperOnce<T>(
     let stderr = ''
     proc.stdout?.on('data', (chunk: Buffer) => (stdout += chunk.toString('utf8')))
     proc.stderr?.on('data', (chunk: Buffer) => (stderr += chunk.toString('utf8')))
+    if (input !== undefined) {
+      proc.stdin?.on('error', () => undefined)
+      proc.stdin?.end(input)
+    }
     proc.once('error', (e) => {
       mainLog.warn(`[mac-helper] ${label} error`, e instanceof Error ? e.message : String(e))
       settle(null)

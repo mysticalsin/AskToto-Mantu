@@ -223,6 +223,19 @@ first="$(head -n 1 "$work/wm.out")"
 if printf '%s\n' "$first" | grep -Eq '^m [0-9]{1,4} [0-9]{1,10}$'; then pass "watch-modifiers prints one well-formed initial line"; else fail "watch-modifiers first line: '$first' ($(cat "$work/wm.err"))"; fi
 if [ "$(grep -Evc '^m [0-9]{1,4} [0-9]{1,10}$' "$work/wm.out")" = "0" ]; then pass "watch-modifiers prints only protocol lines (no key identity)"; else fail "watch-modifiers stray output: $(cat "$work/wm.out")"; fi
 
+# --- ax-focus-snapshot / ax-insert (G23): protocol only; no field of any app is ever written ----------------------
+snap="$("$helper" ax-focus-snapshot 2>"$work/ax.err")"; code=$?
+expect_exit "ax-focus-snapshot exits 0" 0 "$code"
+if printf '%s' "$snap" | py 'import json,sys; d=json.load(sys.stdin); assert d["status"] in ("ok","permission","no_focus"); assert "value" not in d and "text" not in d'; then pass "ax-focus-snapshot prints a status and never the field text"; else fail "ax-focus-snapshot output: $snap"; fi
+
+out="$(printf 'not json' | "$helper" ax-insert 2>/dev/null)"; code=$?
+expect_exit "ax-insert with a malformed request exits 0" 0 "$code"
+if printf '%s' "$out" | py 'import json,sys; d=json.load(sys.stdin); assert d["outcome"]=="refused" and d["reason"]=="invalid_request" and d.get("textHash") is None'; then pass "ax-insert refuses a malformed request"; else fail "ax-insert malformed: $out"; fi
+
+out="$(printf '{"pid":1,"windowId":"w","token":"t","valueHash":"%s","valueLength":0,"selectionLocation":0,"selectionLength":0,"text":"synthetic","allowPaste":true}' "$(printf 'a%.0s' $(seq 64))" | "$helper" ax-insert 2>/dev/null)"; code=$?
+expect_exit "ax-insert with a request that matches no field exits 0" 0 "$code"
+if printf '%s' "$out" | py 'import json,sys; d=json.load(sys.stdin); assert d["outcome"]=="refused" and d["reason"] in ("permission","target_changed","secure_field") and d["method"]=="none"'; then pass "ax-insert writes nothing for a field it cannot match"; else fail "ax-insert unmatched: $out"; fi
+
 if [ "$failures" -eq 0 ]; then echo "all helper tests passed"; exit 0; fi
 echo "$failures helper test(s) failed"
 exit 1

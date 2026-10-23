@@ -405,6 +405,8 @@ export type AuditEvent =
   | 'dictation.turn'
   // G27: spoken-reply phases and machine reasons only, never reply text or voice ids.
   | 'tts.playback'
+  // G23: one dictation insertion attempt into another app (outcome enum, method, flags and a length; never text, a hash of it, an app or a field).
+  | 'dictation.insert'
   // G26: the dictation memory (journal sweeps and refusals, recovery offers, dictionary changes). Phase, enum reason and counts only; never text, a term, a path or an id.
   | 'dictation.memory'
   // G48: the assistant store (proposed, created, replayed, updated, archived, migrated, refused). Phase, enum reason and counts only; never a name, instructions or an id.

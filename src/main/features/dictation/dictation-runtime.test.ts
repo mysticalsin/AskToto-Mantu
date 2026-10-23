@@ -10,6 +10,13 @@ import { createDictationRuntime, type DictationRuntimeDeps } from './dictation-r
 import type { DictationHostPorts } from './dictation-ports'
 
 vi.mock('../../logger', () => ({ auditLog: vi.fn() }))
+// The helper gateway is replaced: no test here ever spawns the real metis-mac-helper.
+const helper = vi.hoisted(() => ({ present: false, run: vi.fn(async (): Promise<unknown> => null) }))
+vi.mock('../../mac-helper', () => ({
+  macHelperPresent: () => helper.present,
+  macHelperPath: () => '/synthetic/metis-mac-helper',
+  runHelperOnce: (...args: unknown[]) => helper.run(...(args as []))
+}))
 
 const wiringCalls: VoiceChordWiringDeps[] = []
 const chordFake = {
@@ -205,14 +212,52 @@ describe('dictation runtime: a held chord opens a dictation capture, never a voi
     expect(h.runtime.active()).toBe(true)
   })
 
-  it('in production (no native port until G23) a hold is refused as unsupported and opens nothing', async () => {
-    const h = setup({ ports: undefined })
+  it('without a native port (any platform but macOS) a hold is refused as unsupported and opens nothing', async () => {
+    const h = setup({ ports: undefined, platform: 'win32' })
     h.runtime.start()
     h.wiring().onChordEvent?.(armed)
     await flush()
     expect(h.sent).toEqual([])
     expect(h.activation.mint).not.toHaveBeenCalled()
     expect(h.runtime.snapshot()).toMatchObject({ state: 'failed', reason: 'target_unsupported' })
+  })
+
+  it('on macOS the default ports are the Accessibility adapter (G23): no helper is unsupported, a focused field binds', async () => {
+    helper.present = false
+    const missing = setup({ ports: undefined, platform: 'darwin' })
+    missing.runtime.start()
+    missing.wiring().onChordEvent?.(armed)
+    await flush()
+    expect(missing.runtime.snapshot()).toMatchObject({ state: 'failed', reason: 'target_unsupported' })
+    expect(helper.run).not.toHaveBeenCalled()
+
+    helper.present = true
+    const focused = JSON.stringify({
+      status: 'ok',
+      pid: 4242,
+      bundleId: 'com.example.synthetic-editor',
+      processStartMs: 1,
+      windowId: 'wsynthetic01',
+      role: 'AXTextArea',
+      subrole: null,
+      token: 'tok0123456789abcdef',
+      secure: false,
+      editable: true,
+      terminal: false,
+      valueHash: 'a'.repeat(64),
+      valueLength: 3,
+      valueTooLarge: false,
+      selection: { location: 3, length: 0 }
+    })
+    helper.run.mockImplementation(async (...args: unknown[]) => (args[1] as (stdout: string) => unknown)(focused))
+    const bound = setup({ ports: undefined, platform: 'darwin' })
+    bound.runtime.start()
+    bound.wiring().onChordEvent?.(armed)
+    await flush()
+    expect(helper.run).toHaveBeenCalledTimes(1)
+    expect(bound.runtime.snapshot().state).toBe('listening')
+    helper.present = false
+    helper.run.mockReset()
   })
 
   it('is refused while a meeting records and nothing is captured', async () => {
