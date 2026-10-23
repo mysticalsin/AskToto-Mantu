@@ -14,6 +14,9 @@ describe('Settings › Privacy › Background observation (R111, D-19)', () => {
   it('is rendered in the Privacy tab', () => {
     const root = readModuleSource(__dirname, './SettingsRoot').text
     const privacy = root.slice(root.indexOf("tab === 'privacy'"), root.indexOf("tab === 'meetings'"))
-    expect(privacy).toContain('<AmbientObservationSection />')
+    expect(privacy).toContain('<PrivacyObservationSections />')
+    const sections = readModuleSource(__dirname, './PrivacyObservationSections').text
+    expect(sections).toContain('<AmbientObservationSection />')
+    expect(sections).toContain('<TaskBrowserSection />')
   })
 })
