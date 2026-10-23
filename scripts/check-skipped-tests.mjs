@@ -158,6 +158,10 @@ const REASONS = [
       'qa/candidate-report-readback.test.ts :: rejects a swapped producer or CI identity inside otherwise valid members',
     exact: true,
     why: 'Runs the real Linux system unzip against owned synthetic ZIPs only on hosted GitHub CI. The metadata and report-validation cases in the same file run cross-platform.'
+  },
+  {
+    match: 'main/qa-voice-hooks.test.ts',
+    why: 'V08 QA chord source on a real named pipe (mkfifo): Windows has no POSIX FIFOs, so the three real-FIFO cases (open/close/kill, symlink-out-of-profile and regular-file refusals) run on macOS and Linux only. The FIFO path decision, the desktop sink and the QA-identity gating run on every platform.'
   }
 ]
 
@@ -172,7 +176,8 @@ const hostedCi = process.env.CI === 'true' && process.env.GITHUB_ACTIONS === 'tr
 // short-window scroll, managed-lock toggle): +3 on every platform.
 // Q06 added the POSIX read-only Open-copy case to history-actions.test.ts: +1 on win32 only.
 // Q12 added the POSIX-only canned-stderr ffmpeg stand-in case: +1 on win32 only.
-const BASELINE = { win32: 46, darwin: hostedCi ? 34 : 9, linux: hostedCi ? 29 : 32 }
+// V08 added three real-FIFO cases to qa-voice-hooks.test.ts (POSIX named pipes): +3 on win32 only.
+const BASELINE = { win32: 49, darwin: hostedCi ? 34 : 9, linux: hostedCi ? 29 : 32 }
 // windows/baseline.contract.test.ts skips its four pwsh-driven cases only off hosted CI on a host with no
 // `pwsh`; on hosted CI they must run, so the allowance never applies there.
 const PWSH_BASELINE_SKIPS = 4
