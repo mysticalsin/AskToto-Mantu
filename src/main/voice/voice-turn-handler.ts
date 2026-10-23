@@ -8,7 +8,9 @@
  *
  * Privacy: the text lives in this call only. The audit event carries a status and a class, never words.
  */
-import { ownerCommand, type ContextRecord } from '@shared/context-authority'
+import { mayProposeActions, ownerCommand, type ContextRecord } from '@shared/context-authority'
+import type { WalkthroughView } from '@shared/walkthrough-view'
+import { parseWalkthroughIntent, type WalkthroughIntent } from '../features/walkthrough/walkthrough-intent'
 import { VoiceAskSchema, type VoiceAsk } from '@shared/voice/voice-turn'
 import {
   createVoiceActionExecutor,
@@ -38,6 +40,8 @@ export type VoiceTurnOutcome =
   | { kind: 'clarify'; question: string; action: ClarifyAction; prepared: VoiceActionResult | null }
   /** G35: the question is over and nothing was done; `copy` says so. */
   | { kind: 'clarify_ended'; reason: ClarifyEndReason; copy: string }
+  /** G44: a walkthrough intent (start, check, pause, resume, stop) was handled; `view` is the renderer-safe state. */
+  | { kind: 'walkthrough'; status: string; view: WalkthroughView }
 
 export interface VoiceTurnPipelineDeps {
   router: VoiceRouterDeps
@@ -50,6 +54,15 @@ export interface VoiceTurnPipelineDeps {
    * `binding` is the live owner, session and task lineage (null when main cannot name one: no question is asked).
    */
   clarify?: { binding(): ClarifyBinding | null; now?(): number; ttlMs?: number }
+  /**
+   * G44, CAP-25. Present and `enabled()`: "walk me through ..." starts a guided walkthrough, and while one is live
+   * done/next/pause/resume/stop steer it. Owner commands only; the walkthrough guides and never acts for the owner.
+   */
+  walkthrough?: {
+    enabled(): boolean
+    active(): boolean
+    handle(intent: WalkthroughIntent): Promise<{ status: string; view: WalkthroughView }>
+  }
   audit?(event: 'voice.action', data: Record<string, string>): void
 }
 
@@ -90,6 +103,19 @@ export function createVoiceTurnPipeline(deps: VoiceTurnPipelineDeps): VoiceTurnP
       } else if (answer.kind === 'ended') {
         audit(`clarify_${answer.reason}`)
         return { kind: 'clarify_ended', reason: answer.reason, copy: answer.copy }
+      }
+    }
+    if (route === null && deps.walkthrough?.enabled() && mayProposeActions(record)) {
+      const intent = parseWalkthroughIntent(record.text, { active: deps.walkthrough.active() })
+      if (intent) {
+        // The claim is spent before anything starts, like an Ask: one hold, one effect.
+        if (!claim.valid() || !claim.consume()) {
+          audit('stale')
+          return { kind: 'stale' }
+        }
+        const handled = await deps.walkthrough.handle(intent)
+        audit(`walkthrough_${intent.kind}`)
+        return { kind: 'walkthrough', status: handled.status, view: handled.view }
       }
     }
     route ??= await router.route(record)
