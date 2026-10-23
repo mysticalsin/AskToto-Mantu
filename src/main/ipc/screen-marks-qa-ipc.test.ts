@@ -21,14 +21,19 @@ describe('QA mark placement IPC (G43)', () => {
 
   it('checks the sender, validates the input and places on the named screenshot', () => {
     const event = { sender: { id: 1 } }
-    const reply = handlers.get('screenMarks:qaPlace')?.(event, { screenshotId: 'obs-1', shape: { kind: 'point', x: 1, y: 2 } })
+    const reply = handlers.get('screenMarks:qaPlace')?.(event, {
+      screenshotId: 'obs-1',
+      shape: { kind: 'point', x: 1, y: 2 }
+    })
     expect(assertMainWindow).toHaveBeenCalledWith(event)
     expect(reply).toEqual({ ok: true, markId: 'm1' })
     expect(place).toHaveBeenCalledWith({ screenshotId: 'obs-1', shape: { kind: 'point', x: 1, y: 2 } })
   })
 
   it('refuses malformed input without placing', () => {
-    expect(handlers.get('screenMarks:qaPlace')?.({}, { screenshotId: '', shape: { kind: 'point', x: -5, y: 2 } })).toEqual({
+    expect(
+      handlers.get('screenMarks:qaPlace')?.({}, { screenshotId: '', shape: { kind: 'point', x: -5, y: 2 } })
+    ).toEqual({
       ok: false,
       reason: 'invalid'
     })
@@ -40,7 +45,9 @@ describe('QA mark placement IPC (G43)', () => {
     assertMainWindow.mockImplementation(() => {
       throw new Error('IPC refused')
     })
-    expect(() => handlers.get('screenMarks:qaPlace')?.({}, { screenshotId: 'obs-1', shape: { kind: 'point', x: 1, y: 2 } })).toThrow()
+    expect(() =>
+      handlers.get('screenMarks:qaPlace')?.({}, { screenshotId: 'obs-1', shape: { kind: 'point', x: 1, y: 2 } })
+    ).toThrow()
     expect(() => handlers.get('screenMarks:qaClear')?.({})).toThrow()
     expect(place).not.toHaveBeenCalled()
     expect(clear).not.toHaveBeenCalled()
@@ -59,7 +66,11 @@ describe('QA mark placement IPC (G43)', () => {
     expect(qaScreenMarksEnabled({ qaIdentity: true, packaged: true, env: { METIS_QA_SCREEN_MARKS: '1' } })).toBe(false)
     expect(qaScreenMarksEnabled({ qaIdentity: true, packaged: true, env: { ASKTOTO_USERDATA: '/p' } })).toBe(false)
     expect(
-      qaScreenMarksEnabled({ qaIdentity: true, packaged: true, env: { ASKTOTO_USERDATA: '/p', METIS_QA_SCREEN_MARKS: 'true' } })
+      qaScreenMarksEnabled({
+        qaIdentity: true,
+        packaged: true,
+        env: { ASKTOTO_USERDATA: '/p', METIS_QA_SCREEN_MARKS: 'true' }
+      })
     ).toBe(false)
   })
 })

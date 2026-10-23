@@ -64,7 +64,11 @@ export function createAnnotationWindows(deps: {
       return
     }
     if (!entry) {
-      entry = { win: deps.createWindow(display.id, { ...display.bounds }), bounds: { ...display.bounds }, visible: false }
+      entry = {
+        win: deps.createWindow(display.id, { ...display.bounds }),
+        bounds: { ...display.bounds },
+        visible: false
+      }
       open.set(display.id, entry)
     } else if (!sameBounds(entry.bounds, display.bounds)) {
       entry.win.setBounds({ ...display.bounds })
@@ -84,7 +88,9 @@ export function createAnnotationWindows(deps: {
         for (const id of [...open.keys()]) if (!live.has(id)) drop(id)
         for (const display of displays) syncOne(display, views.get(display.id) ?? [])
       } catch (error) {
-        deps.warn?.(`[screen-marks] annotation window failed: ${error instanceof Error ? error.message : String(error)}`)
+        deps.warn?.(
+          `[screen-marks] annotation window failed: ${error instanceof Error ? error.message : String(error)}`
+        )
       }
     },
     destroyAll() {

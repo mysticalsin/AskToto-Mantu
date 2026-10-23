@@ -21,7 +21,13 @@ import {
 } from './qa-fault-hook.mjs'
 
 /** Everything a QA-identity main bundle carries: the fault hook, the capture source, the chord FIFO and the desktop sink. */
-const ALL_QA_MARKERS = [QA_FAULT_MARKER, QA_CAPTURE_MARKER, QA_CHORD_MARKER, QA_DESKTOP_SINK_MARKER, QA_SCREEN_MARKS_MARKER].join(' ')
+const ALL_QA_MARKERS = [
+  QA_FAULT_MARKER,
+  QA_CAPTURE_MARKER,
+  QA_CHORD_MARKER,
+  QA_DESKTOP_SINK_MARKER,
+  QA_SCREEN_MARKS_MARKER
+].join(' ')
 
 type AsarHeaderEntry = {
   files?: Record<string, AsarHeaderEntry>
@@ -198,8 +204,14 @@ describe('assertQaFaultHookMatchesIdentity', () => {
   })
 
   it('Q15 (G43): a shipping package whose PRELOAD carries the QA screen marks bridge fails', async () => {
-    const archive = await buildArchive('asktoto', 'console.log("shipping build")\n', `/* ${QA_SCREEN_MARKS_BRIDGE_MARKER} */\n`)
-    expect(() => assertQaFaultHookMatchesIdentity(archive)).toThrow(/shipping package carries the QA screen marks bridge/)
+    const archive = await buildArchive(
+      'asktoto',
+      'console.log("shipping build")\n',
+      `/* ${QA_SCREEN_MARKS_BRIDGE_MARKER} */\n`
+    )
+    expect(() => assertQaFaultHookMatchesIdentity(archive)).toThrow(
+      /shipping package carries the QA screen marks bridge/
+    )
   })
 
   it('Q16 (G43): a shipping package whose main bundle carries the QA screen marks IPC fails', async () => {
@@ -209,7 +221,9 @@ describe('assertQaFaultHookMatchesIdentity', () => {
 
   it('Q17 (G43): a QA-identity package without the bridge in its preload fails', async () => {
     const archive = await buildArchive(QA_IDENTITY_PACKAGE_NAME, `/* ${ALL_QA_MARKERS} */\n`, 'void 0\n')
-    expect(() => assertQaFaultHookMatchesIdentity(archive)).toThrow(/QA-identity package lacks the QA screen marks bridge/)
+    expect(() => assertQaFaultHookMatchesIdentity(archive)).toThrow(
+      /QA-identity package lacks the QA screen marks bridge/
+    )
   })
 
   it('Q18 (G43): the gate looks for the names the screen marks QA code compiles in', () => {

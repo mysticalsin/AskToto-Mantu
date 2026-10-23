@@ -76,10 +76,16 @@ describe('annotation windows lifecycle (G43)', () => {
 
   it('follows a display bounds change and destroys the window of a removed display', () => {
     const { windows, created } = setup()
-    windows.sync(new Map([[1, [dot('a')]], [2, [dot('b')]]]), [
-      { id: 1, bounds: D1 },
-      { id: 2, bounds: D2 }
-    ])
+    windows.sync(
+      new Map([
+        [1, [dot('a')]],
+        [2, [dot('b')]]
+      ]),
+      [
+        { id: 1, bounds: D1 },
+        { id: 2, bounds: D2 }
+      ]
+    )
     const moved: Rect = { x: 0, y: 0, width: 2560, height: 1440 }
     windows.sync(new Map([[1, [dot('a')]]]), [{ id: 1, bounds: moved }])
     expect(created[0].win.bounds).toEqual(moved)

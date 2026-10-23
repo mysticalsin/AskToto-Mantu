@@ -43,7 +43,9 @@ describe('screen marks store (G43)', () => {
       ok: false,
       reason: 'out-of-image'
     })
-    expect(store.place({ screenshotId: 'obs-1', shape: { kind: 'box', x: 2800, y: 10, width: 200, height: 10 } })).toEqual({
+    expect(
+      store.place({ screenshotId: 'obs-1', shape: { kind: 'box', x: 2800, y: 10, width: 200, height: 10 } })
+    ).toEqual({
       ok: false,
       reason: 'out-of-image'
     })

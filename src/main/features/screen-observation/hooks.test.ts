@@ -4,7 +4,13 @@ import { createScreenObservation, type ScreenObservationDeps } from './screen-ob
 /** G43: the observation tells its marks consumer about each new frame and each revocation, and never breaks on it. */
 function make(over: Partial<ScreenObservationDeps> = {}) {
   return createScreenObservation({
-    captureOnce: async (r) => ({ image: `synthetic-${r.displayId}`, width: 2880, height: 1800, dispId: r.displayId, displayMismatch: false }),
+    captureOnce: async (r) => ({
+      image: `synthetic-${r.displayId}`,
+      width: 2880,
+      height: 1800,
+      dispId: r.displayId,
+      displayMismatch: false
+    }),
     cursorDisplayId: () => 3,
     privateViewOn: () => false,
     privateViewBlockedError: () => new Error('private'),

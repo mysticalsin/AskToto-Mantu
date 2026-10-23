@@ -9,13 +9,19 @@ import { QA_SCREEN_MARKS_ENV, QA_SCREEN_MARKS_IPC, QaPlaceMarkInputSchema } from
  */
 export function registerScreenMarksQaIpc(
   assertMainWindow: (event: IpcMainInvokeEvent) => void,
-  marks: { place(input: { screenshotId: string; shape: ScreenMarkShape }): PlaceMarkResult; clear(reason: string): void }
+  marks: {
+    place(input: { screenshotId: string; shape: ScreenMarkShape }): PlaceMarkResult
+    clear(reason: string): void
+  }
 ): void {
-  ipcMain.handle(QA_SCREEN_MARKS_IPC.place, (event, raw: unknown): PlaceMarkResult | { ok: false; reason: 'invalid' } => {
-    assertMainWindow(event)
-    const parsed = QaPlaceMarkInputSchema.safeParse(raw)
-    return parsed.success ? marks.place(parsed.data) : { ok: false, reason: 'invalid' }
-  })
+  ipcMain.handle(
+    QA_SCREEN_MARKS_IPC.place,
+    (event, raw: unknown): PlaceMarkResult | { ok: false; reason: 'invalid' } => {
+      assertMainWindow(event)
+      const parsed = QaPlaceMarkInputSchema.safeParse(raw)
+      return parsed.success ? marks.place(parsed.data) : { ok: false, reason: 'invalid' }
+    }
+  )
   ipcMain.handle(QA_SCREEN_MARKS_IPC.clear, (event) => {
     assertMainWindow(event)
     marks.clear('qa-clear')

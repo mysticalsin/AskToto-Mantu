@@ -6,7 +6,11 @@ import type { MarkView } from '@shared/screen-marks'
  * The real visuals are designed in G45. Every mark arrives already in display points, and the window is exactly the
  * display, so a mark is positioned absolutely at its coordinates. Nothing here is interactive (the window is click-through).
  */
-export function AnnotationLayer({ subscribe }: { subscribe: (listener: (marks: MarkView[]) => void) => () => void }): React.JSX.Element {
+export function AnnotationLayer({
+  subscribe
+}: {
+  subscribe: (listener: (marks: MarkView[]) => void) => () => void
+}): React.JSX.Element {
   const [marks, setMarks] = useState<MarkView[]>([])
   useEffect(() => subscribe(setMarks), [subscribe])
   return (
@@ -14,7 +18,12 @@ export function AnnotationLayer({ subscribe }: { subscribe: (listener: (marks: M
       {marks.map((mark) => {
         if (mark.kind === 'box') {
           return (
-            <div key={mark.markId} className="annotation-box" data-mark={mark.kind} style={{ left: mark.x, top: mark.y, width: mark.width, height: mark.height }} />
+            <div
+              key={mark.markId}
+              className="annotation-box"
+              data-mark={mark.kind}
+              style={{ left: mark.x, top: mark.y, width: mark.width, height: mark.height }}
+            />
           )
         }
         if (mark.kind === 'arrow') return <ArrowMark key={mark.markId} mark={mark} />

@@ -33,7 +33,9 @@ body,
   background: var(--color-accent);
   box-shadow: 0 0 0 4px var(--color-accent-glow);
   color: white;
-  font: 600 10px/16px system-ui, sans-serif;
+  font:
+    600 10px / 16px system-ui,
+    sans-serif;
   text-align: center;
 }
 .annotation-arrow {

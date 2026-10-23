@@ -56,7 +56,9 @@ describe('screen mark transform math (G43, CAP-25)', () => {
   })
 
   it('adds the region origin for a region capture', () => {
-    const t = deriveMarkTransform(live({ screenshot: { width: 1440, height: 900 }, region: { x: 0.5, y: 0.25, width: 0.5, height: 0.5 } }))
+    const t = deriveMarkTransform(
+      live({ screenshot: { width: 1440, height: 900 }, region: { x: 0.5, y: 0.25, width: 0.5, height: 0.5 } })
+    )
     // 0.5 * 1440 = 720 points wide shown in 1440 pixels: scale 2; origin at (720, 225).
     expect(t).toMatchObject({ scale: 2, offsetX: 720, offsetY: 225 })
     expect(mapPointToDisplay(t!, { x: 0, y: 0 })).toEqual({ x: 720, y: 225 })
@@ -82,11 +84,16 @@ describe('resolving a mark against the live observation', () => {
   const box = markFor(l, { kind: 'box', x: 200, y: 100, width: 400, height: 300 })
 
   it('projects each kind into display points', () => {
-    expect(resolveMark(box, l)).toMatchObject({ visible: true, view: { kind: 'box', x: 100, y: 50, width: 200, height: 150 } })
-    expect(resolveMark(markFor(l, { kind: 'arrow', from: { x: 0, y: 0 }, to: { x: 2880, y: 1800 } }), l)).toMatchObject({
+    expect(resolveMark(box, l)).toMatchObject({
       visible: true,
-      view: { kind: 'arrow', from: { x: 0, y: 0 }, to: { x: 1440, y: 900 } }
+      view: { kind: 'box', x: 100, y: 50, width: 200, height: 150 }
     })
+    expect(resolveMark(markFor(l, { kind: 'arrow', from: { x: 0, y: 0 }, to: { x: 2880, y: 1800 } }), l)).toMatchObject(
+      {
+        visible: true,
+        view: { kind: 'arrow', from: { x: 0, y: 0 }, to: { x: 1440, y: 900 } }
+      }
+    )
     expect(resolveMark(markFor(l, { kind: 'label-anchor', x: 400, y: 400, stepNumber: 2 }), l)).toMatchObject({
       visible: true,
       view: { kind: 'label-anchor', x: 200, y: 200, stepNumber: 2 }
@@ -113,12 +120,20 @@ describe('resolving a mark against the live observation', () => {
     // The display is now reported at 2880x1800 points (scale factor 1); the same image maps proportionally.
     const after = live({ displayBounds: { x: 0, y: 0, width: 2880, height: 1800 } })
     const r = resolveMark(box, after)
-    expect(r).toMatchObject({ visible: true, recomputed: true, view: { kind: 'box', x: 200, y: 100, width: 400, height: 300 } })
+    expect(r).toMatchObject({
+      visible: true,
+      recomputed: true,
+      view: { kind: 'box', x: 200, y: 100, width: 400, height: 300 }
+    })
   })
 
   it('recomputes after a display bounds change and moves the mark with it', () => {
     const after = live({ displayBounds: { x: 0, y: 0, width: 720, height: 450 } })
-    expect(resolveMark(box, after)).toMatchObject({ visible: true, recomputed: true, view: { x: 50, y: 25, width: 100, height: 75 } })
+    expect(resolveMark(box, after)).toMatchObject({
+      visible: true,
+      recomputed: true,
+      view: { x: 50, y: 25, width: 100, height: 75 }
+    })
   })
 
   it('reports recomputed false when nothing changed', () => {
@@ -133,7 +148,10 @@ describe('resolving a mark against the live observation', () => {
   })
 
   it('hides when the live observation has no usable geometry', () => {
-    expect(resolveMark(box, live({ screenshot: { width: 0, height: 0 } }))).toEqual({ visible: false, reason: 'no-transform' })
+    expect(resolveMark(box, live({ screenshot: { width: 0, height: 0 } }))).toEqual({
+      visible: false,
+      reason: 'no-transform'
+    })
   })
 })
 
@@ -141,7 +159,9 @@ describe('mark shape schema', () => {
   it('accepts the four kinds and refuses unknown fields, NaN and negatives', () => {
     expect(ScreenMarkShapeSchema.safeParse({ kind: 'point', x: 1, y: 2 }).success).toBe(true)
     expect(ScreenMarkShapeSchema.safeParse({ kind: 'box', x: 1, y: 2, width: 3, height: 4 }).success).toBe(true)
-    expect(ScreenMarkShapeSchema.safeParse({ kind: 'arrow', from: { x: 0, y: 0 }, to: { x: 5, y: 5 } }).success).toBe(true)
+    expect(ScreenMarkShapeSchema.safeParse({ kind: 'arrow', from: { x: 0, y: 0 }, to: { x: 5, y: 5 } }).success).toBe(
+      true
+    )
     expect(ScreenMarkShapeSchema.safeParse({ kind: 'label-anchor', x: 1, y: 2, stepNumber: 15 }).success).toBe(true)
     expect(ScreenMarkShapeSchema.safeParse({ kind: 'label-anchor', x: 1, y: 2, stepNumber: 16 }).success).toBe(false)
     expect(ScreenMarkShapeSchema.safeParse({ kind: 'point', x: Number.NaN, y: 2 }).success).toBe(false)

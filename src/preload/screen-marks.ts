@@ -5,7 +5,10 @@ declare const __METIS_QA_IDENTITY__: boolean
 
 export interface ScreenMarksQaApi {
   screenMarks: {
-    qaPlace(screenshotId: string, shape: ScreenMarkShape): Promise<PlaceMarkResult | { ok: false; reason: 'unavailable' }>
+    qaPlace(
+      screenshotId: string,
+      shape: ScreenMarkShape
+    ): Promise<PlaceMarkResult | { ok: false; reason: 'unavailable' }>
     qaClear(): Promise<{ ok: boolean }>
   }
 }

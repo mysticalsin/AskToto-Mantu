@@ -10,12 +10,14 @@ import type { MarkView } from '../shared/screen-marks'
 const MAX_MARKS = 24
 const KINDS = new Set(['point', 'box', 'arrow', 'label-anchor'])
 const num = (v: unknown): boolean => typeof v === 'number' && Number.isFinite(v)
-const pt = (v: unknown): boolean => typeof v === 'object' && v !== null && num((v as { x?: unknown }).x) && num((v as { y?: unknown }).y)
+const pt = (v: unknown): boolean =>
+  typeof v === 'object' && v !== null && num((v as { x?: unknown }).x) && num((v as { y?: unknown }).y)
 
 function wellFormed(payload: unknown): payload is MarkView[] {
   if (!Array.isArray(payload) || payload.length > MAX_MARKS) return false
   return payload.every((m: Record<string, unknown> | null) => {
-    if (typeof m !== 'object' || m === null || typeof m.markId !== 'string' || !KINDS.has(m.kind as string)) return false
+    if (typeof m !== 'object' || m === null || typeof m.markId !== 'string' || !KINDS.has(m.kind as string))
+      return false
     if (m.kind === 'arrow') return pt(m.from) && pt(m.to)
     if (m.kind === 'box') return pt(m) && num(m.width) && num(m.height)
     return pt(m)

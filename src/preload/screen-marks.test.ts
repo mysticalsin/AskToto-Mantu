@@ -13,9 +13,15 @@ describe('window.toto.screenMarks is QA-identity only (G43)', () => {
     const invoke = vi.fn(async () => ({ ok: true, markId: 'm1' }))
     const qa = createScreenMarksQaApi({ invoke })
     expect(await qa.screenMarks.qaPlace('obs-1', { kind: 'point', x: 1, y: 2 })).toEqual({ ok: true, markId: 'm1' })
-    expect(invoke).toHaveBeenCalledWith('screenMarks:qaPlace', { screenshotId: 'obs-1', shape: { kind: 'point', x: 1, y: 2 } })
+    expect(invoke).toHaveBeenCalledWith('screenMarks:qaPlace', {
+      screenshotId: 'obs-1',
+      shape: { kind: 'point', x: 1, y: 2 }
+    })
     const missing = createScreenMarksQaApi({ invoke: vi.fn().mockRejectedValue(new Error('no handler')) })
-    expect(await missing.screenMarks.qaPlace('obs-1', { kind: 'point', x: 1, y: 2 })).toEqual({ ok: false, reason: 'unavailable' })
+    expect(await missing.screenMarks.qaPlace('obs-1', { kind: 'point', x: 1, y: 2 })).toEqual({
+      ok: false,
+      reason: 'unavailable'
+    })
     expect(await missing.screenMarks.qaClear()).toEqual({ ok: false })
   })
 

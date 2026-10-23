@@ -44,7 +44,14 @@ function make() {
     warn: vi.fn()
   })
   const shot = (id: string) => ({
-    observation: { observationId: id, sequence: 1, sourceId: 'display:1', scope: 'display' as const, generation: 0, capturedAt: 1 },
+    observation: {
+      observationId: id,
+      sequence: 1,
+      sourceId: 'display:1',
+      scope: 'display' as const,
+      generation: 0,
+      capturedAt: 1
+    },
     image: 'x',
     width: 2880,
     height: 1800,
@@ -60,7 +67,10 @@ describe('screen marks runtime (G43)', () => {
     const { core, wins, shot } = make()
     core.hooks.onIssued(shot('obs-1'), { reason: 'ask' })
     expect(wins).toHaveLength(0)
-    expect(core.place({ screenshotId: 'obs-1', shape: { kind: 'point', x: 1440, y: 900 } })).toEqual({ ok: true, markId: 'm1' })
+    expect(core.place({ screenshotId: 'obs-1', shape: { kind: 'point', x: 1440, y: 900 } })).toEqual({
+      ok: true,
+      markId: 'm1'
+    })
     expect(wins).toHaveLength(1)
     expect(wins[0].shown).toBe(true)
     expect(wins[0].last).toEqual([{ markId: 'm1', kind: 'point', x: 720, y: 450 }])
@@ -83,18 +93,22 @@ describe('screen marks runtime (G43)', () => {
     expect(wins[0].shown).toBe(false)
   })
 
-  it.each(['session-ended', 'screen-locked', 'suspended', 'private-view', 'permission-revoked', 'display-removed'] as const)(
-    'clears marks and hides the window on %s',
-    (reason) => {
-      const { core, wins, shot } = make()
-      core.hooks.onIssued(shot('obs-1'), { reason: 'ask' })
-      core.place({ screenshotId: 'obs-1', shape: { kind: 'point', x: 1, y: 1 } })
-      core.hooks.onRevoked(reason, 1)
-      expect(core.markCount()).toBe(0)
-      expect(wins[0].destroyed).toBe(false)
-      expect(wins[0].shown).toBe(false)
-    }
-  )
+  it.each([
+    'session-ended',
+    'screen-locked',
+    'suspended',
+    'private-view',
+    'permission-revoked',
+    'display-removed'
+  ] as const)('clears marks and hides the window on %s', (reason) => {
+    const { core, wins, shot } = make()
+    core.hooks.onIssued(shot('obs-1'), { reason: 'ask' })
+    core.place({ screenshotId: 'obs-1', shape: { kind: 'point', x: 1, y: 1 } })
+    core.hooks.onRevoked(reason, 1)
+    expect(core.markCount()).toBe(0)
+    expect(wins[0].destroyed).toBe(false)
+    expect(wins[0].shown).toBe(false)
+  })
 
   it('destroys every window on sign-out, owner switch and quit', () => {
     for (const end of ['signed-out', 'owner-switch', 'quit'] as const) {

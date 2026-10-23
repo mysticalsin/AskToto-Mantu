@@ -35,7 +35,10 @@ export function createScreenMarksRuntime(
     screen.on('display-metrics-changed', () => core.displaysChanged())
   })
   app.once('will-quit', () => core.destroy('quit'))
-  if (QA_IDENTITY_BUILD && qaScreenMarksEnabled({ qaIdentity: QA_IDENTITY_BUILD, packaged: app.isPackaged, env: process.env }))
+  if (
+    QA_IDENTITY_BUILD &&
+    qaScreenMarksEnabled({ qaIdentity: QA_IDENTITY_BUILD, packaged: app.isPackaged, env: process.env })
+  )
     registerScreenMarksQaIpc(assertMainWindow, core)
   return core
 }

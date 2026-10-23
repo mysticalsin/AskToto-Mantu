@@ -16,7 +16,8 @@ describe('screen marks wiring (G43)', () => {
   it('destroys the windows on quit and defers screen events until the app is ready', () => {
     expect(runtime).toMatch(/app\.once\('will-quit', \(\) => core\.destroy\('quit'\)\)/)
     expect(runtime).toMatch(/app\.whenReady\(\)\.then\(/)
-    for (const event of ['display-added', 'display-removed', 'display-metrics-changed']) expect(runtime).toContain(event)
+    for (const event of ['display-added', 'display-removed', 'display-metrics-changed'])
+      expect(runtime).toContain(event)
   })
 
   it('registers the QA placement IPC only under the compile-time QA identity', () => {
