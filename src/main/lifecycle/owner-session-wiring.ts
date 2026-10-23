@@ -15,8 +15,11 @@ import { getResponsivenessRecorder } from '../infra/observability/responsiveness
 import { bindMeetingMicRendererReset } from '../meeting-mic-capture-authority'
 import { QA_IDENTITY_BUILD } from '../qa-identity'
 import { getPublishedSettingsObservation } from '../settings-observation'
+import { listMeetings } from '../history-read'
+import { decryptSecret, encryptSecret } from '../secrets'
 import type { SpeechDesktopHooks } from '../speech-desktop-boundary'
 import type { RendererResetSource } from '../features/meetings/session-closure'
+import { bootstrapAssistants } from './assistants-wiring'
 import { bootstrapDictationMemory } from './dictation-memory-wiring'
 import { bootstrapLiveMeetingJournal } from './live-meeting-journal-wiring'
 import { bindMeetingSpeechInvalidation, bootstrapMeetingSpeech } from './meeting-speech-persistence-wiring'
@@ -139,6 +142,19 @@ export function createOwnerSessionWiring(deps: OwnerSessionWiringDeps): OwnerSes
   })
   // G53: real files a turn produced, by artifactId; the registry is the seam producers (export, tools) register into.
   const artifacts = composeArtifacts({ ipcMain, assertMainWindow, requireAuth: () => requireAuth() })
+  // G48 assistants: the sealed, owner- and tenant-scoped assistant store; built-in modes are its read-only system assistants.
+  bootstrapAssistants({
+    ipcMain,
+    authorizeSender,
+    requireAuth: () => requireAuth(),
+    ownerSession,
+    userDataPath: () => app.getPath('userData'),
+    seal: encryptSecret,
+    open: decryptSecret,
+    customModes: () => getPublishedSettingsObservation()?.settings.customModes ?? [],
+    meetings: async () => (await listMeetings()).map((row) => ({ file: row.file, mode: row.mode })),
+    audit: (record) => auditLog('assistant.store', { ...record })
+  })
   return {
     ownerSession,
     authorizeSender,
