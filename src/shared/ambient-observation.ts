@@ -19,7 +19,7 @@ export const AMBIENT_OBSERVATION_ROWS: readonly AmbientObservationRow[] = [
     id: 'foreground-app',
     label: 'Which app is in front',
     detail:
-      'Used only to refresh the optional on-device screen reader when you switch apps, and to check that a voice action reached the right app. It does not run while both are off.',
+      'Used only to refresh the optional on-device screen reader when you switch apps, and to check that a voice action reached the right app. It does not run while both are off, and the voice-action check stops a minute after it was last needed.',
     keeps: 'Held in memory only. Never saved, logged, sent or reported, and only the latest app is remembered.'
   }
 ] as const
