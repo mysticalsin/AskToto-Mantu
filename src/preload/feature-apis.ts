@@ -29,6 +29,7 @@ export function createFeaturePreloadApis(ipc: IpcRenderer) {
     ...createScreenMarksPreloadApi(ipc),
     ...createTaskBrowserPreloadApi(ipc),
     ...createExportPreloadApi(ipc),
-    ...createWalkthroughPreloadApi(ipc)
+    ...createWalkthroughPreloadApi(ipc),
+    ...createSpokenRepliesPreloadApi(ipc)
   }
 }

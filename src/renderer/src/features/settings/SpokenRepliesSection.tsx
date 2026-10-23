@@ -145,8 +145,8 @@ export function SpokenRepliesSection({
         label={SPOKEN_REPLIES_COPY.toggleLabel}
         desc={SPOKEN_REPLIES_COPY.toggleDesc}
         on={on}
-        onChange={(value) => change({ speakReplies: value })}
-        disabled={managed}
+        onChange={(value) => patch({ spokenReplies: { ...spoken, speakReplies: value } })}
+        disabled={settings.managedKeys.includes('spokenReplies') || managed}
         managedChip={managed}
       >
         {!on && !managed && (

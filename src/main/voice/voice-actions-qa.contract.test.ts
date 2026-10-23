@@ -66,7 +66,9 @@ describe('voice actions default: QA on, release Preview (off)', () => {
     const runtime = readModuleSource(__dirname, './voice-actions-runtime').text
     expect(runtime).toContain('resolveVoiceActionsEnabled(voice(), { qaIdentity: deps.qaIdentity })')
     const index = readModuleSource(__dirname, '../index').text
-    expect(index).toMatch(/createVoiceActionsRuntime\(\{\r?\n\s+qaIdentity: QA_IDENTITY_BUILD,/)
+    expect(index).toMatch(
+      /createVoiceActionsRuntime\(\{\r?\n(?:\s+spokenReplies: [\w.]+,\r?\n)?\s+qaIdentity: QA_IDENTITY_BUILD,/
+    )
   })
 })
 
