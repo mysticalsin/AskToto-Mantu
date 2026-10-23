@@ -28,7 +28,6 @@ import {
   FolderOpen,
   IdCard,
   Info,
-  Lock,
   MessageSquare,
   Mic,
   RotateCcw,
@@ -76,6 +75,8 @@ import { LazyTextarea } from '../../ui/LazyText'
 import { ManagedChip } from '../../ui/ManagedChip'
 import { ctl } from '../../ui/ctl'
 import { DustSetup } from './DustSetup'
+import { AmbientObservationSection } from './AmbientObservationSection'
+import { SensitiveDataSection } from './SensitiveDataSection'
 import { OperatorReportingSection, OperatorSourceLine } from './OperatorReportingSection'
 import { ReplayHint, SaveErrorLine } from './SettingsNotices'
 import { CalendarTab } from './CalendarTab'
@@ -840,6 +841,13 @@ export function Settings({
                   />
                 </Section>
                 <Section
+                  title="Background observation"
+                  desc="What Métis notices in the background, and what it keeps."
+                  icon={Eye}
+                >
+                  <AmbientObservationSection />
+                </Section>
+                <Section
                   title="Conversation memory"
                   desc="Whether a new question you type remembers the previous questions and answers."
                   icon={MessageSquare}
@@ -878,21 +886,7 @@ export function Settings({
                     </div>
                   </ToggleRow>
                 </Section>
-                <Section title="Sensitive data" desc="Keep secrets out of what's sent to AI providers." icon={Lock}>
-                  <ToggleRow
-                    label="Redact secrets before sending to AI"
-                    desc="Strips credit-card numbers, API keys, SSNs, and private keys from the captured transcript before it goes to a cloud model. Your typed questions and the saved transcript are never changed."
-                    on={settings.redactSensitive}
-                    onChange={(v) => reportedPatch({ redactSensitive: v })}
-                    disabled={settings.managedKeys.includes('redactSensitive')}
-                  >
-                    <div className="mt-1.5 text-[11px] leading-snug text-[color:var(--color-danger)]">
-                      This only scrubs text. Screenshots sent for screen-based questions are NOT redacted; anything
-                      visible on-screen (passwords, IDs, open documents) goes to the provider as-is. Turn on Private
-                      View before capturing a screen you don't want sent.
-                    </div>
-                  </ToggleRow>
-                </Section>
+                <SensitiveDataSection settings={settings} patch={reportedPatch} />
                 <Section title="Permissions" desc="Status of the OS permissions Métis needs." icon={ShieldCheck}>
                   <PermissionsSection />
                 </Section>
