@@ -5,7 +5,7 @@ vi.mock('electron', () => ({
   ipcMain: { handle: (channel: string, fn: (event: unknown, raw?: unknown) => unknown) => handlers.set(channel, fn) }
 }))
 
-import { registerScreenMarksQaIpc } from './screen-marks-qa-ipc'
+import { qaScreenMarksEnabled, registerScreenMarksQaIpc } from './screen-marks-qa-ipc'
 
 describe('QA mark placement IPC (G43)', () => {
   const place = vi.fn(() => ({ ok: true as const, markId: 'm1' }))
@@ -49,5 +49,17 @@ describe('QA mark placement IPC (G43)', () => {
   it('clears through the same checked path', () => {
     expect(handlers.get('screenMarks:qaClear')?.({})).toEqual({ ok: true })
     expect(clear).toHaveBeenCalled()
+  })
+
+  it('is enabled only for a packaged QA identity on an isolated profile with the flag set to 1', () => {
+    const env = { ASKTOTO_USERDATA: '/isolated/profile', METIS_QA_SCREEN_MARKS: '1' }
+    expect(qaScreenMarksEnabled({ qaIdentity: true, packaged: true, env })).toBe(true)
+    expect(qaScreenMarksEnabled({ qaIdentity: false, packaged: true, env })).toBe(false)
+    expect(qaScreenMarksEnabled({ qaIdentity: true, packaged: false, env })).toBe(false)
+    expect(qaScreenMarksEnabled({ qaIdentity: true, packaged: true, env: { METIS_QA_SCREEN_MARKS: '1' } })).toBe(false)
+    expect(qaScreenMarksEnabled({ qaIdentity: true, packaged: true, env: { ASKTOTO_USERDATA: '/p' } })).toBe(false)
+    expect(
+      qaScreenMarksEnabled({ qaIdentity: true, packaged: true, env: { ASKTOTO_USERDATA: '/p', METIS_QA_SCREEN_MARKS: 'true' } })
+    ).toBe(false)
   })
 })

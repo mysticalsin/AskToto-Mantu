@@ -80,6 +80,8 @@ export default defineConfig({
     }
   },
   preload: {
+    // Compile-time QA identity literal, as in main: a shipping preload drops the QA-only bridges (src/preload/screen-marks.ts).
+    define: { __METIS_QA_IDENTITY__: JSON.stringify(QA_IDENTITY) },
     // Bundle zod into the preload (a sandboxed preload cannot require() externalized deps).
     build: {
       externalizeDeps: { exclude: ['zod'] },

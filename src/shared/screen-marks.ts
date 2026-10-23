@@ -219,19 +219,8 @@ export function resolveMark(mark: ScreenMark, live: LiveObservation | null): Mar
   return { visible: true, view, recomputed: !sameTransform(mark.transform, transform) }
 }
 
-/** Channel names. Preloads repeat these as literals (a sandboxed preload cannot share a chunk); a test pins them. */
-export const SCREEN_MARKS_IPC = {
-  /** main to the annotation window: the marks to draw on that display. */
-  marks: 'annotation:marks',
-  /** QA-only, main window to main: place a mark on a named screenshot (METIS_QA_SCREEN_MARKS=1). */
-  qaPlace: 'screenMarks:qaPlace',
-  qaClear: 'screenMarks:qaClear'
-} as const
-
-export const QaPlaceMarkInputSchema = z
-  .object({ screenshotId: z.string().min(1).max(64), shape: ScreenMarkShapeSchema })
-  .strict()
-export type QaPlaceMarkInput = z.infer<typeof QaPlaceMarkInputSchema>
+/** The one channel shipping builds use: main to the annotation window. Preloads repeat it as a literal; a test pins it. */
+export const SCREEN_MARKS_IPC = { marks: 'annotation:marks' } as const
 
 export type PlaceMarkRefusal =
   | 'no-observation'

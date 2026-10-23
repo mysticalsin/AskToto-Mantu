@@ -1,17 +1,20 @@
 import type { IpcRenderer } from 'electron'
 import type { PlaceMarkResult, ScreenMarkShape } from '../shared/screen-marks'
 
-/**
- * `window.toto.screenMarks` (G43): the QA-only way for the renderer's walkthrough or voice side to place a mark on a
- * named screenshot. Main registers the handler only under METIS_QA_SCREEN_MARKS=1; otherwise the call rejects and
- * this returns a refusal. Channel names are literals (equal to SCREEN_MARKS_IPC, pinned by a test).
- */
-export function createScreenMarksPreloadApi(ipc: Pick<IpcRenderer, 'invoke'>): {
+declare const __METIS_QA_IDENTITY__: boolean
+
+export interface ScreenMarksQaApi {
   screenMarks: {
     qaPlace(screenshotId: string, shape: ScreenMarkShape): Promise<PlaceMarkResult | { ok: false; reason: 'unavailable' }>
     qaClear(): Promise<{ ok: boolean }>
   }
-} {
+}
+
+/**
+ * The QA bridge itself. Channel names are literals (equal to QA_SCREEN_MARKS_IPC, pinned by a test) and double as the
+ * packaged-bytes marker for the preload bundle. Reached only through createScreenMarksPreloadApi under the QA identity.
+ */
+export function createScreenMarksQaApi(ipc: Pick<IpcRenderer, 'invoke'>): ScreenMarksQaApi {
   return {
     screenMarks: {
       async qaPlace(screenshotId, shape) {
@@ -30,4 +33,13 @@ export function createScreenMarksPreloadApi(ipc: Pick<IpcRenderer, 'invoke'>): {
       }
     }
   }
+}
+
+/**
+ * `window.toto.screenMarks` (G43) exists only in the QA-identity build: the identity is a compile-time literal, so a
+ * shipping preload carries neither the bridge nor its channel names, and scripts/lib/qa-fault-hook.mjs fails packaging
+ * if it does. Everywhere else this returns nothing.
+ */
+export function createScreenMarksPreloadApi(ipc: Pick<IpcRenderer, 'invoke'>): Partial<ScreenMarksQaApi> {
+  return __METIS_QA_IDENTITY__ ? createScreenMarksQaApi(ipc) : {}
 }

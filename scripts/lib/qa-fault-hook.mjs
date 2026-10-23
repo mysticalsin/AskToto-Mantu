@@ -15,12 +15,18 @@ export const QA_CAPTURE_MARKER = 'METIS_QA_CAPTURE_FILE'
 export const QA_CHORD_MARKER = 'METIS_QA_CHORD_FIFO'
 /** The env name only the QA recording desktop sink (src/main/qa-voice-hooks.ts QA_DESKTOP_SINK_ENV) puts into a main-process bundle. */
 export const QA_DESKTOP_SINK_MARKER = 'METIS_QA_DESKTOP_SINK'
+/** The env name only the QA mark placement IPC (src/shared/screen-marks-qa.ts QA_SCREEN_MARKS_ENV) puts into a main-process bundle. */
+export const QA_SCREEN_MARKS_MARKER = 'METIS_QA_SCREEN_MARKS'
+/** The channel only the QA mark bridge (src/preload/screen-marks.ts) puts into a PRELOAD bundle: window.toto.screenMarks. */
+export const QA_SCREEN_MARKS_BRIDGE_MARKER = 'screenMarks:qaPlace'
 /** Every QA-only hook whose presence must match the package identity, checked in this order. */
 const QA_HOOK_MARKERS = [
   { marker: QA_FAULT_MARKER, hook: 'QA fault hook' },
   { marker: QA_CAPTURE_MARKER, hook: 'QA capture hook' },
   { marker: QA_CHORD_MARKER, hook: 'QA chord FIFO hook' },
-  { marker: QA_DESKTOP_SINK_MARKER, hook: 'QA desktop sink hook' }
+  { marker: QA_DESKTOP_SINK_MARKER, hook: 'QA desktop sink hook' },
+  { marker: QA_SCREEN_MARKS_MARKER, hook: 'QA screen marks hook' },
+  { marker: QA_SCREEN_MARKS_BRIDGE_MARKER, hook: 'QA screen marks bridge', bundles: 'preload' }
 ]
 /** The packaged package.json name of the QA-identity variant (build/qa-identity.electron-builder.yml extraMetadata). */
 export const QA_IDENTITY_PACKAGE_NAME = 'asktoto-qa'
@@ -46,11 +52,13 @@ export function assertQaFaultHookMatchesIdentity(archive) {
     const qaIdentity =
       JSON.parse(readPackedFile(archive, headerSize, packageJson, 'package.json').toString('utf8')).name ===
       QA_IDENTITY_PACKAGE_NAME
-    const mainBundles = [...rawByPosix.keys()]
-      .filter((entry) => /^\/out\/main\/.+\.(?:c?js|jsc)$/.test(entry))
-      .map((entry) => readPackedFile(archive, headerSize, packedFilesByPosix.get(entry), rawByPosix.get(entry)))
-    for (const { marker, hook } of QA_HOOK_MARKERS) {
-      const carriesHook = mainBundles.some((bytes) => bytes.includes(marker))
+    const bundlesIn = (dir) =>
+      [...rawByPosix.keys()]
+        .filter((entry) => new RegExp(`^/out/${dir}/.+\\.(?:c?js|jsc)$`).test(entry))
+        .map((entry) => readPackedFile(archive, headerSize, packedFilesByPosix.get(entry), rawByPosix.get(entry)))
+    const bundles = { main: bundlesIn('main'), preload: bundlesIn('preload') }
+    for (const { marker, hook, bundles: where = 'main' } of QA_HOOK_MARKERS) {
+      const carriesHook = bundles[where].some((bytes) => bytes.includes(marker))
       if (carriesHook !== qaIdentity) {
         throw new Error(
           qaIdentity

@@ -7,6 +7,7 @@ import type { Writable } from 'node:stream'
 import { afterEach, describe, expect, it } from 'vitest'
 import { installQaFaultHook } from '../../src/main/qa-identity'
 import { QA_CAPTURE_ENV } from '../../src/main/qa-capture-source'
+import { QA_SCREEN_MARKS_ENV, QA_SCREEN_MARKS_IPC } from '../../src/shared/screen-marks-qa'
 import { QA_CHORD_FIFO_ENV, QA_DESKTOP_SINK_ENV } from '../../src/main/qa-voice-hooks'
 import {
   assertQaFaultHookMatchesIdentity,
@@ -14,11 +15,13 @@ import {
   QA_CHORD_MARKER,
   QA_DESKTOP_SINK_MARKER,
   QA_FAULT_MARKER,
-  QA_IDENTITY_PACKAGE_NAME
+  QA_IDENTITY_PACKAGE_NAME,
+  QA_SCREEN_MARKS_BRIDGE_MARKER,
+  QA_SCREEN_MARKS_MARKER
 } from './qa-fault-hook.mjs'
 
 /** Everything a QA-identity main bundle carries: the fault hook, the capture source, the chord FIFO and the desktop sink. */
-const ALL_QA_MARKERS = [QA_FAULT_MARKER, QA_CAPTURE_MARKER, QA_CHORD_MARKER, QA_DESKTOP_SINK_MARKER].join(' ')
+const ALL_QA_MARKERS = [QA_FAULT_MARKER, QA_CAPTURE_MARKER, QA_CHORD_MARKER, QA_DESKTOP_SINK_MARKER, QA_SCREEN_MARKS_MARKER].join(' ')
 
 type AsarHeaderEntry = {
   files?: Record<string, AsarHeaderEntry>
@@ -37,19 +40,31 @@ afterEach(async () => {
 
 /** Pack a temp directory holding a package.json { name } and an out/main/index.js that does or does not
  *  contain the QA fault marker — a stand-in for a real electron-builder app.asar. */
-async function buildArchive(name: string, mainSource: string): Promise<string> {
+async function buildArchive(name: string, mainSource: string, preloadSource?: string): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), 'asktoto-qa-fault-hook-'))
   dirs.push(root)
   const src = join(root, 'stage')
   const dest = join(root, 'app.asar')
-  await writeStagedPackage(src, dest, name, mainSource)
+  await writeStagedPackage(src, dest, name, mainSource, preloadSource)
   return dest
 }
 
-async function writeStagedPackage(src: string, dest: string, name: string, mainSource: string): Promise<void> {
+async function writeStagedPackage(
+  src: string,
+  dest: string,
+  name: string,
+  mainSource: string,
+  preloadSource?: string
+): Promise<void> {
   await mkdir(join(src, 'out', 'main'), { recursive: true })
   await writeFile(join(src, 'package.json'), JSON.stringify({ name }))
   await writeFile(join(src, 'out', 'main', 'index.js'), mainSource)
+  // The QA-identity preload carries the window.toto.screenMarks bridge (G43); a shipping one carries a plain bundle.
+  await mkdir(join(src, 'out', 'preload'), { recursive: true })
+  await writeFile(
+    join(src, 'out', 'preload', 'index.js'),
+    preloadSource ?? (name === QA_IDENTITY_PACKAGE_NAME ? `/* ${QA_SCREEN_MARKS_BRIDGE_MARKER} */\n` : 'void 0\n')
+  )
   // @electron/asar resolves with the writable stream returned by out.end(), before the stream
   // lifecycle has finished. Wait for the real writable completion before any synchronous asar read.
   const output = await createPackage(src, dest)
@@ -180,5 +195,25 @@ describe('assertQaFaultHookMatchesIdentity', () => {
   it('Q14 (V08): the gate looks for the env names the voice hooks compile in', () => {
     expect(QA_CHORD_MARKER).toBe(QA_CHORD_FIFO_ENV)
     expect(QA_DESKTOP_SINK_MARKER).toBe(QA_DESKTOP_SINK_ENV)
+  })
+
+  it('Q15 (G43): a shipping package whose PRELOAD carries the QA screen marks bridge fails', async () => {
+    const archive = await buildArchive('asktoto', 'console.log("shipping build")\n', `/* ${QA_SCREEN_MARKS_BRIDGE_MARKER} */\n`)
+    expect(() => assertQaFaultHookMatchesIdentity(archive)).toThrow(/shipping package carries the QA screen marks bridge/)
+  })
+
+  it('Q16 (G43): a shipping package whose main bundle carries the QA screen marks IPC fails', async () => {
+    const archive = await buildArchive('asktoto', `process.env.${QA_SCREEN_MARKS_MARKER}\n`)
+    expect(() => assertQaFaultHookMatchesIdentity(archive)).toThrow(/shipping package carries the QA screen marks hook/)
+  })
+
+  it('Q17 (G43): a QA-identity package without the bridge in its preload fails', async () => {
+    const archive = await buildArchive(QA_IDENTITY_PACKAGE_NAME, `/* ${ALL_QA_MARKERS} */\n`, 'void 0\n')
+    expect(() => assertQaFaultHookMatchesIdentity(archive)).toThrow(/QA-identity package lacks the QA screen marks bridge/)
+  })
+
+  it('Q18 (G43): the gate looks for the names the screen marks QA code compiles in', () => {
+    expect(QA_SCREEN_MARKS_MARKER).toBe(QA_SCREEN_MARKS_ENV)
+    expect(QA_SCREEN_MARKS_BRIDGE_MARKER).toBe(QA_SCREEN_MARKS_IPC.place)
   })
 })
