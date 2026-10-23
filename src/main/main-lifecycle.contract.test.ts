@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 import { sourceIndexOf } from '../../scripts/lib/source-layout'
+import { claimStartup } from './lifecycle/startup-gate'
 
 /**
  * Source-contract tests for the main-process lifecycle findings (MQA-155, MQA-172). Same pattern as
@@ -87,16 +88,28 @@ describe('MQA-155 — a failed post-sweep source refresh is observed, never fabr
 })
 
 describe('MQA-172 — a second launch after a failed boot window recreates it instead of doing nothing', () => {
-  /** Execute the real `app.on('second-instance', ...)` registration and hand back the handler it installs. */
+  /** Run the real claimStartup with the `reveal:` expression lifted from index.ts; hand back the installed handler. */
   const secondInstanceHandler = (reveal: (reason: string, options: { focus?: boolean }) => void): (() => void) => {
-    const src = sliceBetween("app.on('second-instance'", 'app.whenReady()')
+    const src = sliceBetween('!claimStartup({', 'argv: handleSmokeReopenProbe')
+    const expr = /reveal: (\(\) => reveal\([^\n]*?\)),\s*$/.exec(src.replace(/\n\s*/g, ' ').replace(/, $/, ','))?.[1]
+    expect(expr, 'reveal hook in claimStartup call').toBeDefined()
+    const hook = new Function('reveal', `return ${expr}`)(reveal) as () => void
     let handler: (() => void) | null = null
     const app = {
-      on: (_event: string, fn: () => void) => {
+      requestSingleInstanceLock: () => true,
+      quit: () => {},
+      on: (_event: string, fn: (...a: never[]) => void) => {
         handler = fn
       }
     }
-    ;(new Function('app', 'reveal', src) as (...args: unknown[]) => void)(app, reveal)
+    claimStartup({
+      app,
+      dialog: { showErrorBox: () => {} },
+      platform: 'darwin',
+      systemVersion: '15.0',
+      reveal: hook,
+      argv: () => {}
+    })
     expect(handler, 'second-instance handler was never registered').not.toBeNull()
     return handler as unknown as () => void
   }

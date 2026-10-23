@@ -197,6 +197,8 @@ import * as screenPerm from './capture-permissions/screen-permission-runtime'
 import { isOrphanScreenSourcesRejection } from './capture-permissions/loopback-grant'
 import { registerScreenPermissionIpc } from './ipc/screen-permission-ipc'
 import { applyLoginItem, registerSettingsSystemIpc } from './ipc/settings-system-ipc'
+import { claimStartup } from './lifecycle/startup-gate'
+import { reconcileLoginItem } from './lifecycle/login-item-reconcile'
 import { registerHistoryTraceIpc } from './ipc/history-trace-ipc'
 import { configureSidecarRegistry, createSidecarRegistry } from './infra/process/registry'
 import { runBootSidecarReaper } from './infra/process/reaper'
@@ -2394,12 +2396,8 @@ function refreshLoginItemOpenAtLoginCache(): boolean | null {
 const publicLoginItemOpenAtLogin = (s: Settings): boolean => loginItemOpenAtLoginCache ?? s.launchAtLogin
 
 function reconcileLaunchAtLogin(): boolean {
-  const want = getSettings().launchAtLogin
-  const current = refreshLoginItemOpenAtLoginCache()
-  if (current === null || current === want) return false
-  app.setLoginItemSettings({ openAtLogin: want })
-  loginItemOpenAtLoginCache = want
-  return true
+  const setOs = (openAtLogin: boolean): void => app.setLoginItemSettings({ openAtLogin })
+  return reconcileLoginItem({ want: getSettings().launchAtLogin, readOs: refreshLoginItemOpenAtLoginCache, setOs })
 }
 
 function publicSettings(): PublicSettings {
@@ -9157,13 +9155,11 @@ protocol.registerSchemesAsPrivileged([
   }
 ])
 
-if (!app.requestSingleInstanceLock()) {
-  app.quit()
+if (
+  !claimStartup({ app, dialog, reveal: () => reveal('second-instance', { focus: true }), argv: handleSmokeReopenProbe })
+) {
+  // G85: unsupported OS or lost the single-instance lock; quit requested, nothing booted.
 } else {
-  app.on('second-instance', (_event, commandLine) => {
-    reveal('second-instance', { focus: true })
-    if (typeof handleSmokeReopenProbe === 'function') handleSmokeReopenProbe(commandLine)
-  })
   app
     .whenReady()
     .then(async () => {
