@@ -682,6 +682,8 @@ import { createCommandConfirmRuntime } from './voice/command-confirm-runtime'
 import { registerCommandConfirmIpc } from './ipc/command-confirm-ipc'
 import { shortcutClaimKey } from './shortcut-claim-key'
 import { ensureMetisCommandRuntime, getMetisCommandRuntime } from './metis-command-register'
+import { smokeReopenAction } from './smoke-reopen-action'
+import { installHandoff } from './features/handoff/handoff-wiring'
 import {
   consumeSecurityLimit,
   RATE_LIMIT_USER_MESSAGE,
@@ -4557,12 +4559,7 @@ function writeSmokeParkState(w: Electron.BrowserWindow): void {
 /** Park (or hide) for packaged-smoke RV prepare, and latch the park against cursor-watch restore. */
 function handleSmokeReopenProbe(commandLine: readonly string[]): boolean {
   if (process.env.ASKTOTO_SMOKE_REOPEN_PROBE !== '1') return false
-  const action = commandLine
-    .map((arg) => arg.match(/^--metis-smoke-reopen=(park-window|hide-window|tray-show)$/)?.[1])
-    .find(
-      (value): value is 'park-window' | 'hide-window' | 'tray-show' =>
-        value === 'park-window' || value === 'hide-window' || value === 'tray-show'
-    )
+  const action = smokeReopenAction(commandLine)
   if (!action) return false
 
   const w = ensureWindow()
@@ -9123,6 +9120,8 @@ if (
 ) {
   // G85: unsupported OS or lost the single-instance lock; quit requested, nothing booted.
 } else {
+  const handoff = installHandoff({ app, commandControl, getWindow: () => win, audit: auditLog })
+  app.on('second-instance', (_event, commandLine) => handoff.fromArgv(commandLine))
   app
     .whenReady()
     .then(async () => {

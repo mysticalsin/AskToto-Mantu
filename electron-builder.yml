@@ -186,6 +186,12 @@ extraResources:
     to: operator
   - from: resources/license-lease
     to: license-lease
+# G37: the scoped handoff scheme, metis://handoff?e=... (src/main/features/handoff). Registers the scheme in the macOS
+# Info.plist (CFBundleURLTypes) and the Windows installer; the app also claims it at runtime when packaged.
+protocols:
+  name: Métis handoff
+  schemes:
+    - metis
 mac:
   category: public.app-category.productivity
   # D-26: system-audio taps need macOS 14.4. Equals MIN_MACOS.label in src/shared/platform-support.ts (contract-tested);

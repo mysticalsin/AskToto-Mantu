@@ -423,6 +423,9 @@ export type AuditEvent =
   // G40: the separate decision before Métis takes foreground control, and Escape giving it back. Action id and closed enums only.
   | 'task.focus_requested'
   | 'task.escape_release'
+  // G37: a scoped handoff envelope was shown for review, or refused. Origin (allowlisted) and kind, or a closed reason; never payload text.
+  | 'handoff.accepted'
+  | 'handoff.rejected'
   // Metadata-only: the global voice hold chord watcher (V01). A kind and an event type, never a key or text.
   | 'voice.chord'
   // WP02 contract names (content-free by schema).
