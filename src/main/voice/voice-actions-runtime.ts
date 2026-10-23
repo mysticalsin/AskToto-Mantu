@@ -7,6 +7,7 @@
  * renderer which turn to capture; the renderer then goes through the ordinary lease path with its own purpose.
  */
 import { randomUUID } from 'node:crypto'
+import type { ClarifyDropReason } from './clarify-protocol'
 import type { CommandMicAvailabilityResult, CommandSpeechResult } from '@shared/command-speech'
 import { assertCloudOnlyAllowsEngine, resolveEnterpriseLiveProfile } from '@shared/enterprise-live-profile'
 import type { InputSessionLease, InputSessionStopReason } from '@shared/input-session'
@@ -66,7 +67,11 @@ export interface VoiceActionsRuntimeDeps {
    * What to do with a recognized voice turn (V03): route it to an action, a confirmation or the Ask path. Absent
    * only in tests that do not exercise actions; the recognized text is then dropped, never given to anything else.
    */
-  turns?: { handle(text: string, claim: VoiceTurnClaim): void }
+  turns?: {
+    handle(text: string, claim: VoiceTurnClaim): void
+    /** G35: the pending clarifying question is gone (Stop, sign-out, owner switch, a meeting, a renderer reset). */
+    dropClarification?(reason: ClarifyDropReason): void
+  }
   /**
    * Dictation (G22) shares this runtime's hooks. `ports` is where the operating system binds the focused field and
    * inserts text (G23 on macOS, G24 on Windows). Absent in production until then: a dictation hold is refused as
@@ -104,6 +109,18 @@ export interface VoiceActionsRuntime {
   /** The Settings chord recorder opened or closed (validated here). While open, a hold opens no turn. */
   setChordRecorderActive(raw: unknown): { ok: boolean }
   dispose(): void
+}
+
+/** Which input-session stops end a pending clarification. A plain end of the hold (`user-stop`) does not: that is how an answer turn finishes. */
+const CLARIFY_DROPPING_STOPS: Partial<Record<InputSessionStopReason, ClarifyDropReason>> = {
+  'sign-out': 'sign_out',
+  'auth-revoked': 'sign_out',
+  'owner-replaced': 'owner_switch',
+  'window-hidden': 'revoked',
+  'system-suspend': 'revoked',
+  'screen-locked': 'revoked',
+  shutdown: 'revoked',
+  'renderer-reset': 'revoked'
 }
 
 const PRESENCE_RECHECK_MS = 30_000
@@ -215,6 +232,7 @@ export function createVoiceActionsRuntime(deps: VoiceActionsRuntimeDeps): VoiceA
   // A renderer that went away cannot have its recorder open any more.
   const onRendererReset = (): void => {
     recorderOpenUntil = 0
+    deps.turns?.dropClarification?.('revoked')
     session.onRendererReset()
     dictation.onRendererReset()
   }
@@ -240,11 +258,14 @@ export function createVoiceActionsRuntime(deps: VoiceActionsRuntimeDeps): VoiceA
     },
     onChordEvent: (event) => session.onChordEvent(event),
     onHardStop(reason) {
+      const dropped = CLARIFY_DROPPING_STOPS[reason]
+      if (dropped) deps.turns?.dropClarification?.(dropped)
       chord.onInputSessionStop(reason)
       session.onHardStop(reason)
       dictation.onHardStop(reason)
     },
     onMeetingReserved() {
+      deps.turns?.dropClarification?.('meeting')
       session.onMeetingReserved()
       dictation.onMeetingReserved()
     },

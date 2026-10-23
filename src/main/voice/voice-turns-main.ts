@@ -18,6 +18,8 @@ import { auditLog } from '../logger'
 import { desktopActionTaskDeps } from '../tasks/desktop-action-task-runtime'
 import { VOICE_ACTIONS_IPC } from '@shared/voice/voice-turn'
 import type { VoiceActionsRuntimeDeps } from './voice-actions-runtime'
+import { randomUUID } from 'node:crypto'
+import type { ClarifyDropReason } from './clarify-protocol'
 import { createVoiceTurnPipeline, type VoiceTurnOutcome } from './voice-turn-handler'
 
 interface WindowLike {
@@ -46,7 +48,16 @@ export function createMainVoiceTurns(deps: MainVoiceTurnsDeps): NonNullable<Voic
       return null // a broken gate is a denial
     }
   }
+  // G35 lineage: one clarification belongs to one owner window, one voice session and one task. Dropping the
+  // pending question rotates both ids, so nothing minted before a Stop or sign-out can answer after it.
+  let lineage = { sessionId: randomUUID(), taskId: randomUUID() }
   const pipeline = createVoiceTurnPipeline({
+    clarify: {
+      binding() {
+        const id = live()?.ownerWebContentsId
+        return typeof id === 'number' ? { ownerId: `wc:${id}`, ...lineage } : null
+      }
+    },
     // No classifier is bound in 2.12 (see the header), so the provider-readiness answer never matters.
     router: { providerReady: () => false },
     executor: {
@@ -91,5 +102,11 @@ export function createMainVoiceTurns(deps: MainVoiceTurnsDeps): NonNullable<Voic
     onOutcome: deps.onOutcome,
     audit: (event, data) => auditLog(event, data)
   })
-  return { handle: (text, claim) => pipeline.handle(text, claim) }
+  return {
+    handle: (text, claim) => pipeline.handle(text, claim),
+    dropClarification(reason: ClarifyDropReason) {
+      pipeline.dropClarification(reason)
+      lineage = { sessionId: randomUUID(), taskId: randomUUID() }
+    }
+  }
 }

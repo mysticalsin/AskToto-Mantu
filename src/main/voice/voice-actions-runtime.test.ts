@@ -708,3 +708,29 @@ describe('dictation inside the voice actions runtime (G22)', () => {
     expect(h.activation.mintFromHardware).not.toHaveBeenCalled()
   })
 })
+
+describe('clarification lifetime (G35)', () => {
+  it.each([
+    ['sign-out', 'sign_out'],
+    ['auth-revoked', 'sign_out'],
+    ['owner-replaced', 'owner_switch'],
+    ['screen-locked', 'revoked'],
+    ['renderer-reset', 'revoked']
+  ] as const)('a %s stop drops the pending clarifying question', (stop, expected) => {
+    const dropClarification = vi.fn()
+    const h = setup({ turns: { handle: vi.fn(), dropClarification } })
+    h.runtime.onHardStop(stop)
+    expect(dropClarification).toHaveBeenCalledWith(expected)
+  })
+
+  it('the normal end of the hold keeps it, and a meeting starting or a renderer reset drops it', () => {
+    const dropClarification = vi.fn()
+    const h = setup({ turns: { handle: vi.fn(), dropClarification } })
+    h.runtime.onHardStop('user-stop')
+    expect(dropClarification).not.toHaveBeenCalled()
+    h.runtime.onMeetingReserved()
+    expect(dropClarification).toHaveBeenCalledWith('meeting')
+    h.runtime.onRendererReset()
+    expect(dropClarification).toHaveBeenCalledWith('revoked')
+  })
+})
