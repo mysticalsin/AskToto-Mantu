@@ -14,6 +14,7 @@ import {
 import { createNonceLedger } from './nonce-ledger'
 import { envelopeTextFromUrl, extractHandoffUrls } from './handoff-url'
 import { createHandoffService } from './handoff-service'
+import { createHandoffRateLimit } from './handoff-rate-limit'
 
 const NOW = 1_800_000_000_000
 const origin = HANDOFF_ORIGINS[0]
@@ -192,12 +193,17 @@ describe('handoff url', () => {
 })
 
 describe('handoff service', () => {
-  function setup(over: { propose?: (r: DesktopActionRequest) => Promise<boolean> } = {}) {
+  function setup(
+    over: { propose?: (r: DesktopActionRequest) => Promise<boolean>; busy?: boolean; now?: () => number } = {}
+  ) {
     const audit = vi.fn()
     const propose = vi.fn(over.propose ?? (async () => true))
+    const now = over.now ?? (() => NOW)
     const service = createHandoffService({
-      now: () => NOW,
-      ledger: createNonceLedger({ now: () => NOW }),
+      now,
+      ledger: createNonceLedger({ now }),
+      rateLimit: { take: () => true }, // the limiter has its own describe below
+      isBusy: () => over.busy === true,
       propose,
       audit
     })
@@ -214,7 +220,7 @@ describe('handoff service', () => {
       id: 'desktop.create_note',
       args: { title: 'Follow up', body: 'Send the deck' }
     })
-    expect(audit).toHaveBeenCalledWith('handoff.accepted', { origin, kind: 'note' })
+    expect(audit).toHaveBeenCalledWith('handoff.accepted', { claimedOrigin: origin, kind: 'note' })
   })
 
   it('rejects replay, and audits a reason without payload text', async () => {
@@ -255,5 +261,64 @@ describe('handoff service', () => {
     const boom = setup({ propose: async () => Promise.reject(new Error('Send the deck')) })
     expect(await boom.service.receive(url(make()))).toEqual({ ok: false, reason: 'not_shown' })
     expect(JSON.stringify(boom.audit.mock.calls)).not.toContain('Send the deck')
+  })
+})
+
+describe('handoff is unauthenticated: rate limit, busy, provenance', () => {
+  const url = (text: string): string => `metis://handoff?e=${Buffer.from(text).toString('base64url')}`
+  const n = (i: number): string => nonceOf(100 + i)
+  const setup = (over: { busy?: boolean } = {}) => {
+    const audit = vi.fn()
+    const propose = vi.fn(async (_r: DesktopActionRequest) => true)
+    const service = createHandoffService({
+      now: () => NOW,
+      ledger: createNonceLedger({ now: () => NOW }),
+      rateLimit: createHandoffRateLimit(),
+      isBusy: () => over.busy === true,
+      propose,
+      audit
+    })
+    return { service, audit, propose }
+  }
+
+  it('allows 1 per 10 s and 3 per 5 min; excess is rate_limited with no card', async () => {
+    let now = NOW
+    const audit = vi.fn()
+    const propose = vi.fn(async () => true)
+    const service = createHandoffService({
+      now: () => now,
+      ledger: createNonceLedger({ now: () => now }),
+      rateLimit: createHandoffRateLimit(),
+      isBusy: () => false,
+      propose,
+      audit
+    })
+    const send = (i: number) =>
+      service.receive(url(make({ nonce: n(i), issuedAt: now - 1000, expiresAt: now + 600_000 })))
+    expect((await send(1)).ok).toBe(true)
+    expect(await send(2)).toEqual({ ok: false, reason: 'rate_limited' })
+    now += 10_000
+    expect((await send(3)).ok).toBe(true)
+    now += 10_000
+    expect((await send(4)).ok).toBe(true)
+    now += 10_000
+    expect(await send(5)).toEqual({ ok: false, reason: 'rate_limited' })
+    expect(propose).toHaveBeenCalledTimes(3)
+    expect(audit).toHaveBeenLastCalledWith('handoff.rejected', { reason: 'rate_limited' })
+    now += 5 * 60_000
+    expect((await send(6)).ok).toBe(true)
+  })
+
+  it('never replaces a pending card: busy, audited, no proposal, nonce kept', async () => {
+    const busy = setup({ busy: true })
+    expect(await busy.service.receive(url(make()))).toEqual({ ok: false, reason: 'busy' })
+    expect(busy.propose).not.toHaveBeenCalled()
+    expect(busy.audit).toHaveBeenLastCalledWith('handoff.rejected', { reason: 'busy' })
+  })
+
+  it('the audit never carries an unknown origin string', async () => {
+    const { service, audit } = setup()
+    await service.receive(url(make({ origin: 'evil.example' as never })))
+    expect(JSON.stringify(audit.mock.calls)).not.toContain('evil.example')
   })
 })

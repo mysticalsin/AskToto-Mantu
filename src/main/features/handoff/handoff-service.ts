@@ -9,16 +9,20 @@ import { contextRecord, type ContextRecord } from '@shared/context-authority'
 import type { DesktopActionRequest } from '@shared/desktop-actions'
 import { parseHandoffEnvelope, type HandoffOrigin, type HandoffRejectReason } from './handoff-envelope'
 import { envelopeTextFromUrl } from './handoff-url'
+import type { HandoffRateLimit } from './handoff-rate-limit'
 import type { NonceLedger } from './nonce-ledger'
 
 export type HandoffAuditEvent = 'handoff.accepted' | 'handoff.rejected'
-export type HandoffAuditDetail = { reason: HandoffRejectReason } | { origin: HandoffOrigin; kind: 'note' }
+export type HandoffAuditDetail = { reason: HandoffRejectReason } | { claimedOrigin: HandoffOrigin; kind: 'note' }
 
 export type HandoffReceipt = { ok: true; record: ContextRecord } | { ok: false; reason: HandoffRejectReason }
 
 export interface HandoffServiceDeps {
   now: () => number
   ledger: NonceLedger
+  rateLimit: HandoffRateLimit
+  /** A card or confirmed action is already pending: an outside request never replaces it. */
+  isBusy(): boolean
   /** Show the confirmation card for this request. Resolves false when no card could be shown. */
   propose(request: DesktopActionRequest): Promise<boolean>
   audit(event: HandoffAuditEvent, detail: HandoffAuditDetail): void
@@ -39,6 +43,8 @@ export function createHandoffService(deps: HandoffServiceDeps): HandoffService {
       if (!text.ok) return refuse(text.reason)
       const parsed = parseHandoffEnvelope(text.text, deps.now())
       if (!parsed.ok) return refuse(parsed.reason)
+      if (deps.isBusy()) return refuse('busy')
+      if (!deps.rateLimit.take(deps.now())) return refuse('rate_limited')
       await deps.ledger.hydrate()
       const verdict = deps.ledger.consume(parsed.envelope.nonce, parsed.envelope.expiresAt)
       if (verdict === 'replayed') return refuse('replayed')
@@ -50,7 +56,7 @@ export function createHandoffService(deps: HandoffServiceDeps): HandoffService {
         shown = false
       }
       if (!shown) return refuse('not_shown')
-      deps.audit('handoff.accepted', { origin: parsed.envelope.origin, kind: parsed.envelope.payload.kind })
+      deps.audit('handoff.accepted', { claimedOrigin: parsed.envelope.origin, kind: parsed.envelope.payload.kind })
       const { title, body } = parsed.envelope.payload.data
       return { ok: true, record: contextRecord('connector', body ? `${title}\n${body}` : title) }
     }

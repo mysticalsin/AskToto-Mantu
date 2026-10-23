@@ -20,7 +20,11 @@ function url(nonce: string): string {
 const nonce = (c: string): string => c.repeat(64)
 
 function setup(
-  over: { window?: { isDestroyed(): boolean; webContents: { id: number } } | null; packaged?: boolean } = {}
+  over: {
+    pending?: boolean
+    window?: { isDestroyed(): boolean; webContents: { id: number } } | null
+    packaged?: boolean
+  } = {}
 ) {
   let openUrl: ((e: { preventDefault(): void }, u: string) => void) | undefined
   const app: HandoffApp = {
@@ -32,15 +36,16 @@ function setup(
     whenReady: () => Promise.resolve(),
     getPath: () => '/nonexistent-synthetic-userdata'
   }
-  const proposeChecked = vi.fn(async () => ({ proposalId: 'p', nonce: 'n', argsHash: 'h' }))
+  const proposeChecked = vi.fn(async (..._args: unknown[]) => ({ proposalId: 'p', nonce: 'n', argsHash: 'h' }))
   const audit = vi.fn()
   const window = over.window === undefined ? { isDestroyed: () => false, webContents: { id: 7 } } : over.window
   const runtime = installHandoff({
     app,
-    commandControl: { proposeChecked },
+    commandControl: { proposeChecked, hasPendingProposal: () => over.pending === true },
     getWindow: () => window,
     audit,
     argv: [],
+    rateLimit: { take: () => true },
     now: () => NOW,
     sleep: async () => undefined
   })
@@ -64,8 +69,17 @@ describe('installHandoff', () => {
     expect(h.proposeChecked).toHaveBeenCalledTimes(2)
     expect(h.proposeChecked.mock.calls[0]).toEqual([
       { webContentsId: 7, revision: 1 },
-      { id: 'desktop.create_note', args: { title: 'Synthetic title' } }
+      { id: 'desktop.create_note', args: { title: 'Synthetic title' } },
+      { provenance: 'external' }
     ])
+  })
+
+  it('does not touch a pending card', async () => {
+    const h = setup({ pending: true })
+    h.fire(url(nonce('e')))
+    await settle()
+    expect(h.proposeChecked).not.toHaveBeenCalled()
+    expect(h.audit).toHaveBeenCalledWith('handoff.rejected', { reason: 'busy' })
   })
 
   it('replays are refused and nothing is proposed without a live window', async () => {

@@ -1,5 +1,5 @@
 import { randomBytes, timingSafeEqual } from 'node:crypto'
-import { previewForDesktopAction, type CommandPreviewResult } from '@shared/command-preview'
+import { previewForDesktopAction, previewFromOutside, type CommandPreviewResult } from '@shared/command-preview'
 import { isDesktopAdapterId, type DesktopActionRequest, type DesktopActionResult } from '@shared/desktop-actions'
 import {
   COMMAND_PROPOSAL_TTL_ASSISTIVE_MS,
@@ -172,7 +172,7 @@ export class CommandControl {
   propose(
     owner: { webContentsId: number; revision: number },
     request: DesktopActionRequest,
-    options: { dependsOn?: readonly string[] } = {}
+    options: { dependsOn?: readonly string[]; provenance?: 'external' } = {}
   ): CommandControlProposal {
     this.clearCurrent()
     const dependencies = checkDependsOn(options.dependsOn ?? [])
@@ -189,7 +189,8 @@ export class CommandControl {
     }) as DesktopActionRequest
     // The card states exactly what will run, from main's template for this request. Without a preview there is no
     // card: the person is never asked to approve a consequence they cannot read.
-    const display = (this.deps.previewFor ?? ((r) => previewForDesktopAction(r, this.deps.platform)))(requestSnapshot)
+    const shown = (this.deps.previewFor ?? ((r) => previewForDesktopAction(r, this.deps.platform)))(requestSnapshot)
+    const display = shown && options.provenance === 'external' ? previewFromOutside(shown) : shown
     if (!display) {
       this.emit()
       void this.release('revoked')
@@ -227,7 +228,7 @@ export class CommandControl {
   proposeChecked(
     owner: { webContentsId: number; revision: number },
     request: DesktopActionRequest,
-    options: { dependsOn?: readonly string[]; stillWanted?: () => boolean } = {}
+    options: { dependsOn?: readonly string[]; stillWanted?: () => boolean; provenance?: 'external' } = {}
   ): Promise<CommandControlProposal | null> {
     if (!this.deps.preflight) {
       try {
@@ -242,7 +243,7 @@ export class CommandControl {
   private async proposeAfterPreflight(
     owner: { webContentsId: number; revision: number },
     request: DesktopActionRequest,
-    options: { dependsOn?: readonly string[]; stillWanted?: () => boolean }
+    options: { dependsOn?: readonly string[]; stillWanted?: () => boolean; provenance?: 'external' }
   ): Promise<CommandControlProposal | null> {
     const checked = await this.runPreflight(request, 'propose')
     if (options.stillWanted && !options.stillWanted()) return null
@@ -264,6 +265,11 @@ export class CommandControl {
       // A broken check never counts as permission. There is no safe specific copy, so the generic one is used.
       return { ok: false, notice: { code: 'check_failed', copy: "Métis can't do this right now." } }
     }
+  }
+
+  /** A card is on screen or a confirmed action is still being dispatched. Outside requests never replace it. */
+  hasPendingProposal(): boolean {
+    return this.current !== null || this.confirming !== null
   }
 
   getState(): CommandControlState {

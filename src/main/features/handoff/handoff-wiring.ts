@@ -8,6 +8,7 @@ import type { DesktopActionRequest } from '@shared/desktop-actions'
 import type { CommandControlProposal } from '../../command-control'
 import { scheduleCaptureDeadline } from '../../infra/scheduler/capture-deadline'
 import { createFileNonceStore } from './nonce-file-store'
+import { createHandoffRateLimit, type HandoffRateLimit } from './handoff-rate-limit'
 import { createNonceLedger } from './nonce-ledger'
 import { createHandoffService, type HandoffAuditDetail, type HandoffAuditEvent } from './handoff-service'
 import { extractHandoffUrls, HANDOFF_SCHEME } from './handoff-url'
@@ -29,14 +30,17 @@ export interface HandoffDeps {
   commandControl: {
     proposeChecked(
       owner: { webContentsId: number; revision: number },
-      request: DesktopActionRequest
+      request: DesktopActionRequest,
+      options: { provenance: 'external' }
     ): Promise<CommandControlProposal | null>
+    hasPendingProposal(): boolean
   }
   /** The overlay window, if there is a live one. Its id becomes the card's owner. */
   getWindow(): { isDestroyed(): boolean; webContents: { id: number } } | null
   audit(event: HandoffAuditEvent, detail: HandoffAuditDetail): void
   argv?: readonly string[]
   now?: () => number
+  rateLimit?: HandoffRateLimit
   sleep?: (ms: number) => Promise<void>
 }
 
@@ -58,6 +62,8 @@ export function installHandoff(deps: HandoffDeps): HandoffRuntime {
     service = createHandoffService({
       now,
       ledger,
+      rateLimit: deps.rateLimit ?? createHandoffRateLimit(),
+      isBusy: () => deps.commandControl.hasPendingProposal(),
       audit: deps.audit,
       propose: async (request) => {
         const liveOwner = (): { webContentsId: number } | null => {
@@ -73,7 +79,8 @@ export function installHandoff(deps: HandoffDeps): HandoffRuntime {
         return (
           (await deps.commandControl.proposeChecked(
             { webContentsId: owner.webContentsId, revision: ++revision },
-            request
+            request,
+            { provenance: 'external' }
           )) !== null
         )
       }

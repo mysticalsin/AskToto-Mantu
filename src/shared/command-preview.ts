@@ -76,3 +76,15 @@ export function previewForDesktopAction(
     }
   }
 }
+
+/**
+ * The card for a request that came from outside Métis (G37 handoff). The text says so in its title and the person's
+ * own words stay quoted as the argument. The origin claim itself is never shown as trusted: it is unauthenticated.
+ */
+export function previewFromOutside(result: CommandPreviewResult): CommandPreviewResult {
+  const title =
+    result.actionId === 'desktop.create_note'
+      ? 'Another app asks Métis to create a note'
+      : `Another app asks Métis: ${result.preview.title.charAt(0).toLowerCase()}${result.preview.title.slice(1)}`
+  return { ...result, preview: { ...result.preview, title } }
+}

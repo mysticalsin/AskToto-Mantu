@@ -5,6 +5,10 @@
  * `parseHandoffEnvelope` only decides whether the envelope is well formed, fresh, from an allowlisted origin and
  * unaltered, and turns its payload into the one desktop request the owner will be asked to confirm.
  *
+ * EVERY HANDOFF IS UNAUTHENTICATED: the origin field is a claim, and the allowlist only filters accidents. Any page
+ * that can open `metis://` can mint a valid envelope, because the digest is not keyed. Safety comes from the owner's
+ * confirmation, a rate limit, never replacing a pending card, and a card that says it came from outside Métis.
+ *
  * The digest is an integrity check over every field (SHA-256 over a canonical encoding), not authentication: anyone
  * can compute it, so it proves the fields were not changed in transit and nothing more. Trust comes from the origin
  * allowlist, the single-use nonce, the short window and, above all, the owner's confirmation. No key or secret is
@@ -38,7 +42,9 @@ export const HANDOFF_REJECT_REASONS = [
   'replayed',
   'ledger_full',
   'not_a_handoff_url',
-  'not_shown'
+  'not_shown',
+  'busy',
+  'rate_limited'
 ] as const
 export type HandoffRejectReason = (typeof HANDOFF_REJECT_REASONS)[number]
 
