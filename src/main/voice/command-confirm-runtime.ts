@@ -11,7 +11,12 @@ import { startForegroundWatcher, type ForegroundWatcher } from '../foreground-wa
 import { createDesktopPermissionProbes } from '../desktop-permission-probes'
 import { activatePid } from '../mac-helper'
 import { mainLog } from '../logger'
-import { desktopActionTaskDeps, setDesktopActionGestureSource } from '../tasks/desktop-action-task-runtime'
+import type { TaskCardRuntime } from '../ipc/task-card-ipc'
+import {
+  desktopActionTaskCards,
+  desktopActionTaskDeps,
+  setDesktopActionGestureSource
+} from '../tasks/desktop-action-task-runtime'
 import { createGestureBindings } from './gesture-binding'
 import { createCommandPreflight } from './command-preflight'
 import { createConfirmFocus } from './confirm-focus'
@@ -31,6 +36,8 @@ export interface CommandConfirmRuntime {
   deps: Pick<CommandConfirmationDeps, 'execute' | 'recoverTasks' | 'preflight' | 'card' | 'isAssistiveTechnologyOn'> &
     Required<Pick<CommandConfirmationDeps, 'stopTasks'>>
   takeRecoveryNotices(): Promise<MetisCommandRecoveryNotice[]>
+  /** G33: the sidecar's task cards, served by the same shared bridge. */
+  taskCards: TaskCardRuntime
   /** G34: the owner started a gesture (hold chord, panel command). Main captures what is in front right now. */
   gestureStarted(owner: TrustedInputOwner, sessionId: string): void
   dispose(): void
@@ -86,6 +93,7 @@ export function createCommandConfirmRuntime(options: CommandConfirmRuntimeOption
       isAssistiveTechnologyOn: () => app.isAccessibilitySupportEnabled()
     },
     takeRecoveryNotices: tasks.takeRecoveryNotices,
+    taskCards: desktopActionTaskCards(),
     gestureStarted: (owner, sessionId) => {
       gestures.begin({ webContentsId: owner.webContentsId, revision: owner.contextRevision }, sessionId)
     },

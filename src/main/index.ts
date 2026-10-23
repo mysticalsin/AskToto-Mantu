@@ -680,8 +680,6 @@ import { initLogging, mainLog, auditLog, auditLogPath } from './logger'
 import { CommandConfirmation } from './command-confirmation'
 import { createCommandConfirmRuntime } from './voice/command-confirm-runtime'
 import { registerCommandConfirmIpc } from './ipc/command-confirm-ipc'
-import { registerTaskCardIpc } from './ipc/task-card-ipc'
-import { desktopActionTaskCards } from './tasks/desktop-action-task-runtime'
 import { shortcutClaimKey } from './shortcut-claim-key'
 import { ensureMetisCommandRuntime, getMetisCommandRuntime } from './metis-command-register'
 import {
@@ -8927,8 +8925,7 @@ function registerIpc(): void {
     }
   })
   if (voiceActions) registerVoiceActionsIpc(ipcMain, assertMainWindow, voiceActions)
-  registerCommandConfirmIpc(ipcMain, assertMainWindow, commandConfirm)
-  registerTaskCardIpc(ipcMain, assertMainWindow, desktopActionTaskCards(), () => win)
+  registerCommandConfirmIpc(ipcMain, assertMainWindow, commandConfirm, () => win)
   registerMeetingMicIpc({
     ipcMain,
     assertMainWindow,

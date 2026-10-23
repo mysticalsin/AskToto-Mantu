@@ -100,12 +100,11 @@ describe('DesktopActionTaskBridge task cards (G33)', () => {
 
   it('stopping a queued card cancels it before it starts: not_done, stopped_before_start, never executed', async () => {
     const hold = gate()
-    const { bridge, execute } = make({
-      execute: vi.fn(async (request: DesktopActionRequest, envelope: ActionEnvelope) => {
-        await hold.promise
-        return verified(request, envelope)
-      })
+    const execute = vi.fn(async (request: DesktopActionRequest, envelope: ActionEnvelope) => {
+      await hold.promise
+      return verified(request, envelope)
     })
+    const { bridge } = make({ execute })
     const first = bridge.execute(NOTE, ctx('p1', NOTE))
     const second = bridge.execute(OPEN, ctx('p2', OPEN))
     await vi.waitFor(() => expect(phases(bridge)).toEqual(['running', 'queued']))
@@ -126,14 +125,17 @@ describe('DesktopActionTaskBridge task cards (G33)', () => {
 
   it('stopping a running card shows stopping until the step settles, then classifies by receipt', async () => {
     const hold = gate()
+    const dispatched = vi.fn()
     const { bridge } = make({
       execute: async (request, _envelope, signal) => {
+        dispatched()
         await hold.promise
         return { id: request.id, ok: false, outcome: signal?.aborted ? 'cancelled' : 'failed' }
       }
     })
     const run = bridge.execute(NOTE, ctx('p1', NOTE))
-    await vi.waitFor(() => expect(phases(bridge)).toEqual(['running']))
+    // Stop only counts as "running" once the adapter was called; before that Stop is a clean stopped_before_start.
+    await vi.waitFor(() => expect(dispatched).toHaveBeenCalled())
     const card = bridge.cards(O7)[0]
 
     expect(bridge.stopCard(O7, card.cardId)).toBe(true)
@@ -146,14 +148,16 @@ describe('DesktopActionTaskBridge task cards (G33)', () => {
 
   it('a stopped running step whose effect cannot be proven stays uncertain until dismissed', async () => {
     const hold = gate()
+    const dispatched = vi.fn()
     const { bridge, clock } = make({
       execute: async () => {
+        dispatched()
         await hold.promise
         throw new Error('adapter lost the app')
       }
     })
     const run = bridge.execute(NOTE, ctx('p1', NOTE))
-    await vi.waitFor(() => expect(phases(bridge)).toEqual(['running']))
+    await vi.waitFor(() => expect(dispatched).toHaveBeenCalled())
     const { cardId } = bridge.cards(O7)[0]
     bridge.stopCard(O7, cardId)
     hold.open()
