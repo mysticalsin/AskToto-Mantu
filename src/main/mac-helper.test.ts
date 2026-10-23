@@ -23,6 +23,9 @@ import {
   parseBundleCopies,
   macTccStatusSpawnSpec,
   macWatchModifiersSpawnSpec,
+  macSpeakArgs,
+  macSpeakSpawnSpec,
+  macSpeakVoicesSpawnSpec,
   watchModifiersArgs,
   parseTccStatus,
   getTccStatus,
@@ -367,6 +370,49 @@ describe('watch-modifiers (V01 — the voice hold chord helper)', () => {
     try {
       Object.defineProperty(process, 'platform', { value: 'win32', configurable: true })
       expect(macWatchModifiersSpawnSpec()).toBeNull()
+    } finally {
+      Object.defineProperty(process, 'platform', { value: originalPlatform, configurable: true })
+    }
+  })
+})
+
+describe('speak (G27 — spoken replies through AVSpeechSynthesizer)', () => {
+  it('builds argv with an explicit installed voice and a clamped rate, and never any text', () => {
+    expect(macSpeakArgs('com.apple.voice.compact.en-US.Samantha', 1)).toEqual([
+      'speak',
+      '--voice',
+      'com.apple.voice.compact.en-US.Samantha',
+      '--rate',
+      '1'
+    ])
+    expect(macSpeakArgs('com.apple.voice.compact.en-US.Samantha', 1.25)).toEqual([
+      'speak',
+      '--voice',
+      'com.apple.voice.compact.en-US.Samantha',
+      '--rate',
+      '1.25'
+    ])
+    expect(macSpeakArgs('com.apple.voice.compact.en-US.Samantha', 0.1)[4]).toBe('0.5')
+    expect(macSpeakArgs('com.apple.voice.compact.en-US.Samantha', 9)[4]).toBe('1.5')
+    expect(macSpeakArgs('com.apple.voice.compact.en-US.Samantha', Number.NaN)[4]).toBe('1')
+  })
+
+  it('has spawn specs that degrade to null where the helper cannot exist', () => {
+    const present = existsSync(macHelperPath())
+    expect(macSpeakSpawnSpec('com.apple.voice.compact.en-US.Samantha', 1)).toEqual(
+      present
+        ? {
+            command: macHelperPath(),
+            args: ['speak', '--voice', 'com.apple.voice.compact.en-US.Samantha', '--rate', '1']
+          }
+        : null
+    )
+    expect(macSpeakVoicesSpawnSpec()).toEqual(present ? { command: macHelperPath(), args: ['speak-voices'] } : null)
+    const originalPlatform = process.platform
+    try {
+      Object.defineProperty(process, 'platform', { value: 'win32', configurable: true })
+      expect(macSpeakSpawnSpec('com.apple.voice.compact.en-US.Samantha', 1)).toBeNull()
+      expect(macSpeakVoicesSpawnSpec()).toBeNull()
     } finally {
       Object.defineProperty(process, 'platform', { value: originalPlatform, configurable: true })
     }

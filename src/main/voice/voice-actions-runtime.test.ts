@@ -643,13 +643,15 @@ describe('dictation inside the voice actions runtime (G22)', () => {
   })
 
   it('a dictation hold mints a dictation-kind activation and asks the renderer for a dictation capture', async () => {
-    const h = setup({ dictation: { ports: synthetic() } } as never)
+    const spokenReplies = { bargeIn: vi.fn(), refresh: vi.fn(), dispose: vi.fn() }
+    const h = setup({ dictation: { ports: synthetic() }, spokenReplies } as never)
     h.runtime.start()
     dictationWiring().onChordEvent?.({ type: 'armed' })
     await flush()
     expect(h.activation.mintFromHardware).toHaveBeenCalledWith(frame, 'hardware-dictation')
     const begin = h.sent.find((m) => m.channel === VOICE_ACTIONS_IPC.begin)
     expect(begin?.payload).toMatchObject({ purpose: 'dictation', maxMs: 15_000 })
+    expect(spokenReplies.bargeIn).toHaveBeenCalledExactlyOnceWith('voice-hold')
   })
 
   it('text from a dictation lease is owned by dictation: never the voice pipeline, never the command panel', async () => {
@@ -732,5 +734,30 @@ describe('clarification lifetime (G35)', () => {
     expect(dropClarification).toHaveBeenCalledWith('meeting')
     h.runtime.onRendererReset()
     expect(dropClarification).toHaveBeenCalledWith('revoked')
+  })
+})
+
+describe('spoken-replies playback boundaries (G27)', () => {
+  it('a main-owned hard stop invalidates playback even when there is no microphone lease', () => {
+    const spokenReplies = { bargeIn: vi.fn(), refresh: vi.fn(), dispose: vi.fn() }
+    const h = setup({ spokenReplies })
+
+    expect(h.state.lease).toBeNull()
+    h.runtime.onHardStop('user-stop')
+
+    expect(spokenReplies.bargeIn).toHaveBeenCalledExactlyOnceWith('hard-stop')
+  })
+
+  it('a meeting reservation interrupts playback and settings refresh/disposal reach the playback owner', () => {
+    const spokenReplies = { bargeIn: vi.fn(), refresh: vi.fn(), dispose: vi.fn() }
+    const h = setup({ spokenReplies })
+
+    h.runtime.onMeetingReserved()
+    h.runtime.refresh()
+    h.runtime.dispose()
+
+    expect(spokenReplies.bargeIn).toHaveBeenCalledExactlyOnceWith('meeting')
+    expect(spokenReplies.refresh).toHaveBeenCalledOnce()
+    expect(spokenReplies.dispose).toHaveBeenCalledOnce()
   })
 })

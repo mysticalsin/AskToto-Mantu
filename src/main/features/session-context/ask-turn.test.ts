@@ -422,3 +422,78 @@ describe('G15: a corrected line outdates a running turn and a finished one is re
     expect(reports).toEqual([])
   })
 })
+
+describe('G27: the observer hears what the renderer hears, and can never change it', () => {
+  function observed(observe: (event: unknown) => void) {
+    const sent: Sent[] = []
+    const streams = new Map<string, { abort: () => void }>()
+    const turns = createAskTurns({
+      send: (channel, payload) => void sent.push({ channel, payload: payload as Record<string, unknown> }),
+      streams,
+      observe
+    })
+    return { turns, sent }
+  }
+
+  it('reports the begin of an ask with its mode, then every event delivered to the renderer, after the delivery', async () => {
+    const events: unknown[] = []
+    const { turns, sent } = observed((event) => events.push({ event, deliveredSoFar: sent.length }))
+    const turn = need(await turns.begin({ id: 'typed', mode: 'answer', handle: null }))
+    turn.send(IPC.streamDelta, { id: 'typed', text: 'hello' })
+    turn.send(IPC.streamDone, { id: 'typed' })
+    expect(events).toEqual([
+      { event: { type: 'begin', id: 'typed', mode: 'answer' }, deliveredSoFar: 0 },
+      {
+        event: { type: 'event', id: 'typed', channel: IPC.streamDelta, payload: { id: 'typed', text: 'hello' } },
+        deliveredSoFar: 1
+      },
+      { event: { type: 'event', id: 'typed', channel: IPC.streamDone, payload: { id: 'typed' } }, deliveredSoFar: 2 }
+    ])
+  })
+
+  it('hears exactly what a stale turn still delivered: the stale chunk is never reported, the one stale notice is', async () => {
+    const w = world()
+    const events: Array<{ type: string; channel?: string }> = []
+    const turns = createAskTurns({
+      send: () => undefined,
+      streams: w.streams,
+      observe: (event) => events.push(event as { type: string; channel?: string })
+    })
+    const turn = need(await turns.begin({ id: 'a', mode: 'answer', handle: w.handle() }))
+    turn.send(IPC.streamDelta, { id: 'a', text: 'first chunk' })
+    w.permissions.current = meetingPermissions(true)
+    turn.send(IPC.streamDelta, { id: 'a', text: 'stale chunk' })
+    turn.send(IPC.streamDone, { id: 'a' })
+    expect(events.map((e) => `${e.type}:${e.channel ?? ''}`)).toEqual([
+      'begin:',
+      `event:${IPC.streamDelta}`,
+      `event:${IPC.streamError}`
+    ])
+  })
+
+  it('hears a start failure and a renderer cancel', async () => {
+    const events: Array<{ type: string; channel?: string; id: string }> = []
+    const { turns } = observed((event) => events.push(event as { type: string; channel?: string; id: string }))
+    turns.fail('x', 'Could not start the answer.')
+    turns.cancel('y')
+    expect(events).toEqual([
+      {
+        type: 'event',
+        id: 'x',
+        channel: IPC.streamError,
+        payload: { id: 'x', message: 'Could not start the answer.' }
+      },
+      { type: 'cancel', id: 'y' }
+    ])
+  })
+
+  it('a throwing observer changes nothing: the renderer still gets every event and the turn still ends', async () => {
+    const { turns, sent } = observed(() => {
+      throw new Error('observer bug')
+    })
+    const turn = need(await turns.begin({ id: 'typed', mode: 'answer', handle: null }))
+    expect(turn.send(IPC.streamDelta, { id: 'typed', text: 'hello' })).toBe(true)
+    expect(turn.send(IPC.streamDone, { id: 'typed' })).toBe(true)
+    expect(sent.map((s) => s.channel)).toEqual([IPC.streamDelta, IPC.streamDone])
+  })
+})

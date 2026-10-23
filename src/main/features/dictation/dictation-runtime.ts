@@ -55,6 +55,8 @@ export interface DictationRuntimeDeps {
   chord?: VoiceChordWiring
   /** The OS ports. Absent in production until G23 and G24: dictation is then refused before the microphone opens. */
   ports?: DictationHostPorts
+  /** A dictation turn begins before capture opens, so playback can stop at the boundary. */
+  onBegin?(): void
   /**
    * The encrypted segment journal and dictionary (G26). Resolved on every use, because the owner-session wiring that
    * builds it runs after this runtime exists. Defaults to the process's installed memory; null journals nothing.
@@ -147,7 +149,10 @@ export function createDictationRuntime(deps: DictationRuntimeDeps): DictationRun
     ports: deps.ports ?? UNSUPPORTED_DICTATION_PORTS,
     memory: memorySink,
     push: {
-      begin: (payload) => send(VOICE_ACTIONS_IPC.begin, payload),
+      begin: (payload) => {
+        deps.onBegin?.()
+        send(VOICE_ACTIONS_IPC.begin, payload)
+      },
       end: (payload) => send(VOICE_ACTIONS_IPC.end, payload)
     },
     newTurnId: deps.newTurnId ?? randomUUID,

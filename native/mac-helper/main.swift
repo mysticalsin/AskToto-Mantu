@@ -91,7 +91,15 @@
 //                     global monitor and no Input Monitoring request, and the protocol has no field for a key
 //                     code: a key press only moves the counter. src/shared/voice/modifier-mask.ts owns the
 //                     line format and the bit values below.
+//
+//   speak --voice <id> [--rate <0.5-1.5>]  One-shot (G27). Reads text from stdin, speaks with an installed
+//                     AVSpeechSynthesizer voice, and emits started/ended/cancelled or a machine error line. SIGTERM
+//                     stops immediately; speech never outlives its parent. Text is never passed in argv.
+//
+//   speak-voices      One-shot, read-only. Prints installed voices as JSON {voices:[{id,name,language}]}; it never
+//                     downloads or requests a voice.
 import AppKit
+import AVFoundation
 import Darwin
 import Security
 import Speech
@@ -942,11 +950,125 @@ func runActivatePid(pidText: String) -> Never {
     emitJson(ActivatePidResult(activated: activated), command: "activate-pid")
 }
 
+// MARK: - speak
+
+let maxSpeakChars = 8000
+
+func emitSpeakLine(_ line: String) {
+    print(line)
+    fflush(stdout)
+}
+
+final class SpeakDelegate: NSObject, AVSpeechSynthesizerDelegate {
+    var onStart: () -> Void = {}
+    var onFinish: () -> Void = {}
+    var onCancel: () -> Void = {}
+    func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didStart utterance: AVSpeechUtterance) { onStart() }
+    func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didFinish utterance: AVSpeechUtterance) { onFinish() }
+    func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didCancel utterance: AVSpeechUtterance) { onCancel() }
+}
+
+func runSpeak(_ options: [String]) -> Never {
+    let usage = "usage: metis-mac-helper speak --voice <id> [--rate <0.5-1.5>]"
+    var voiceId: String?
+    var rate: Float = 1.0
+    var index = 0
+    while index < options.count {
+        guard index + 1 < options.count else { fail(usage) }
+        switch options[index] {
+        case "--voice":
+            voiceId = options[index + 1]
+        case "--rate":
+            guard let value = Float(options[index + 1]), value.isFinite else { fail(usage) }
+            rate = min(1.5, max(0.5, value))
+        default:
+            fail(usage)
+        }
+        index += 2
+    }
+
+    let parent = getppid()
+    let parentWatch = DispatchSource.makeProcessSource(identifier: parent, eventMask: .exit, queue: .main)
+    parentWatch.setEventHandler { exit(0) }
+    parentWatch.resume()
+    if getppid() != parent { exit(0) }
+
+    let data = FileHandle.standardInput.readDataToEndOfFile()
+    let text = String(String(decoding: data, as: UTF8.self).prefix(maxSpeakChars))
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !text.isEmpty else {
+        emitSpeakLine("ended")
+        exit(0)
+    }
+
+    let utterance = AVSpeechUtterance(string: text)
+    guard let id = voiceId, let voice = AVSpeechSynthesisVoice(identifier: id) else {
+        emitSpeakLine("error no_voice")
+        exit(2)
+    }
+    utterance.voice = voice
+    utterance.rate = min(
+        AVSpeechUtteranceMaximumSpeechRate,
+        max(AVSpeechUtteranceMinimumSpeechRate, AVSpeechUtteranceDefaultSpeechRate * rate)
+    )
+
+    let synthesizer = AVSpeechSynthesizer()
+    let delegate = SpeakDelegate()
+    delegate.onStart = { emitSpeakLine("started") }
+    delegate.onFinish = {
+        emitSpeakLine("ended")
+        exit(0)
+    }
+    delegate.onCancel = {
+        emitSpeakLine("cancelled")
+        exit(0)
+    }
+    synthesizer.delegate = delegate
+
+    signal(SIGTERM, SIG_IGN)
+    let terminate = DispatchSource.makeSignalSource(signal: SIGTERM, queue: .main)
+    terminate.setEventHandler {
+        synthesizer.stopSpeaking(at: .immediate)
+        DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(150)) {
+            emitSpeakLine("cancelled")
+            exit(0)
+        }
+    }
+    terminate.resume()
+
+    synthesizer.speak(utterance)
+    withExtendedLifetime(parentWatch) {
+        withExtendedLifetime(terminate) {
+            withExtendedLifetime(synthesizer) {
+                withExtendedLifetime(delegate) { RunLoop.main.run() }
+            }
+        }
+    }
+    exit(0)
+}
+
+struct SpeakVoice: Encodable {
+    let id: String
+    let name: String
+    let language: String
+}
+
+struct SpeakVoicesResult: Encodable {
+    let voices: [SpeakVoice]
+}
+
+func runSpeakVoices() -> Never {
+    let voices = AVSpeechSynthesisVoice.speechVoices().map {
+        SpeakVoice(id: $0.identifier, name: $0.name, language: $0.language)
+    }
+    emitJson(SpeakVoicesResult(voices: voices), command: "speak-voices")
+}
+
 // MARK: - entry point
 
 let arguments = CommandLine.arguments
 guard arguments.count >= 2 else {
-    fail("usage: metis-mac-helper <watch-frontmost|ocr|transcribe|screen-metrics|stat-flags|proc-info|supervise|stall-watch|code-identity|bundle-copies|tcc-status|automation-ask|activate-pid|watch-modifiers> [path|-]")
+    fail("usage: metis-mac-helper <watch-frontmost|ocr|transcribe|screen-metrics|stat-flags|proc-info|supervise|stall-watch|code-identity|bundle-copies|tcc-status|automation-ask|activate-pid|watch-modifiers|speak|speak-voices> [path|-]")
 }
 switch arguments[1] {
 case "watch-frontmost":
@@ -985,6 +1107,10 @@ case "bundle-copies":
     runBundleCopies(bundleId: arguments[2])
 case "tcc-status":
     runTccStatus(Array(arguments.dropFirst(2)))
+case "speak":
+    runSpeak(Array(arguments.dropFirst(2)))
+case "speak-voices":
+    runSpeakVoices()
 case "automation-ask":
     guard arguments.count >= 3 else {
         fail("usage: metis-mac-helper automation-ask <bundle-id>")

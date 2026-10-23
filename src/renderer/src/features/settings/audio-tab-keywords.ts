@@ -30,5 +30,14 @@ export const AUDIO_TAB_KEYWORDS: string[] = [
   'hey metis',
   'wake word',
   'double press',
-  'dictation'
+  'dictation',
+  // Spoken replies (G27)
+  'spoken replies',
+  'read answers aloud',
+  'text to speech',
+  'tts',
+  'speak',
+  'voice',
+  'speed',
+  'preview voice'
 ]

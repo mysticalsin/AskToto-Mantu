@@ -51,7 +51,6 @@ import { captureActiveForWindowRestart as captureActiveForWindowRestartState } f
 import { InputSessionLifecycleController } from './lifecycle/input-session-lifecycle-controller'
 import { operatorVisionModel } from '@shared/operator-vision'
 import { createMainTranscriptSaveReceipts, type TranscriptSaveSideEffect } from './features/meetings/main-save-receipts'
-import { InputSessionAuthority } from './input-session-authority'
 import { installInputMicPermissionHandlers } from './input-mic-permissions'
 import { MeetingMicCaptureAuthority } from './meeting-mic-capture-authority'
 import {
@@ -604,8 +603,9 @@ import { registerQuitIpc } from './ipc/quit-ipc'
 import { QA_IDENTITY_BUILD, installQaFaultHook } from './qa-hooks'
 import { createCommandMicAvailability, createVoiceActionsRuntime } from './voice/voice-actions-runtime'
 import { createMainVoiceTurns } from './voice/voice-turns-main'
-import { createCommandMicLeaseTimer } from './command-mic-lease-timer'
 import { registerVoiceActionsIpc } from './ipc/voice-actions-ipc'
+import { createSpokenRepliesWiring } from './spoken-replies-wiring'
+import { createMainInputSessionWiring } from './lifecycle/input-session-wiring'
 import { installQaCaptureSource } from './qa-capture-source'
 import { resetDustConversation, prewarmDustConversation, isDustAuthError } from './llm/dust'
 import { getScreenSourcesWithRetry, isUsableScreenSource, screenCaptureUnavailableMessage } from './screen-capture'
@@ -1368,27 +1368,17 @@ function publishRecoveredDraftCount(): void {
 }
 let commandMicActivationLeaseId: string | null = null
 let commandSpeechCapture: CommandSpeechCapture | null = null
-const { clear: clearCommandMicLeaseTimer, arm: armCommandMicLeaseTimeout } = createCommandMicLeaseTimer({
-  leaseId: () => commandMicActivationLeaseId,
-  authority: () => inputSessionAuthority
-})
 let voiceActions: ReturnType<typeof createVoiceActionsRuntime> | null = null
-const inputSessionAuthority = new InputSessionAuthority({
-  onHardStop: (reason) => voiceActions?.onHardStop(reason),
-  onMeetingReserved: () => voiceActions?.onMeetingReserved(),
-  onRevoked: (owner, lease, reason) => {
-    if (commandMicActivationLeaseId === lease.sessionId) {
-      clearCommandMicLeaseTimer(lease.sessionId)
-      commandMicActivationLeaseId = null
-    }
-    commandSpeechCapture?.cancelForLease(lease.sessionId)
-    if (!win || win.isDestroyed() || win.webContents.id !== owner.webContentsId) return
-    try {
-      win.webContents.send(IPC.inputSessionRevoked, { sessionId: lease.sessionId, revision: lease.revision, reason })
-    } catch {
-      /* authority stays revoked even if the renderer disappeared */
-    }
-  }
+let revokeSpokenReplies: (() => void) | null = null
+const { inputSessionAuthority, clearCommandMicLeaseTimer, armCommandMicLeaseTimeout } = createMainInputSessionWiring({
+  voiceActions: () => voiceActions,
+  revokeSpokenReplies: () => revokeSpokenReplies?.(),
+  commandMicActivationLeaseId: () => commandMicActivationLeaseId,
+  clearCommandMicActivationLeaseId: () => {
+    commandMicActivationLeaseId = null
+  },
+  commandSpeechCapture: () => commandSpeechCapture,
+  window: () => win
 })
 let meetingCaptureOwnerWebContentsId: number | null = null
 let inputSessionContextRevision = 0
@@ -1502,7 +1492,14 @@ commandSpeechCapture = new CommandSpeechCapture({
     inputSessionAuthority.activeLease?.sessionId === sessionId && inputSessionAuthority.hardStop('cancelled'),
   onFinished: (sessionId, result) => voiceActions?.onSpeechFinished(sessionId, result)
 })
+const spokenRepliesWiring = createSpokenRepliesWiring({
+  getSettings,
+  meetingLive: () => inputSessionAuthority.hasMeetingReservation || listeningActive,
+  window: () => win
+})
+revokeSpokenReplies = spokenRepliesWiring.onOwnerRevoked
 voiceActions = createVoiceActionsRuntime({
+  spokenReplies: spokenRepliesWiring.runtime,
   qaIdentity: QA_IDENTITY_BUILD,
   getSettings,
   requireAuth,
@@ -7435,7 +7432,8 @@ function registerIpc(): void {
   const askTurns = createAskTurns({
     send: (channel, payload) => win?.webContents.send(channel, payload),
     streams,
-    metrics: askMetrics
+    metrics: askMetrics,
+    observe: spokenRepliesWiring.runtime.observeAsk
   })
   ipcMain.handle(IPC.askStart, async (e, raw) => {
     assertMainWindow(e)
@@ -8887,6 +8885,7 @@ function registerIpc(): void {
     }
   })
   if (voiceActions) registerVoiceActionsIpc(ipcMain, assertMainWindow, voiceActions)
+  spokenRepliesWiring.registerIpc(ipcMain, assertMainWindow)
   registerCommandConfirmIpc(ipcMain, assertMainWindow, commandConfirm, () => win)
   registerMeetingMicIpc({
     ipcMain,

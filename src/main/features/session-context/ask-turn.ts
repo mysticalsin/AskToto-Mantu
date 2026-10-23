@@ -56,9 +56,17 @@ export interface AskTurn {
   send(channel: string, payload: unknown): boolean
 }
 
+/** What the main-owned spoken-replies observer sees after a stream event reaches its renderer. */
+export type AskTurnObservation =
+  | { readonly type: 'begin'; readonly id: string; readonly mode: string }
+  | { readonly type: 'event'; readonly id: string; readonly channel: string; readonly payload: unknown }
+  | { readonly type: 'cancel'; readonly id: string }
+
 export interface AskTurnsDeps {
   /** Delivers one event to the window that owns the ask. */
   send(channel: string, payload: unknown): void
+  /** Observes answer flow without being able to change renderer delivery. */
+  observe?(event: AskTurnObservation): void
   /** The in-flight asks' abort handles (the main process's `streams` map): a stopped turn aborts its provider stream. */
   streams: {
     get(id: string): { abort(): void } | undefined
@@ -115,6 +123,18 @@ export function createAskTurns(deps: AskTurnsDeps): AskTurns {
     }
   }
 
+  const observe = (event: AskTurnObservation): void => {
+    try {
+      deps.observe?.(event)
+    } catch {
+      // A playback observer must never change ask delivery.
+    }
+  }
+  const publish = (id: string, channel: string, payload: unknown): void => {
+    deps.send(channel, payload)
+    observe({ type: 'event', id, channel, payload })
+  }
+
   const finish = (entry: Entry): void => {
     if (entry.state === 'ended') return
     entry.state = 'ended'
@@ -133,8 +153,10 @@ export function createAskTurns(deps: AskTurnsDeps): AskTurns {
     } catch {
       // a stream that cannot be stopped must not keep the slot
     }
-    if (reason !== 'cancelled' && reason !== 'superseded') {
-      deps.send(IPC.streamError, { id: entry.id, message: MESSAGES[reason] })
+    if (reason === 'cancelled' || reason === 'superseded') {
+      observe({ type: 'cancel', id: entry.id })
+    } else {
+      publish(entry.id, IPC.streamError, { id: entry.id, message: MESSAGES[reason] })
     }
   }
 
@@ -171,7 +193,7 @@ export function createAskTurns(deps: AskTurnsDeps): AskTurns {
         stop(entry, 'stale')
         return false
       }
-      deps.send(channel, payload)
+      publish(entry.id, channel, payload)
       // A delivered answer is remembered against the lines it read, so a later correction can name it (G15).
       if (channel === IPC.streamDone) {
         entry.delivered = true
@@ -186,18 +208,19 @@ export function createAskTurns(deps: AskTurnsDeps): AskTurns {
     begin(request) {
       const { id, mode, handle } = request
       if (request.ask) joinTurn(request, request.ask)
+      const previous = entries.get(id)
+      if (previous) stop(previous, 'cancelled')
+      observe({ type: 'begin', id, mode })
       if (!handle) {
         return Promise.resolve<AskTurn>({
           send(channel, payload) {
-            deps.send(channel, payload)
+            publish(id, channel, payload)
             if (channel === IPC.streamDone) ledger.settle(id, 'delivered')
             else if (channel === IPC.streamError) ledger.settle(id, 'ended')
             return true
           }
         })
       }
-      const previous = entries.get(id)
-      if (previous) stop(previous, 'cancelled')
       return new Promise<AskTurn | null>((settleBegin) => {
         const entry: Entry = { id, state: 'queued', delivered: false, release: null, settleBegin }
         entries.set(id, entry)
@@ -221,10 +244,11 @@ export function createAskTurns(deps: AskTurnsDeps): AskTurns {
     cancel(id) {
       const entry = entries.get(id)
       if (entry) stop(entry, 'cancelled')
+      else observe({ type: 'cancel', id })
       ledger.settle(id, 'ended')
     },
     fail(id, message) {
-      deps.send(IPC.streamError, { id, message })
+      publish(id, IPC.streamError, { id, message })
       const entry = entries.get(id)
       if (entry) finish(entry)
       ledger.settle(id, 'ended')

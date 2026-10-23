@@ -81,6 +81,12 @@ export interface VoiceActionsRuntimeDeps {
    * unsupported before the microphone opens.
    */
   dictation?: { ports?: DictationHostPorts; chord?: VoiceChordWiring }
+  /** Quiet the speaker at main-owned input, meeting and lifecycle boundaries. */
+  spokenReplies?: {
+    bargeIn(reason: 'voice-hold' | 'meeting' | 'hard-stop'): unknown
+    refresh?(): void
+    dispose?(): void
+  }
   /** Defaults to the `voice.turn` audit event (phase and machine reason only). */
   audit?(phase: VoiceAuditPhase, detail?: { reason?: string }): void
   newTurnId?(): string
@@ -147,6 +153,13 @@ export function createVoiceActionsRuntime(deps: VoiceActionsRuntimeDeps): VoiceA
     }
   }
   const voice = (): VoiceActionsSettings | undefined => deps.getSettings().voiceActions
+  const quietReplies = (reason: 'voice-hold' | 'meeting' | 'hard-stop'): void => {
+    try {
+      deps.spokenReplies?.bargeIn(reason)
+    } catch {
+      /* playback is best effort and cannot interrupt input control */
+    }
+  }
   const platform = deps.platform ?? process.platform
   // The Settings chord recorder is open until this time. A timestamp, not a timer: nothing to leak or clear.
   let recorderOpenUntil = 0
@@ -199,7 +212,10 @@ export function createVoiceActionsRuntime(deps: VoiceActionsRuntimeDeps): VoiceA
     speech: { prewarm: () => deps.parakeet.ensure(), releaseIdle: () => deps.parakeet.release() },
     speechBusyElsewhere: () => deps.authority.hasMeetingReservation || deps.speechBusy(),
     push: {
-      begin: (payload) => send(VOICE_ACTIONS_IPC.begin, payload),
+      begin: (payload) => {
+        quietReplies('voice-hold')
+        send(VOICE_ACTIONS_IPC.begin, payload)
+      },
       end: (payload) => send(VOICE_ACTIONS_IPC.end, payload),
       state: (snapshot) => send(VOICE_ACTIONS_IPC.state, snapshot)
     },
@@ -231,11 +247,13 @@ export function createVoiceActionsRuntime(deps: VoiceActionsRuntimeDeps): VoiceA
     chordRecorderActive: () => Date.now() < recorderOpenUntil,
     chord: deps.dictation?.chord,
     ports: deps.dictation?.ports,
+    onBegin: () => quietReplies('voice-hold'),
     newTurnId: deps.newTurnId
   })
   let presenceCheckedAt = Number.NEGATIVE_INFINITY
   // A renderer that went away cannot have its recorder open any more.
   const onRendererReset = (): void => {
+    quietReplies('hard-stop')
     recorderOpenUntil = 0
     deps.turns?.dropClarification?.('revoked')
     session.onRendererReset()
@@ -255,6 +273,7 @@ export function createVoiceActionsRuntime(deps: VoiceActionsRuntimeDeps): VoiceA
       }
       session.refresh()
       dictation.refresh()
+      deps.spokenReplies?.refresh?.()
     },
     snapshot: () => session.snapshot(),
     walkthrough: deps.turns?.walkthrough ?? null,
@@ -264,6 +283,7 @@ export function createVoiceActionsRuntime(deps: VoiceActionsRuntimeDeps): VoiceA
     },
     onChordEvent: (event) => session.onChordEvent(event),
     onHardStop(reason) {
+      quietReplies('hard-stop')
       const dropped = CLARIFY_DROPPING_STOPS[reason]
       if (dropped) deps.turns?.dropClarification?.(dropped)
       chord.onInputSessionStop(reason)
@@ -271,6 +291,7 @@ export function createVoiceActionsRuntime(deps: VoiceActionsRuntimeDeps): VoiceA
       dictation.onHardStop(reason)
     },
     onMeetingReserved() {
+      quietReplies('meeting')
       deps.turns?.dropClarification?.('meeting')
       session.onMeetingReserved()
       dictation.onMeetingReserved()
@@ -321,6 +342,7 @@ export function createVoiceActionsRuntime(deps: VoiceActionsRuntimeDeps): VoiceA
       chord.stop()
       session.dispose()
       dictation.dispose()
+      deps.spokenReplies?.dispose?.()
     }
   }
 }

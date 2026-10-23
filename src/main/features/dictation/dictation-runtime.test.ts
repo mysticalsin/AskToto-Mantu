@@ -172,6 +172,27 @@ describe('dictation runtime: a second chord on its own supervised watcher (G22)'
 })
 
 describe('dictation runtime: a held chord opens a dictation capture, never a voice turn (G22)', () => {
+  it('invalidates current playback before the dictation begin reaches the renderer', async () => {
+    const order: string[] = []
+    const h = setup({
+      onBegin: () => order.push('silence'),
+      window: () => ({
+        isDestroyed: () => false,
+        isVisible: () => true,
+        webContents: {
+          send(channel: string) {
+            if (channel === VOICE_ACTIONS_IPC.begin) order.push('begin')
+          }
+        }
+      })
+    })
+    h.runtime.start()
+    h.wiring().onChordEvent?.(armed)
+    await flush()
+
+    expect(order).toEqual(['silence', 'begin'])
+  })
+
   it('binds the target, mints a dictation activation and asks the renderer for a dictation-purpose capture', async () => {
     const h = setup()
     h.runtime.start()

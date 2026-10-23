@@ -25,6 +25,8 @@
  *     mouse presses, and prints `m <mask> <seq>` only on change. Permission-free (no event tap), and the protocol
  *     carries no key identity. src/main/voice/chord-watcher.ts owns the child; src/shared/voice/modifier-mask.ts
  *     owns the line format.
+ *   - `speak` / `speak-voices` (G27): one-shot on-device spoken replies. Text travels on stdin; this module supplies
+ *     only argv spawn specs while the spoken-replies feature owns process lifetime and playback state.
  *   - `activate-pid` / `automation-ask`: one-shot (V04). The first hands focus back to the app that was in front
  *     before a confirmation card; the second is the only call that may raise the Apple Events prompt, and only
  *     after a person's Return and before dispatch. `tcc-status` stays read-only.
@@ -45,6 +47,7 @@ import { existsSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { app } from 'electron'
 import { z } from 'zod'
+import { clampSpeechRate } from '@shared/spoken-replies-settings'
 import { mainLog } from './logger'
 
 const OCR_TIMEOUT_MS = 8_000
@@ -151,6 +154,23 @@ export function watchModifiersArgs(intervalMs: number = WATCH_MODIFIERS_DEFAULT_
 export function macWatchModifiersSpawnSpec(intervalMs?: number): { command: string; args: string[] } | null {
   if (!macHelperPresent()) return null
   return { command: macHelperPath(), args: watchModifiersArgs(intervalMs) }
+}
+
+/** Build the speak argv. Answer text is never an argument; the process host writes it to stdin. */
+export function macSpeakArgs(voiceId: string, rate: number): string[] {
+  return ['speak', '--voice', voiceId, '--rate', String(Math.round(clampSpeechRate(rate) * 100) / 100)]
+}
+
+/** Spawn spec for spoken replies, or null when the helper is unavailable. */
+export function macSpeakSpawnSpec(voiceId: string, rate: number): { command: string; args: string[] } | null {
+  if (!macHelperPresent()) return null
+  return { command: macHelperPath(), args: macSpeakArgs(voiceId, rate) }
+}
+
+/** Read-only list of installed platform voices. */
+export function macSpeakVoicesSpawnSpec(): { command: string; args: string[] } | null {
+  if (!macHelperPresent()) return null
+  return { command: macHelperPath(), args: ['speak-voices'] }
 }
 
 /** Read-only `code-identity` (M2-0429): the static signature of an app bundle or binary. */

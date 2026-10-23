@@ -12,7 +12,7 @@ import { OPERATOR_LICENSE_MAX } from './operator-license'
 import { OPERATOR_TIERS } from './operator-entitlements'
 import { OPERATOR_REPORTING_SETTINGS_DEFAULTS, OperatorReportingSettingsShape } from './operator-reporting-settings'
 import { SCREEN_OBSERVATION_SETTINGS_DEFAULTS, ScreenObservationSettingsShape } from './screen-observation-settings'
-import { VOICE_ACTIONS_FEATURE, DEFAULT_VOICE_ACTIONS_SETTINGS } from './voice-actions-settings'
+import { VOICE_SETTINGS_SHAPE, DEFAULT_VOICE_SETTINGS } from './voice-settings-composition'
 import { RECAP_STATUSES, recapStatusValidationError, type RecapStatus } from './recap-status'
 import { RENDERER_VIEWS } from './renderer-view'
 import { DEFAULT_PERMISSION_STATE, PermissionStateSchema } from './screen-permission'
@@ -1143,7 +1143,7 @@ export const BaseSettingsSchema = z.object({
   // before parsing, so the key is always present. Keep both declarations identical so neither lies.
   asrEngine: z.enum(['whisper', 'parakeet', 'apple']).default('parakeet'),
   ...CloudSpeechSettingsSchema.shape,
-  ...VOICE_ACTIONS_FEATURE.shape,
+  ...VOICE_SETTINGS_SHAPE,
   /** Cloudflare AI Gateway id for Nova-3 live WS (verifyDefaultGatewayPrivacy uses `default`); blank falls through env then `default`. Not a secret. */
   cfAiGatewayId: z.string().max(128).default(''),
   /**
@@ -1681,7 +1681,7 @@ export const DEFAULT_SETTINGS: Settings = {
   asrQuality: 'best',
   asrEngine: 'parakeet',
   ...DEFAULT_CLOUD_SPEECH_SETTINGS,
-  voiceActions: DEFAULT_VOICE_ACTIONS_SETTINGS,
+  ...DEFAULT_VOICE_SETTINGS,
   cfAiGatewayId: '',
   cloudflareAccountId: '',
   asrLanguage: 'auto',
