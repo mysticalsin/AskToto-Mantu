@@ -96,6 +96,10 @@ export interface ScreenObservationDeps {
    * listens (G14) so an answer built from the previous screen stops. A prewarm is opportunistic and never reports.
    */
   onSourceChange?: (sourceId: string | null, at: number) => void
+  /** A new frame was issued (G43 marks bind to it). Never called for a reused frame; failures are swallowed. */
+  onIssued?: (shot: ScreenShot, request: { reason: ScreenCaptureReason; region?: ScreenRegion }) => void
+  /** Access to the screen was withdrawn (G43 clears marks). Failures are swallowed. */
+  onRevoked?: (reason: ScreenRevocationReason, generation: number) => void
   now?: () => number
   /** How long a whole-display frame is reused for the next ask. */
   reuseMs?: number
@@ -165,6 +169,11 @@ export function createScreenObservation(deps: ScreenObservationDeps): ScreenObse
     reusable = null
     audit('capture.revoked', { reason, generation })
     notifySource(null)
+    try {
+      deps.onRevoked?.(reason, generation)
+    } catch {
+      // observation consumers never change what a revocation does
+    }
     return generation
   }
 
@@ -261,6 +270,14 @@ export function createScreenObservation(deps: ScreenObservationDeps): ScreenObse
     const shot: ScreenShot = { ...frame, capturedAt, observation }
     remember(observation, frame.image)
     if (wholeDisplay) reusable = { shot, at: capturedAt }
+    try {
+      deps.onIssued?.(shot, {
+        reason: reason as ScreenCaptureReason,
+        ...(scope.kind === 'region' ? { region: scope.region } : {})
+      })
+    } catch {
+      // observation consumers never change what a capture does
+    }
     if (!quiet) notifySource(observation.sourceId)
     audit('capture.screen', { width: frame.width, height: frame.height, bytes: frame.image.length, ...tag })
     return shot

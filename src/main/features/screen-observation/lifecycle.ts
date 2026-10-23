@@ -50,3 +50,14 @@ export function installDisplayRemovalRevocation(
     return false
   }
 }
+
+/** Install both signals at boot: lock and sleep drop pending captures, and a removed display drops its captures. */
+export function installScreenObservationSignals(
+  power: ScreenLifecycleSource,
+  display: { on(event: 'display-removed', listener: () => void): unknown },
+  observation: ScreenLifecycleSink & { revoke(reason: 'display-removed'): unknown },
+  log: { warn(message: string): void }
+): void {
+  installScreenObservationLifecycle(power, observation, log)
+  installDisplayRemovalRevocation(display, observation, log)
+}

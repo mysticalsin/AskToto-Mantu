@@ -13,7 +13,9 @@ export function rendererInputs(rendererRoot: string, env: Record<string, string 
     index: resolve(rendererRoot, 'index.html'),
     decoder: resolve(rendererRoot, 'decoder.html'),
     // C32 Part D: the guided grant helper window beside System Settings / Settings.
-    'permission-helper': resolve(rendererRoot, 'permission-helper.html')
+    'permission-helper': resolve(rendererRoot, 'permission-helper.html'),
+    // G43: the transparent annotation layer that draws marks over a display.
+    annotation: resolve(rendererRoot, 'annotation.html')
   }
   if (env.METIS_DESIGN_CAPTURE === '1') {
     inputs[DESIGN_CAPTURE_ENTRY] = resolve(rendererRoot, `${DESIGN_CAPTURE_ENTRY}.html`)

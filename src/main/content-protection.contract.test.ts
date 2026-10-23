@@ -119,6 +119,7 @@ describe('MQA-176 — every window Métis puts on screen is covered by the Priva
       'index.ts: pdfWin',
       'index.ts: win',
       'intelligence.ts: intelWin',
+      'windows/annotation-window.ts: win',
       'windows/permission-helper-window.ts: win'
     ])
     expect(audit.violations).toEqual([])

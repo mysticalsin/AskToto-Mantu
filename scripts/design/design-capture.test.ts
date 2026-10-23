@@ -64,7 +64,12 @@ describe('design-capture renderer entry', () => {
 
   it('is not built without METIS_DESIGN_CAPTURE=1', () => {
     for (const env of [{}, { METIS_DESIGN_CAPTURE: '' }, { METIS_DESIGN_CAPTURE: '0' }]) {
-      expect(Object.keys(rendererInputs(rendererRoot, env))).toEqual(['index', 'decoder', 'permission-helper'])
+      expect(Object.keys(rendererInputs(rendererRoot, env))).toEqual([
+        'index',
+        'decoder',
+        'permission-helper',
+        'annotation'
+      ])
     }
   })
 

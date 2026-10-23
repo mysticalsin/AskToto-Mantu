@@ -92,7 +92,9 @@ export default defineConfig({
           // Isolated Chromium audio decoder used by main-owned import jobs. It exposes no app APIs.
           'import-decoder': resolve(__dirname, 'src/preload/import-decoder.ts'),
           // C32 Part D: the guided grant helper window (src/main/windows/permission-helper-window.ts).
-          'permission-helper': resolve(__dirname, 'src/preload/permission-helper.ts')
+          'permission-helper': resolve(__dirname, 'src/preload/permission-helper.ts'),
+          // G43: the annotation window's receive-only preload (src/main/windows/annotation-window.ts).
+          annotation: resolve(__dirname, 'src/preload/annotation.ts')
         }
       }
     },
