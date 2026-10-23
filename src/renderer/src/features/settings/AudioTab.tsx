@@ -18,6 +18,7 @@ import { OnDeviceSpeechSettings } from './OnDeviceSpeechSettings'
 import { CloudSpeechSection } from './CloudSpeechSection'
 import { MicLevelMeter } from './MicLevelMeter'
 import { VoiceActionsSection } from './VoiceActionsSection'
+import { TaskBrowserSection } from './TaskBrowserSection'
 import { parseAsrCorrections, sameAsrCorrections, serializeAsrCorrections } from '../../lib/asr-corrections'
 import { acquireInteractiveMic } from '../../lib/input-mic-admission'
 export { parseAsrCorrections, sameAsrCorrections, serializeAsrCorrections } from '../../lib/asr-corrections'
@@ -460,6 +461,7 @@ export function AudioTab({
         </div>
       )}
       <VoiceActionsSection settings={settings} patch={patch} />
+      <TaskBrowserSection />
       <Section title="Listen to" desc="Whose audio Métis transcribes during a meeting." icon={Mic}>
         <div className="mb-2">
           <ManagedChip keys={settings.managedKeys} k="audioSource" />

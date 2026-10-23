@@ -19,6 +19,7 @@ export type NativeWindowId =
   | 'annotation'
   | 'import-decoder'
   | 'recap-pdf'
+  | 'task-browser'
 
 /** `screen-saver` keeps the bar above full-screen apps; `floating` sits above System Settings, below system alerts. */
 export type AlwaysOnTopLevel = 'screen-saver' | 'floating' | null
@@ -78,6 +79,16 @@ export const NATIVE_WINDOW_MATRIX: readonly NativeWindowPolicy[] = [
     alwaysOnTop: 'screen-saver',
     appearsInCaptureWhenProtected: false,
     appearsInCaptureWhenUnprotected: false
+  },
+  {
+    // G41: the Métis-owned task browser window. A normal titled window (no always-on-top), hidden from capture by the setting.
+    id: 'task-browser',
+    site: { module: 'windows/task-browser-window', variable: 'win' },
+    composited: true,
+    contentProtection: 'follows-setting',
+    alwaysOnTop: null,
+    appearsInCaptureWhenProtected: false,
+    appearsInCaptureWhenUnprotected: true
   },
   {
     id: 'import-decoder',

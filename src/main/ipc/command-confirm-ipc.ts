@@ -1,4 +1,5 @@
 import type { IpcMain, IpcMainInvokeEvent } from 'electron'
+import { registerTaskBrowserIpc, type TaskBrowserIpcRuntime } from './task-browser-ipc'
 import { registerTaskCardIpc, type TaskCardRuntime } from './task-card-ipc'
 import { COMMAND_CONFIRM_IPC, type MetisCommandRecoveryNotice } from '@shared/metis-command-contract'
 
@@ -9,7 +10,11 @@ import { COMMAND_CONFIRM_IPC, type MetisCommandRecoveryNotice } from '@shared/me
 export function registerCommandConfirmIpc(
   ipcMain: Pick<IpcMain, 'handle'>,
   assertMainWindow: (event: IpcMainInvokeEvent) => void,
-  runtime: { takeRecoveryNotices(): Promise<MetisCommandRecoveryNotice[]>; taskCards?: TaskCardRuntime },
+  runtime: {
+    takeRecoveryNotices(): Promise<MetisCommandRecoveryNotice[]>
+    taskCards?: TaskCardRuntime
+    taskBrowser?: TaskBrowserIpcRuntime
+  },
   /** With the runtime's task cards, the sidecar's card IPC (G33) registers beside the confirmation card's. */
   getWindow?: Parameters<typeof registerTaskCardIpc>[3]
 ): void {
@@ -17,5 +22,6 @@ export function registerCommandConfirmIpc(
     assertMainWindow(event)
     return runtime.takeRecoveryNotices()
   })
+  if (runtime.taskBrowser) registerTaskBrowserIpc(ipcMain, assertMainWindow, runtime.taskBrowser)
   if (runtime.taskCards && getWindow) registerTaskCardIpc(ipcMain, assertMainWindow, runtime.taskCards, getWindow)
 }

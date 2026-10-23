@@ -18,6 +18,8 @@ import {
   setDesktopActionFocusHost,
   setDesktopActionGestureSource
 } from '../tasks/desktop-action-task-runtime'
+import { taskBrowserRuntime, releaseAllTaskBrowserWindows } from '../task-browser/task-browser-runtime'
+import type { TaskBrowserIpcRuntime } from '../ipc/task-browser-ipc'
 import { createGestureBindings } from './gesture-binding'
 import { createCommandPreflight } from './command-preflight'
 import { createConfirmFocus } from './confirm-focus'
@@ -46,6 +48,8 @@ export interface CommandConfirmRuntime {
   takeRecoveryNotices(): Promise<MetisCommandRecoveryNotice[]>
   /** G33: the sidecar's task cards, served by the same shared bridge. */
   taskCards: TaskCardRuntime
+  /** G41: Settings' view of the task browser. */
+  taskBrowser: TaskBrowserIpcRuntime
   /** G34: the owner started a gesture (hold chord, panel command). Main captures what is in front right now. */
   gestureStarted(owner: TrustedInputOwner, sessionId: string): void
   dispose(): void
@@ -123,6 +127,8 @@ export function createCommandConfirmRuntime(options: CommandConfirmRuntimeOption
       stopTasks: (reason) => {
         gestures.clear()
         tasks.stopTasks(reason)
+        // G41: Stop, sign-out and lock also close the task windows, so a browser never outlives its task.
+        releaseAllTaskBrowserWindows()
       },
       preflight: (request, stage) => {
         ensureWatcher()
@@ -133,6 +139,11 @@ export function createCommandConfirmRuntime(options: CommandConfirmRuntimeOption
     },
     takeRecoveryNotices: tasks.takeRecoveryNotices,
     taskCards: desktopActionTaskCards(),
+    taskBrowser: {
+      status: () => taskBrowserRuntime().status(),
+      acknowledgeDisclosure: () => taskBrowserRuntime().acknowledgeDisclosure(),
+      clearProfile: () => taskBrowserRuntime().clearProfile()
+    },
     gestureStarted: (owner, sessionId) => {
       gestures.begin({ webContentsId: owner.webContentsId, revision: owner.contextRevision }, sessionId)
     },
@@ -140,6 +151,7 @@ export function createCommandConfirmRuntime(options: CommandConfirmRuntimeOption
       setDesktopActionGestureSource(null)
       setDesktopActionFocusHost(null)
       gestures.clear()
+      releaseAllTaskBrowserWindows()
       stopWatcher()
     }
   }

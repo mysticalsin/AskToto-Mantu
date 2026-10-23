@@ -9,7 +9,7 @@ import { NATIVE_WINDOW_MATRIX } from '../shared/window-layering'
  * behaviour; this file holds the policy table to the code.
  */
 const MAIN = __dirname
-const MODULES = ['index', 'intelligence', 'windows/permission-helper-window', 'windows/annotation-window'] as const
+const MODULES = ['index', 'intelligence', 'windows/permission-helper-window', 'windows/annotation-window', 'windows/task-browser-window'] as const
 const mod = (name: string): string => readModuleSource(MAIN, `./${name}`).text
 const sources = new Map<string, string>(MODULES.map((m) => [m, mod(m)]))
 const NEW_WINDOW = /(?:const\s+|let\s+|var\s+)?([A-Za-z_$][\w$]*)\s*=\s*new BrowserWindow\(/g
