@@ -1,8 +1,14 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
+import { applyAmbientScreenContext } from './features/context-grants'
+import { readModuleSource } from '../test-helpers/module-source'
 
 const source = readFileSync(join(__dirname, 'index.ts'), 'utf8').replace(/\r\n/g, '\n')
+const ambientSource = readModuleSource(join(__dirname, 'features', 'context-grants'), './ambient-screen').text.replace(
+  /\r\n/g,
+  '\n'
+)
 
 describe('local processing privacy boundary', () => {
   it('forces an opted-in vision request onto local before provider overrides or cloud routing', () => {
@@ -14,9 +20,7 @@ describe('local processing privacy boundary', () => {
   })
 
   it('reports a local screenshot readiness failure without claiming that cloud will handle it', () => {
-    expect(source).toMatch(
-      /localVisionRequired[\s\S]*Nothing was sent to a cloud provider/
-    )
+    expect(source).toMatch(/localVisionRequired[\s\S]*Nothing was sent to a cloud provider/)
   })
 
   it('never sends a failed local request to a cloud failover provider', () => {
@@ -76,26 +80,27 @@ describe('local processing privacy boundary', () => {
 
   it('redacts the screen description before it crosses to a cloud provider (redactSensitive)', () => {
     // On macOS the pre-analyzed screen context can be a VERBATIM OCR extract (open password manager,
-    // terminal with an API key). The injection into req.screenContext — which flows to whatever answer
-    // provider is active, cloud included — must be built from the redacted local, never the raw field.
-    // Anchored on the flag, not the full condition: MQA-009 widened the guard to
-    // `req.mode === 'answer' && req.wantsScreenContext` so fact-check-on-screen stops being sent zero
-    // screen data. The redaction invariant below is what this test exists to protect, and it is
-    // independent of which asks reach the block.
-    // Must not match the caveman early-return `!req.wantsScreenContext) {` above this block.
-    const start = source.indexOf("if (req.mode === 'answer' && req.wantsScreenContext) {")
-    expect(start).toBeGreaterThan(-1)
-    const end = source.indexOf('} catch (err) {', start)
-    expect(end).toBeGreaterThan(start)
-    const body = source.slice(start, end)
-    expect(body).toMatch(
-      /const description = s\.redactSensitive \? redactSecrets\(ctx\.description\) : ctx\.description/
-    )
-    // From the assignment onward, only the redacted `description` local may be referenced — a future
-    // edit reintroducing raw ctx.description into the assembled context must fail here.
+    // terminal with an API key). The injection into req.screenContext, which flows to whatever answer
+    // provider is active, cloud included, must be built from the redacted local, never the raw field.
+    // The injector moved out of index.ts into the ambient-screen module (G46); index.ts passes the setting.
+    const body = ambientSource.slice(ambientSource.indexOf('export function applyAmbientScreenContext'))
+    expect(body).toMatch(/const description = deps\.redact \? redactSecrets\(ctx\.description\) : ctx\.description/)
     const assignIdx = body.indexOf('req.screenContext =')
     expect(assignIdx).toBeGreaterThan(-1)
     expect(body.slice(assignIdx)).not.toMatch(/ctx\.description/)
+    expect(source).toMatch(/redact: s\.redactSensitive,\s*\n\s*log:/)
+  })
+
+  it('redacts the description with the setting before it reaches screenContext (behaviour)', () => {
+    const raw = 'Terminal: export KEY=sk-abcdefghijklmnopqrstuvwxyz0123456789'
+    const run = (redact: boolean): string | undefined => {
+      const req = { mode: 'answer', wantsScreenContext: true, screenContext: undefined as string | undefined }
+      applyAmbientScreenContext(req, { fresh: () => ({ description: raw }), redact, log: () => undefined })
+      return req.screenContext
+    }
+    expect(run(true)).not.toContain('sk-abcdefghijklmnopqrstuvwxyz0123456789')
+    expect(run(true)).toContain('Terminal')
+    expect(run(false)).toBe(raw)
   })
 
   // MQA-009 (docs/qa/BUG-LEDGER.md): the screen-context injector used to sit INSIDE the
@@ -103,14 +108,19 @@ describe('local processing privacy boundary', () => {
   // "fact-check what's on my screen" reached the model with no screen data at all. The two
   // injections are now siblings: brainContext stays fact-check-excluded, screenContext does not.
   it('injects screen context for fact-check too — only brainContext is fact-check-excluded (MQA-009)', () => {
-    const screenIdx = source.indexOf("if (req.mode === 'answer' && req.wantsScreenContext) {")
+    const callIdx = source.indexOf('applyAmbientScreenContext(req, {')
     const brainGateIdx = source.indexOf("req.mode === 'answer' && req.kind !== 'factcheck'")
-    expect(screenIdx).toBeGreaterThan(-1)
+    expect(callIdx).toBeGreaterThan(-1)
     expect(brainGateIdx).toBeGreaterThan(-1)
-
-    // The screen block must NOT be nested inside the brainContext gate. Its guard carries no
-    // factcheck exclusion of its own.
-    const screenGuard = source.slice(source.lastIndexOf('if (', screenIdx), screenIdx + 30)
-    expect(screenGuard).not.toMatch(/factcheck/)
+    // Its guard (now in the module) carries no factcheck exclusion of its own.
+    expect(ambientSource).not.toMatch(/factcheck/)
+    const req = {
+      mode: 'answer',
+      kind: 'factcheck',
+      wantsScreenContext: true,
+      screenContext: undefined as string | undefined
+    }
+    applyAmbientScreenContext(req, { fresh: () => ({ description: 'A slide.' }), redact: false, log: () => undefined })
+    expect(req.screenContext).toBe('A slide.')
   })
 })
