@@ -115,12 +115,16 @@ export interface ExecuteDesktopOptions {
   /** What main derived for this dispatch. Without it nothing can be reported verified. */
   envelope?: ActionEnvelope
   deps?: Partial<DesktopAdapterDeps>
+  /** Cancellation of the owning confirmed task. It cannot undo an effect already dispatched. */
+  signal?: AbortSignal
 }
 
 interface Context {
   req: DesktopActionRequest
   envelope: ActionEnvelope | undefined
   deps: DesktopAdapterDeps
+  signal: AbortSignal | undefined
+  effectDispatched: boolean
 }
 
 function fail(id: DesktopAdapterId, detail: string, extra?: Partial<DesktopActionResult>): DesktopActionResult {
@@ -133,6 +137,16 @@ function okResult(id: DesktopAdapterId, detail?: string): DesktopActionResult {
 
 function unknownResult(id: DesktopAdapterId, detail: string): DesktopActionResult {
   return { id, ok: false, outcome: 'unknown', detail }
+}
+
+function stopped(ctx: Context): DesktopActionResult {
+  return ctx.effectDispatched
+    ? unknownResult(ctx.req.id, 'The action may have taken effect before Stop.')
+    : { id: ctx.req.id, ok: false, outcome: 'cancelled', detail: 'stopped' }
+}
+
+function cancelled(ctx: Context): boolean {
+  return ctx.signal?.aborted === true
 }
 
 /** Verified only with an envelope to bind the receipt to; otherwise the honest outcome is unknown. */
@@ -156,15 +170,27 @@ async function launchAndObserve(
   ctx: Context,
   bundleId: string,
   launch: () => Promise<{ ok: boolean }>
-): Promise<{ acknowledged: boolean; frontmost: boolean }> {
+): Promise<{ acknowledged: boolean; frontmost: boolean; stopped: boolean }> {
   const observation = ctx.deps.frontmost?.observe(bundleId, FRONTMOST_WINDOW_MS)
+  let observationCancelled = false
+  const cancelObservation = (): void => {
+    if (observationCancelled) return
+    observationCancelled = true
+    observation?.cancel()
+  }
+  ctx.signal?.addEventListener('abort', cancelObservation, { once: true })
   try {
     const ready = observation ? await observation.ready() : false
+    if (cancelled(ctx)) return { acknowledged: false, frontmost: false, stopped: true }
+    ctx.effectDispatched = true
     const launched = await launch()
-    if (!launched.ok) return { acknowledged: false, frontmost: false }
-    return { acknowledged: true, frontmost: Boolean(observation && ready && (await observation.matched())) }
+    if (!launched.ok) return { acknowledged: false, frontmost: false, stopped: cancelled(ctx) }
+    if (cancelled(ctx)) return { acknowledged: true, frontmost: false, stopped: true }
+    const frontmost = Boolean(observation && ready && (await observation.matched()))
+    return { acknowledged: true, frontmost, stopped: cancelled(ctx) }
   } finally {
-    observation?.cancel()
+    ctx.signal?.removeEventListener('abort', cancelObservation)
+    cancelObservation()
   }
 }
 
@@ -173,20 +199,27 @@ async function macOpenBundle(ctx: Context, bundleId: string, label: string): Pro
     ok: (await ctx.deps.exec(MAC_OPEN, ['-b', bundleId])).ok
   }))
   const id = ctx.req.id
-  if (!result.acknowledged) return unknownResult(id, `${label} launch acknowledgment is uncertain.`)
   if (result.frontmost) return verified(ctx, `${bundleId} became the frontmost app`, `Opened ${label}`)
+  if (result.stopped) return stopped(ctx)
+  if (!result.acknowledged) return unknownResult(id, `${label} launch acknowledgment is uncertain.`)
   return okResult(id, `Opened ${label}`)
 }
 
 /** Hand an allowlisted https URL to the default browser, or to Arc when it was named. No readback exists. */
 async function macOpenUrl(ctx: Context, url: string, browser: 'arc' | undefined): Promise<DesktopActionResult> {
   const id = ctx.req.id
+  if (cancelled(ctx)) return stopped(ctx)
   if (!isAllowedBrowserUrl(url)) return fail(id, 'url_not_allowed', { outcome: 'unsupported' })
-  if (browser === 'arc' && ctx.deps.macAppInstalled && !(await ctx.deps.macAppInstalled('Arc'))) {
-    return fail(id, 'preferred_missing', { preferredMissing: true })
+  if (browser === 'arc' && ctx.deps.macAppInstalled) {
+    const installed = await ctx.deps.macAppInstalled('Arc')
+    if (cancelled(ctx)) return stopped(ctx)
+    if (!installed) return fail(id, 'preferred_missing', { preferredMissing: true })
   }
+  if (cancelled(ctx)) return stopped(ctx)
   const args = browser === 'arc' ? ['-b', BUNDLE_ARC, url] : [url]
+  ctx.effectDispatched = true
   const acknowledged = (await ctx.deps.exec(MAC_OPEN, args)).ok
+  if (cancelled(ctx)) return stopped(ctx)
   return acknowledged
     ? okResult(id, 'Opened the page')
     : unknownResult(id, 'Browser launch acknowledgment is uncertain.')
@@ -195,7 +228,10 @@ async function macOpenUrl(ctx: Context, url: string, browser: 'arc' | undefined)
 async function winOpenTarget(ctx: Context, target: string): Promise<DesktopActionResult> {
   // explorer.exe is pinned to SystemRoot. Unlike `cmd /c start`, it does not parse a shell command.
   const id = ctx.req.id
+  if (cancelled(ctx)) return stopped(ctx)
+  ctx.effectDispatched = true
   const acknowledged = (await ctx.deps.exec(WINDOWS_EXPLORER, [target])).ok
+  if (cancelled(ctx)) return stopped(ctx)
   return acknowledged
     ? okResult(id, 'Open request accepted')
     : unknownResult(id, 'Windows app launch acknowledgment is uncertain.')
@@ -215,11 +251,16 @@ async function createNoteMac(
   req: Extract<DesktopActionRequest, { id: 'desktop.create_note' }>
 ): Promise<DesktopActionResult> {
   const id = req.id
+  if (cancelled(ctx)) return stopped(ctx)
   // Read-only consent check. A refusal here means nothing was attempted, so it is a clean failure.
-  if ((await ctx.deps.automationStatus?.(BUNDLE_NOTES)) === 'denied') return fail(id, 'automation_denied')
+  const consent = await ctx.deps.automationStatus?.(BUNDLE_NOTES)
+  if (cancelled(ctx)) return stopped(ctx)
+  if (consent === 'denied') return fail(id, 'automation_denied')
   const args: string[] = []
   for (const line of CREATE_NOTE_SCRIPT_LINES) args.push('-e', line)
   args.push(ARGV_MARKER, req.args.title, noteHtml(req.args.title, req.args.body))
+  if (cancelled(ctx)) return stopped(ctx)
+  ctx.effectDispatched = true
   const run = await ctx.deps.exec(MAC_OSASCRIPT, args, { timeoutMs: NOTES_SCRIPT_TIMEOUT_MS })
   if (!run.ok) {
     // Only the system's explicit "not authorized" error proves the note was not made. A timeout or any other
@@ -229,6 +270,7 @@ async function createNoteMac(
   }
   const noteId = run.stdout.trim()
   if (NOTE_ID.test(noteId)) return verified(ctx, 'Notes returned the id of the new note', 'Created the note')
+  if (cancelled(ctx)) return stopped(ctx)
   return okResult(id, 'Note creation requested')
 }
 
@@ -239,24 +281,32 @@ async function createNoteWindows(
   req: Extract<DesktopActionRequest, { id: 'desktop.create_note' }>
 ): Promise<DesktopActionResult> {
   const id = req.id
+  if (cancelled(ctx)) return stopped(ctx)
   const documents = ctx.deps.documentsDir?.()
   const fs = ctx.deps.notesFs
   if (!documents || !fs) return fail(id, 'documents_unavailable')
   const plan = planWindowsNote(documents, req.args.title)
   if (!plan) return fail(id, 'documents_unavailable')
   const contents = noteText(req.args.title, req.args.body)
+  if (cancelled(ctx)) return stopped(ctx)
+  ctx.effectDispatched = true
   try {
     await fs.mkdir(plan.directory)
   } catch {
+    if (cancelled(ctx)) return stopped(ctx)
     return fail(id, 'note_folder_unavailable')
   }
+  if (cancelled(ctx)) return stopped(ctx)
   let written: string | null = null
   for (let attempt = 1; attempt <= WINDOWS_NOTE_ATTEMPTS && written === null; attempt++) {
+    if (cancelled(ctx)) return stopped(ctx)
     const file = plan.pathFor(attempt)
     try {
+      ctx.effectDispatched = true
       await fs.writeNewFile(file, contents)
       written = file
     } catch (error) {
+      if (cancelled(ctx)) return stopped(ctx)
       const code = ((): unknown => {
         try {
           return (error as { code?: unknown }).code
@@ -269,6 +319,7 @@ async function createNoteWindows(
     }
   }
   if (written === null) return fail(id, 'note_name_unavailable')
+  if (cancelled(ctx)) return stopped(ctx)
   let size = -1
   try {
     size = await fs.sizeOf(written)
@@ -276,9 +327,11 @@ async function createNoteWindows(
     size = -1
   }
   if (size !== Buffer.byteLength(contents, 'utf8')) return unknownResult(id, 'The note file could not be read back.')
-  // The note exists whether or not Notepad opens it.
+  const saved = verified(ctx, `A ${size} byte note file was written`, 'Saved the note as a text file')
+  // The verified note exists whether or not Notepad opens it. Stop prevents the secondary GUI launch.
+  if (cancelled(ctx)) return saved
   await ctx.deps.spawnGui(WINDOWS_NOTEPAD, [written])
-  return verified(ctx, `A ${size} byte note file was written`, 'Saved the note as a text file')
+  return saved
 }
 
 async function executeMac(ctx: Context): Promise<DesktopActionResult> {
@@ -289,10 +342,15 @@ async function executeMac(ctx: Context): Promise<DesktopActionResult> {
     case 'desktop.create_note':
       return createNoteMac(ctx, req)
     case 'desktop.open_arc': {
-      if (ctx.deps.macAppInstalled && !(await ctx.deps.macAppInstalled('Arc'))) {
-        // No silent browser swap: a missing Arc is a visible failure.
-        return fail(req.id, 'preferred_missing', { preferredMissing: true })
+      if (ctx.deps.macAppInstalled) {
+        const installed = await ctx.deps.macAppInstalled('Arc')
+        if (cancelled(ctx)) return stopped(ctx)
+        if (!installed) {
+          // No silent browser swap: a missing Arc is a visible failure.
+          return fail(req.id, 'preferred_missing', { preferredMissing: true })
+        }
       }
+      if (cancelled(ctx)) return stopped(ctx)
       return macOpenBundle(ctx, BUNDLE_ARC, 'Arc')
     }
     case 'desktop.google_search': {
@@ -305,13 +363,19 @@ async function executeMac(ctx: Context): Promise<DesktopActionResult> {
       return macOpenUrl(ctx, X_URL, req.args.browser)
     case 'desktop.photo_booth_capture': {
       // Permission-gated by the OS, and local only: the photo goes nowhere. Check consent before opening anything.
+      if (cancelled(ctx)) return stopped(ctx)
       if (ctx.deps.accessibilityTrusted?.() !== true) return fail(req.id, 'accessibility_required')
-      if ((await ctx.deps.automationStatus?.(BUNDLE_SYSTEM_EVENTS)) === 'denied')
-        return fail(req.id, 'automation_denied')
+      if (cancelled(ctx)) return stopped(ctx)
+      const consent = await ctx.deps.automationStatus?.(BUNDLE_SYSTEM_EVENTS)
+      if (cancelled(ctx)) return stopped(ctx)
+      if (consent === 'denied') return fail(req.id, 'automation_denied')
       const open = await macOpenBundle(ctx, BUNDLE_PHOTO_BOOTH, 'Photo Booth')
       if (!open.ok) return open
+      if (cancelled(ctx)) return stopped(ctx)
       const args: string[] = []
       for (const line of PHOTO_BOOTH_SHUTTER_SCRIPT_LINES) args.push('-e', line)
+      if (cancelled(ctx)) return stopped(ctx)
+      ctx.effectDispatched = true
       const shutter = await ctx.deps.exec(MAC_OSASCRIPT, args)
       // The shutter has no readback, so the honest outcome is unknown.
       return shutter.ok
@@ -370,7 +434,10 @@ export async function executeDesktopAction(
   const ctx: Context = {
     req,
     envelope: options.envelope,
-    deps: { exec: runDesktopExec, spawnGui: spawnDesktopGui, ...options.deps }
+    deps: { exec: runDesktopExec, spawnGui: spawnDesktopGui, ...options.deps },
+    signal: options.signal,
+    effectDispatched: false
   }
+  if (cancelled(ctx)) return stopped(ctx)
   return platform === 'darwin' ? executeMac(ctx) : executeWin(ctx)
 }

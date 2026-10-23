@@ -38,7 +38,10 @@ describe('voice actions wiring (V03)', () => {
       .sort()
     expect(callers).toEqual(['desktop-adapters', 'tasks/desktop-action-task-runtime'])
     const runtime = readModuleSource(__dirname, '../tasks/desktop-action-task-runtime').text
-    expect(runtime).toContain('executeDesktopAction(request, { envelope, deps: createProductionDesktopAdapterDeps() })')
+    expect(runtime).toMatch(/execute:\s*\(request, envelope, signal\)\s*=>/)
+    expect(runtime).toContain(
+      'executeDesktopAction(request, { envelope, deps: createProductionDesktopAdapterDeps(), signal })'
+    )
     // One bridge per process, shared by CommandConfirmation and the voice pipeline.
     expect(runtime).toMatch(/if \(!sharedDeps\) \{/)
   })

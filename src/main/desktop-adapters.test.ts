@@ -2,7 +2,12 @@ import { describe, expect, it, vi } from 'vitest'
 import type { DesktopActionRequest } from '@shared/desktop-actions'
 import { actionEnvelope, isObservedVerified } from './action-guard'
 import { CommandControl } from './command-control'
-import { executeDesktopAction, type DesktopAdapterDeps, type NoteFileSystem } from './desktop-adapters'
+import {
+  executeDesktopAction,
+  type DesktopAdapterDeps,
+  type ExecuteDesktopOptions,
+  type NoteFileSystem
+} from './desktop-adapters'
 import type { DesktopExecResult } from './infra/process/desktop-exec'
 
 const OK: DesktopExecResult = { ok: true, stdout: '', stderr: '', timedOut: false }
@@ -18,6 +23,24 @@ function deps(overrides: Partial<DesktopAdapterDeps> = {}) {
 }
 
 const envelopeFor = (request: DesktopActionRequest) => actionEnvelope('a'.repeat(32), request)
+
+const executeWithSignal = executeDesktopAction as unknown as (
+  request: DesktopActionRequest,
+  options: ExecuteDesktopOptions & { signal: AbortSignal }
+) => ReturnType<typeof executeDesktopAction>
+
+interface Deferred<T> {
+  promise: Promise<T>
+  resolve(value: T): void
+}
+
+function deferred<T>(): Deferred<T> {
+  let resolve!: (value: T) => void
+  const promise = new Promise<T>((done) => {
+    resolve = done
+  })
+  return { promise, resolve }
+}
 
 function frontmost(options: { ready?: boolean; matched?: boolean } = {}) {
   const calls: string[] = []
@@ -566,5 +589,239 @@ describe('the real command path keeps adapter uncertainty', () => {
     })
     const proposal = controller.propose({ webContentsId: 7, revision: 2 }, { id: 'desktop.open_notes', args: {} })
     expect(await controller.confirm({ ...proposal, webContentsId: 7 })).toEqual({ ok: true, outcome: 'verified' })
+  })
+})
+
+describe('adapter Stop signal boundaries', () => {
+  it('a pre-aborted request dispatches no Notes launch', async () => {
+    const controller = new AbortController()
+    controller.abort()
+    const { exec, all } = deps()
+
+    const result = await executeWithSignal(
+      { id: 'desktop.open_notes', args: {} },
+      { platform: 'darwin', deps: all, signal: controller.signal }
+    )
+
+    expect(exec).not.toHaveBeenCalled()
+    expect(result.outcome).toBe('cancelled')
+  })
+
+  it('cancellation during readiness prevents app launch', async () => {
+    const ready = deferred<boolean>()
+    const controller = new AbortController()
+    const cancelObservation = vi.fn()
+    const { exec, all } = deps({
+      frontmost: {
+        observe: vi.fn(() => ({ ready: () => ready.promise, matched: async () => true, cancel: cancelObservation }))
+      }
+    })
+    const run = executeWithSignal(
+      { id: 'desktop.open_notes', args: {} },
+      { platform: 'darwin', deps: all, signal: controller.signal }
+    )
+
+    await vi.waitFor(() => expect(all.frontmost?.observe).toHaveBeenCalledOnce())
+    controller.abort()
+    ready.resolve(true)
+
+    const result = await run
+    expect(exec).not.toHaveBeenCalled()
+    expect(cancelObservation).toHaveBeenCalledOnce()
+    expect(result.outcome).toBe('cancelled')
+  })
+
+  it.each([
+    { id: 'desktop.open_arc', args: {} },
+    { id: 'desktop.google_search', args: { q: 'synthetic query', browser: 'arc' as const } }
+  ] as const)('cancellation while checking Arc availability prevents launch for %s', async (request) => {
+    const installed = deferred<boolean>()
+    const controller = new AbortController()
+    const macAppInstalled = vi.fn(() => installed.promise)
+    const { exec, all } = deps({ macAppInstalled })
+    const run = executeWithSignal(request as DesktopActionRequest, {
+      platform: 'darwin',
+      deps: all,
+      signal: controller.signal
+    })
+
+    await vi.waitFor(() => expect(macAppInstalled).toHaveBeenCalledOnce())
+    controller.abort()
+    installed.resolve(true)
+
+    const result = await run
+    expect(exec).not.toHaveBeenCalled()
+    expect(result.outcome).toBe('cancelled')
+  })
+
+  it('cancellation after the Windows notes folder is prepared prevents writing', async () => {
+    const madeDirectory = deferred<void>()
+    const controller = new AbortController()
+    const writeNewFile = vi.fn(async () => undefined)
+    const mkdir = vi.fn(() => madeDirectory.promise)
+    const notesFs: NoteFileSystem = {
+      mkdir,
+      writeNewFile,
+      sizeOf: async () => 1
+    }
+    const { all } = deps({ documentsDir: () => 'C:\\Users\\qa\\Documents', notesFs })
+    const request: DesktopActionRequest = { id: 'desktop.create_note', args: { title: 'Synthetic' } }
+    const run = executeWithSignal(request, {
+      platform: 'win32',
+      envelope: envelopeFor(request),
+      deps: all,
+      signal: controller.signal
+    })
+
+    await vi.waitFor(() => expect(mkdir).toHaveBeenCalledOnce())
+    controller.abort()
+    madeDirectory.resolve()
+
+    const result = await run
+    expect(writeNewFile).not.toHaveBeenCalled()
+    expect(result.outcome).toBe('unknown')
+  })
+
+  it('Stop while Windows folder creation is pending stays uncertain if mkdir rejects', async () => {
+    let rejectDirectory!: (error: Error) => void
+    const directory = new Promise<void>((_resolve, reject) => {
+      rejectDirectory = reject
+    })
+    const controller = new AbortController()
+    const mkdir = vi.fn(() => directory)
+    const writeNewFile = vi.fn(async () => undefined)
+    const notesFs: NoteFileSystem = { mkdir, writeNewFile, sizeOf: async () => 0 }
+    const { all } = deps({ documentsDir: () => 'C:\\Users\\qa\\Documents', notesFs })
+    const request: DesktopActionRequest = { id: 'desktop.create_note', args: { title: 'Synthetic' } }
+    const run = executeWithSignal(request, {
+      platform: 'win32',
+      envelope: envelopeFor(request),
+      deps: all,
+      signal: controller.signal
+    })
+
+    await vi.waitFor(() => expect(mkdir).toHaveBeenCalledOnce())
+    controller.abort()
+    rejectDirectory(new Error('synthetic mkdir failure'))
+
+    const result = await run
+    expect(writeNewFile).not.toHaveBeenCalled()
+    expect(result.outcome).toBe('unknown')
+  })
+
+  it('a Stop after a name collision prevents the next Windows filename attempt', async () => {
+    const controller = new AbortController()
+    let calls = 0
+    const writeNewFile = vi.fn(async () => {
+      calls += 1
+      if (calls === 1) {
+        controller.abort()
+        throw Object.assign(new Error('taken'), { code: 'EEXIST' })
+      }
+    })
+    const notesFs: NoteFileSystem = {
+      mkdir: async () => undefined,
+      writeNewFile,
+      sizeOf: async () => 0
+    }
+    const { all } = deps({ documentsDir: () => 'C:\\Users\\qa\\Documents', notesFs })
+    const request: DesktopActionRequest = { id: 'desktop.create_note', args: { title: 'Synthetic' } }
+
+    const result = await executeWithSignal(request, {
+      platform: 'win32',
+      envelope: envelopeFor(request),
+      deps: all,
+      signal: controller.signal
+    })
+
+    expect(writeNewFile).toHaveBeenCalledOnce()
+    expect(result.outcome).toBe('unknown')
+  })
+
+  it('a readback-verified note stays verified when Stop prevents opening Notepad', async () => {
+    const controller = new AbortController()
+    const spawnGui = vi.fn(async () => ({ ok: true }))
+    let writtenContents = ''
+    const notesFs: NoteFileSystem = {
+      mkdir: async () => undefined,
+      writeNewFile: async (_file, contents) => {
+        writtenContents = contents
+      },
+      sizeOf: async () => {
+        controller.abort()
+        return Buffer.byteLength(writtenContents, 'utf8')
+      }
+    }
+    const { all } = deps({ documentsDir: () => 'C:\\Users\\qa\\Documents', notesFs, spawnGui })
+    const request: DesktopActionRequest = { id: 'desktop.create_note', args: { title: 'Synthetic' } }
+
+    const result = await executeWithSignal(request, {
+      platform: 'win32',
+      envelope: envelopeFor(request),
+      deps: all,
+      signal: controller.signal
+    })
+
+    expect(spawnGui).not.toHaveBeenCalled()
+    expect(result.outcome).toBe('verified')
+    expect(result.outcome).not.toBe('cancelled')
+  })
+
+  it('Stop while a Windows note write is pending prevents Notepad and keeps the effect uncertain', async () => {
+    const write = deferred<void>()
+    const controller = new AbortController()
+    const spawnGui = vi.fn(async () => ({ ok: true }))
+    let writtenContents = ''
+    const writeNewFile = vi.fn(async (_file: string, contents: string) => {
+      await write.promise
+      writtenContents = contents
+    })
+    const sizeOf = vi.fn(async () => Buffer.byteLength(writtenContents, 'utf8'))
+    const notesFs: NoteFileSystem = {
+      mkdir: async () => undefined,
+      writeNewFile,
+      sizeOf
+    }
+    const { all } = deps({ documentsDir: () => 'C:\\Users\\qa\\Documents', notesFs, spawnGui })
+    const request: DesktopActionRequest = { id: 'desktop.create_note', args: { title: 'Synthetic' } }
+    const run = executeWithSignal(request, {
+      platform: 'win32',
+      envelope: envelopeFor(request),
+      deps: all,
+      signal: controller.signal
+    })
+
+    await vi.waitFor(() => expect(writeNewFile).toHaveBeenCalledOnce())
+    controller.abort()
+    write.resolve()
+
+    const result = await run
+    expect(spawnGui).not.toHaveBeenCalled()
+    expect(sizeOf).not.toHaveBeenCalled()
+    expect(result.outcome).toBe('unknown')
+    expect(result.outcome).not.toBe('cancelled')
+  })
+
+  it('a Stop after Notes AppleScript dispatch preserves uncertainty and never retries', async () => {
+    const dispatched = deferred<DesktopExecResult>()
+    const controller = new AbortController()
+    const { exec, all } = deps({ automationStatus: async () => 'granted' })
+    exec.mockReturnValueOnce(dispatched.promise)
+    const request: DesktopActionRequest = { id: 'desktop.create_note', args: { title: 'Synthetic' } }
+    const run = executeWithSignal(request, {
+      platform: 'darwin',
+      envelope: envelopeFor(request),
+      deps: all,
+      signal: controller.signal
+    })
+
+    await vi.waitFor(() => expect(exec).toHaveBeenCalledOnce())
+    controller.abort()
+    dispatched.resolve({ ...NO, timedOut: true })
+
+    const result = await run
+    expect(exec).toHaveBeenCalledOnce()
+    expect(result.outcome).toBe('unknown')
+    expect(result.outcome).not.toBe('cancelled')
   })
 })

@@ -60,10 +60,10 @@ export function createDesktopActionTaskBridge(): DesktopActionTaskBridge {
       : null
   return new DesktopActionTaskBridge({
     // The envelope main derived rides along so a verified outcome can carry a receipt bound to this dispatch.
-    execute: (request, envelope) =>
+    execute: (request, envelope, signal) =>
       qaSink
         ? qaSink(request, envelope)
-        : executeDesktopAction(request, { envelope, deps: createProductionDesktopAdapterDeps() }),
+        : executeDesktopAction(request, { envelope, deps: createProductionDesktopAdapterDeps(), signal }),
     store: createEncryptedTaskFileStore({
       file: () => join(app.getPath('userData'), 'desktop-action-tasks.bin'),
       encrypt: encryptSecret,
