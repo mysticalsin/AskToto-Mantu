@@ -75,7 +75,7 @@ import { LazyTextarea } from '../../ui/LazyText'
 import { ManagedChip } from '../../ui/ManagedChip'
 import { ctl } from '../../ui/ctl'
 import { DustSetup } from './DustSetup'
-import { AmbientObservationSection } from './AmbientObservationSection'
+import { PrivacyObservationSections } from './PrivacyObservationSections'
 import { SensitiveDataSection } from './SensitiveDataSection'
 import { OperatorReportingSection, OperatorSourceLine } from './OperatorReportingSection'
 import { ReplayHint, SaveErrorLine } from './SettingsNotices'
@@ -840,13 +840,7 @@ export function Settings({
                     icon={Eye}
                   />
                 </Section>
-                <Section
-                  title="Background observation"
-                  desc="What Métis notices in the background, and what it keeps."
-                  icon={Eye}
-                >
-                  <AmbientObservationSection />
-                </Section>
+                <PrivacyObservationSections />
                 <Section
                   title="Conversation memory"
                   desc="Whether a new question you type remembers the previous questions and answers."
