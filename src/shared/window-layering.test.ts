@@ -4,7 +4,7 @@ import { NATIVE_WINDOW_MATRIX, UI_SURFACE_HOST, surfacePolicy, windowPolicy } fr
 describe('window layering and capture matrix (R038)', () => {
   it('every window that is ever drawn follows the content-protection setting', () => {
     for (const w of NATIVE_WINDOW_MATRIX.filter((x) => x.composited)) {
-      expect(w.contentProtection, w.id).toBe('follows-setting')
+      expect(['follows-setting', 'always'], w.id).toContain(w.contentProtection)
       expect(w.appearsInCaptureWhenProtected, w.id).toBe(false)
     }
   })
@@ -40,5 +40,13 @@ describe('window layering and capture matrix (R038)', () => {
       expect(UI_SURFACE_HOST[s]).toBe('overlay')
     }
     expect(windowPolicy('overlay').alwaysOnTop).toBe('screen-saver')
+  })
+
+  it('the annotation window is always content-protected, click-through at the top level, and hosts screen marks', () => {
+    const annotation = windowPolicy('annotation')
+    expect(annotation.contentProtection).toBe('always')
+    expect(annotation.appearsInCaptureWhenUnprotected).toBe(false)
+    expect(annotation.alwaysOnTop).toBe('screen-saver')
+    expect(surfacePolicy('screen-marks').id).toBe('annotation')
   })
 })

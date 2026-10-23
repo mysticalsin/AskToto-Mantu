@@ -9,7 +9,7 @@ import { NATIVE_WINDOW_MATRIX } from '../shared/window-layering'
  * behaviour; this file holds the policy table to the code.
  */
 const MAIN = __dirname
-const MODULES = ['index', 'intelligence', 'windows/permission-helper-window'] as const
+const MODULES = ['index', 'intelligence', 'windows/permission-helper-window', 'windows/annotation-window'] as const
 const mod = (name: string): string => readModuleSource(MAIN, `./${name}`).text
 const sources = new Map<string, string>(MODULES.map((m) => [m, mod(m)]))
 const NEW_WINDOW = /(?:const\s+|let\s+|var\s+)?([A-Za-z_$][\w$]*)\s*=\s*new BrowserWindow\(/g
@@ -68,6 +68,12 @@ describe('native windows follow the layering and capture matrix (R038)', () => {
     expect(index).toMatch(/w\.setAlwaysOnTop\(true, 'screen-saver'\)/)
     expect(index).toMatch(/win\.setAlwaysOnTop\(true, 'screen-saver'\)/)
     expect(index).toMatch(/win\.setContentProtection\(contentProtectionOn\(\)\)/)
+  })
+
+  it('the annotation window is protected unconditionally and takes the matrix level', () => {
+    const src = sources.get('windows/annotation-window') as string
+    expect(src).toMatch(/win\.setContentProtection\(true\)/)
+    expect(src).toMatch(/win\.setAlwaysOnTop\(true, 'screen-saver'\)/)
   })
 
   it('the Intelligence dashboard and the permission helper take the same setting, not a literal', () => {
