@@ -121,7 +121,14 @@ describe('owner session wiring', () => {
     // assistants and user memory seams) registers after the policy is installed.
     expect(installedAtFirstHandler).toEqual(
       Array.from(
-        { length: 3 + Object.values(DICTATION_MEMORY_IPC).length + 4 + Object.values(ASSISTANT_IPC).length + Object.values(USER_MEMORY_IPC).length },
+        {
+          length:
+            3 +
+            Object.values(DICTATION_MEMORY_IPC).length +
+            4 +
+            Object.values(ASSISTANT_IPC).length +
+            Object.values(USER_MEMORY_IPC).length
+        },
         () => true
       )
     )

@@ -1,5 +1,17 @@
 import { memo, useState } from 'react'
-import { Copy, Check, RefreshCw, FileDown, ShieldCheck, ChevronsDown, ThumbsUp, ThumbsDown, Eye, EyeOff, X } from 'lucide-react'
+import {
+  Copy,
+  Check,
+  RefreshCw,
+  FileDown,
+  ShieldCheck,
+  ChevronsDown,
+  ThumbsUp,
+  ThumbsDown,
+  Eye,
+  EyeOff,
+  X
+} from 'lucide-react'
 import { PROVIDERS, type ProviderId } from '@shared/providers'
 import { isScreenCapturePermissionError, needsAppRelaunchForScreenCapture } from '@shared/screen-capture'
 import { Markdown } from './Markdown'
@@ -12,10 +24,22 @@ import { isOnboardingDemoActive } from '../lib/onboarding-demo-guard'
 
 /** A fact-check verdict: parse a leading "VERDICT: <X>" line; the rest is the bulleted reasoning. */
 const VERDICTS: Record<string, { label: string; chip: string }> = {
-  TRUE: { label: 'True', chip: 'bg-[var(--color-success)]/15 text-[var(--color-success)] border-[var(--color-success)]/30' },
-  FALSE: { label: 'False', chip: 'bg-[var(--color-danger)]/15 text-[var(--color-danger)] border-[var(--color-danger)]/30' },
-  MISLEADING: { label: 'Misleading', chip: 'bg-[var(--color-danger)]/10 text-[color:var(--color-danger)] border-[var(--color-danger)]/25' },
-  UNVERIFIABLE: { label: 'Unverifiable', chip: 'bg-white/[0.06] text-[color:var(--color-ink-2)] border-[var(--color-hair-soft)]' }
+  TRUE: {
+    label: 'True',
+    chip: 'bg-[var(--color-success)]/15 text-[var(--color-success)] border-[var(--color-success)]/30'
+  },
+  FALSE: {
+    label: 'False',
+    chip: 'bg-[var(--color-danger)]/15 text-[var(--color-danger)] border-[var(--color-danger)]/30'
+  },
+  MISLEADING: {
+    label: 'Misleading',
+    chip: 'bg-[var(--color-danger)]/10 text-[color:var(--color-danger)] border-[var(--color-danger)]/25'
+  },
+  UNVERIFIABLE: {
+    label: 'Unverifiable',
+    chip: 'bg-white/[0.06] text-[color:var(--color-ink-2)] border-[var(--color-hair-soft)]'
+  }
 }
 function parseVerdict(text: string): { key: string; rest: string } | null {
   const m = text.match(/VERDICT:\s*(TRUE|FALSE|MISLEADING|UNVERIFIABLE)\b/i)
@@ -30,14 +54,18 @@ function errorHint(error: string): string | null {
   // remedy is already complete, and the key hint below would send the user to re-enter an OAuth token the
   // Dust CLI minted — one they never typed and cannot re-paste.
   if (/dust session expired/.test(e)) return null
-  if (/rate.?limit|\b429\b|too many request/.test(e)) return 'The provider is rate-limiting you. Wait a moment, or switch providers in Settings.'
+  if (/rate.?limit|\b429\b|too many request/.test(e))
+    return 'The provider is rate-limiting you. Wait a moment, or switch providers in Settings.'
   // `expired` must carry key/api/token context: on its own it also matches a session/OAuth expiry, whose
   // fix is a reconnect, not a key edit.
   if (/invalid.*(key|api)|incorrect api key|unauthor|\b401\b|(api|key|token).*expired|expired.*(api|key|token)/.test(e))
     return 'Your API key may be invalid or expired. Update it in Settings → AI.'
-  if (/timed out|timeout|no response/.test(e)) return 'The model took too long. Retry, or pick a faster tier in Settings → Thinking mode.'
-  if (/network|fetch failed|enotfound|econnrefused|getaddrinfo|offline|dns/.test(e)) return 'Looks like a network problem. Check your connection, then retry.'
-  if (/quota|insufficient|billing|credit|payment/.test(e)) return 'The provider reports a quota or billing issue. Check your account, or switch providers in Settings.'
+  if (/timed out|timeout|no response/.test(e))
+    return 'The model took too long. Retry, or pick a faster tier in Settings → Thinking mode.'
+  if (/network|fetch failed|enotfound|econnrefused|getaddrinfo|offline|dns/.test(e))
+    return 'Looks like a network problem. Check your connection, then retry.'
+  if (/quota|insufficient|billing|credit|payment/.test(e))
+    return 'The provider reports a quota or billing issue. Check your account, or switch providers in Settings.'
   // No hint for the vision/screenshot case: the raw error ("… can't read screenshots. Switch to Claude
   // or GPT in Settings, or ask without a screen capture.") is already complete — a hint duplicates it.
   return null
@@ -241,67 +269,80 @@ export const Answer = memo(function Answer({
       })
   }
 
-  const footer = !streaming && (text || error) ? (
-    <div className="answer__footer mt-1 flex flex-col gap-1.5">
-      <div className="answer__footer-row flex items-center gap-1.5">
-        <TextButton onClick={copy} disabled={!text}>
-          {copied ? <Check size={11} className="text-[var(--color-success)]" /> : <Copy size={11} />}
-          {copied ? 'Copied' : 'Copy'}
-        </TextButton>
-        {text && (
-          <TextButton onClick={saveNote} title="Save this answer as a markdown note">
-            {saved ? <Check size={11} className="text-[var(--color-success)]" /> : <FileDown size={11} />}
-            {saved ? 'Saved' : 'Save note'}
+  const footer =
+    !streaming && (text || error) ? (
+      <div className="answer__footer mt-1 flex flex-col gap-1.5">
+        <div className="answer__footer-row flex items-center gap-1.5">
+          <TextButton onClick={copy} disabled={!text}>
+            {copied ? <Check size={11} className="text-[var(--color-success)]" /> : <Copy size={11} />}
+            {copied ? 'Copied' : 'Copy'}
           </TextButton>
+          {text && (
+            <TextButton onClick={saveNote} title="Save this answer as a markdown note">
+              {saved ? <Check size={11} className="text-[var(--color-success)]" /> : <FileDown size={11} />}
+              {saved ? 'Saved' : 'Save note'}
+            </TextButton>
+          )}
+          {onRetry && (
+            <TextButton icon={RefreshCw} onClick={onRetry}>
+              Retry
+            </TextButton>
+          )}
+          {text && onGoDeeper && kind !== 'factcheck' && (
+            <TextButton icon={ChevronsDown} onClick={onGoDeeper} title="Re-answer with more depth and detail">
+              Go deeper
+            </TextButton>
+          )}
+          {text && (
+            <div className="ml-auto flex items-center gap-0.5" title="Was this useful?">
+              <button
+                type="button"
+                aria-label="Good answer"
+                onClick={() => rate('up')}
+                className={[
+                  'no-drag focus-ring flex items-center rounded-md p-1 transition-colors',
+                  rated === 'up'
+                    ? 'text-[color:var(--color-success)]'
+                    : 'text-[color:var(--color-ink-3)] hover:bg-white/10 hover:text-[color:var(--color-ink)]'
+                ].join(' ')}
+              >
+                <ThumbsUp size={11} />
+              </button>
+              <button
+                type="button"
+                aria-label="Bad answer"
+                onClick={() => rate('down')}
+                className={[
+                  'no-drag focus-ring flex items-center rounded-md p-1 transition-colors',
+                  rated === 'down'
+                    ? 'text-[color:var(--color-danger)]'
+                    : 'text-[color:var(--color-ink-3)] hover:bg-white/10 hover:text-[color:var(--color-ink)]'
+                ].join(' ')}
+              >
+                <ThumbsDown size={11} />
+              </button>
+            </div>
+          )}
+        </div>
+        <ArtifactChips turnId={askId} settled={!streaming} />
+        {saveError && (
+          <div
+            role="alert"
+            className="rounded-lg border border-[var(--color-danger)]/30 bg-[var(--color-danger)]/10 px-2 py-1 text-[11px] text-[var(--color-danger)]"
+          >
+            {saveError}
+          </div>
         )}
-        {onRetry && <TextButton icon={RefreshCw} onClick={onRetry}>Retry</TextButton>}
-        {text && onGoDeeper && kind !== 'factcheck' && (
-          <TextButton icon={ChevronsDown} onClick={onGoDeeper} title="Re-answer with more depth and detail">Go deeper</TextButton>
-        )}
-        {text && (
-          <div className="ml-auto flex items-center gap-0.5" title="Was this useful?">
-            <button
-              type="button"
-              aria-label="Good answer"
-              onClick={() => rate('up')}
-              className={[
-                'no-drag focus-ring flex items-center rounded-md p-1 transition-colors',
-                rated === 'up'
-                  ? 'text-[color:var(--color-success)]'
-                  : 'text-[color:var(--color-ink-3)] hover:bg-white/10 hover:text-[color:var(--color-ink)]'
-              ].join(' ')}
-            >
-              <ThumbsUp size={11} />
-            </button>
-            <button
-              type="button"
-              aria-label="Bad answer"
-              onClick={() => rate('down')}
-              className={[
-                'no-drag focus-ring flex items-center rounded-md p-1 transition-colors',
-                rated === 'down'
-                  ? 'text-[color:var(--color-danger)]'
-                  : 'text-[color:var(--color-ink-3)] hover:bg-white/10 hover:text-[color:var(--color-ink)]'
-              ].join(' ')}
-            >
-              <ThumbsDown size={11} />
-            </button>
+        {copyError && (
+          <div
+            role="alert"
+            className="rounded-lg border border-[var(--color-danger)]/30 bg-[var(--color-danger)]/10 px-2 py-1 text-[11px] text-[var(--color-danger)]"
+          >
+            {copyError}
           </div>
         )}
       </div>
-      <ArtifactChips turnId={askId} settled={!streaming} />
-      {saveError && (
-        <div role="alert" className="rounded-lg border border-[var(--color-danger)]/30 bg-[var(--color-danger)]/10 px-2 py-1 text-[11px] text-[var(--color-danger)]">
-          {saveError}
-        </div>
-      )}
-      {copyError && (
-        <div role="alert" className="rounded-lg border border-[var(--color-danger)]/30 bg-[var(--color-danger)]/10 px-2 py-1 text-[11px] text-[var(--color-danger)]">
-          {copyError}
-        </div>
-      )}
-    </div>
-  ) : null
+    ) : null
 
   if (error) {
     const hint = errorHint(error)
@@ -317,10 +358,15 @@ export const Answer = memo(function Answer({
             <Markdown>{text}</Markdown>
           </div>
         )}
-        <div role="alert" className="rounded-lg border border-[var(--color-danger)]/30 bg-[var(--color-danger)]/10 px-3 py-2.5 text-[13px] text-[var(--color-danger)] break-words [overflow-wrap:anywhere]">
+        <div
+          role="alert"
+          className="rounded-lg border border-[var(--color-danger)]/30 bg-[var(--color-danger)]/10 px-3 py-2.5 text-[13px] text-[var(--color-danger)] break-words [overflow-wrap:anywhere]"
+        >
           {error}
           {hint && (
-            <div className="mt-1.5 text-[12px] leading-snug text-[color:var(--color-ink-2)] break-words [overflow-wrap:anywhere]">{hint}</div>
+            <div className="mt-1.5 text-[12px] leading-snug text-[color:var(--color-ink-2)] break-words [overflow-wrap:anywhere]">
+              {hint}
+            </div>
           )}
         </div>
         {footer}
