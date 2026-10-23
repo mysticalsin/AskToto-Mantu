@@ -39,9 +39,13 @@ export async function verifyArtifactFile(record: ArtifactRecord, fs: ArtifactFs)
   return { status: 'ready', fingerprint: fingerprintOf(after) }
 }
 
-/** Synchronous recheck for the drag-start gesture: the file must still look exactly as it did when it was verified. */
-export function matchesFingerprint(record: ArtifactRecord, expected: FileFingerprint, fs: ArtifactFs): boolean {
-  const stat = fs.lstatSync(record.path)
+/** Whether the file still looks exactly as it did when it was verified (cheap: no digest). */
+export async function matchesFingerprint(
+  record: ArtifactRecord,
+  expected: FileFingerprint,
+  fs: ArtifactFs
+): Promise<boolean> {
+  const stat = await fs.lstat(record.path)
   if (!stat || stat.isSymbolicLink() || !stat.isFile()) return false
   const now = fingerprintOf(stat)
   return now.size === expected.size && now.mtimeMs === expected.mtimeMs && now.ino === expected.ino

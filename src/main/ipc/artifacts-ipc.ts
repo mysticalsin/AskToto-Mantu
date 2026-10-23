@@ -41,7 +41,8 @@ export function registerArtifactsIpc(deps: ArtifactsIpcDeps): void {
 
   for (const [channel, action] of [
     [ARTIFACT_IPC.open, (id: string) => service.open(id)],
-    [ARTIFACT_IPC.reveal, (id: string) => service.reveal(id)]
+    [ARTIFACT_IPC.reveal, (id: string) => service.reveal(id)],
+    [ARTIFACT_IPC.arm, (id: string) => service.arm(id)]
   ] as const) {
     ipcMain.handle(channel, async (event, raw): Promise<ArtifactActionResult> => {
       gate(event)

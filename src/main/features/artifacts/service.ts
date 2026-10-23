@@ -9,6 +9,9 @@ export interface ArtifactServiceDeps {
   /** OS open of a file; resolves to an error string, or '' on success. */
   openPath(path: string): Promise<string>
   showItemInFolder(path: string): void
+  now(): number
+  /** How long after `arm` a drag may start. */
+  armWindowMs?: number
 }
 
 export interface DragItem {
@@ -21,9 +24,13 @@ export interface ArtifactService {
   open(artifactId: string): Promise<ArtifactActionResult>
   reveal(artifactId: string): Promise<ArtifactActionResult>
   /**
-   * Starts the OS drag of exactly the recorded file. Synchronous, because the drag must begin inside the user's gesture:
-   * it relies on the verification `forTurn`, `open` or `reveal` just made, and refuses if the file no longer looks the
-   * same. `begin` is only ever handed the recorded path, never anything from the renderer.
+   * Pointer-down on a chip: re-checks that the file still looks as it did when it was verified (size, mtime, inode, not
+   * a symlink; no digest) and arms a drag for a few seconds. Asynchronous, so the drag itself never has to touch the disk.
+   */
+  arm(artifactId: string): Promise<ArtifactActionResult>
+  /**
+   * Starts the OS drag of exactly the recorded file, only while armed. Synchronous, because the drag must begin inside the
+   * user's gesture. `begin` is only ever handed the recorded path, never anything from the renderer.
    */
   dragStart(artifactId: string, begin: (item: DragItem) => void): ArtifactActionResult
 }
@@ -42,6 +49,8 @@ const toChip = (record: ArtifactRecord, status: ArtifactChip['status']): Artifac
 export function createArtifactService(deps: ArtifactServiceDeps): ArtifactService {
   const { registry, fs } = deps
   const verified = new Map<string, FileFingerprint>()
+  const armedUntil = new Map<string, number>()
+  const armWindowMs = deps.armWindowMs ?? 5000
 
   async function check(
     artifactId: string
@@ -50,7 +59,10 @@ export function createArtifactService(deps: ArtifactServiceDeps): ArtifactServic
     if (!record) return null
     const result = await verifyArtifactFile(record, fs)
     if (result.status === 'ready') verified.set(artifactId, result.fingerprint)
-    else verified.delete(artifactId)
+    else {
+      verified.delete(artifactId)
+      armedUntil.delete(artifactId)
+    }
     return { record, status: result.status }
   }
 
@@ -81,13 +93,24 @@ export function createArtifactService(deps: ArtifactServiceDeps): ArtifactServic
         deps.showItemInFolder(record.path)
         return { ok: true }
       }),
-    dragStart(artifactId, begin) {
+    async arm(artifactId) {
       const record = registry.get(artifactId)
       if (!record) return { ok: false, reason: 'not-found' }
       const expected = verified.get(artifactId)
-      if (!expected) return { ok: false, reason: 'changed' }
-      if (!matchesFingerprint(record, expected, fs)) {
+      if (!expected || !(await matchesFingerprint(record, expected, fs))) {
         verified.delete(artifactId)
+        armedUntil.delete(artifactId)
+        return { ok: false, reason: 'changed' }
+      }
+      armedUntil.set(artifactId, deps.now() + armWindowMs)
+      return { ok: true }
+    },
+    dragStart(artifactId, begin) {
+      const record = registry.get(artifactId)
+      if (!record) return { ok: false, reason: 'not-found' }
+      const until = armedUntil.get(artifactId)
+      if (until === undefined || deps.now() > until) {
+        armedUntil.delete(artifactId)
         return { ok: false, reason: 'changed' }
       }
       begin({ file: record.path })

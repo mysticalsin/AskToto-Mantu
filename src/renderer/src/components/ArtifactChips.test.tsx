@@ -16,7 +16,9 @@ const chip = (over: Partial<ArtifactChip> = {}): ArtifactChip => ({
 })
 const noop = (): void => {}
 const list = (chips: ArtifactChip[], failure: string | null = null): string =>
-  renderToStaticMarkup(<ArtifactChipList chips={chips} failure={failure} onOpen={noop} onReveal={noop} onDrag={noop} />)
+  renderToStaticMarkup(
+    <ArtifactChipList chips={chips} failure={failure} onOpen={noop} onReveal={noop} onArm={noop} onDrag={noop} />
+  )
 
 describe('ArtifactChips', () => {
   it('renders nothing for a turn with no artifacts, before a turn id exists, and before the bridge loads', () => {

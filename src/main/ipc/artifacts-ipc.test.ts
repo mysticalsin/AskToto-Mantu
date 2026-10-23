@@ -10,6 +10,7 @@ function setup(opts: { signedIn?: boolean; mainWindow?: boolean } = {}) {
     forTurn: vi.fn(async (turnId: string) => ({ manifest: { turnId, artifactIds: [] }, chips: [] })),
     open: vi.fn(async () => ({ ok: true }) as const),
     reveal: vi.fn(async () => ({ ok: true }) as const),
+    arm: vi.fn(async () => ({ ok: true }) as const),
     dragStart: vi.fn((_id: string, begin: (i: { file: string }) => void) => {
       begin({ file: '/recorded/file.md' })
       return { ok: true } as const
@@ -42,6 +43,8 @@ describe('artifacts IPC', () => {
     await (handlers.get(ARTIFACT_IPC.reveal) as (...a: unknown[]) => Promise<unknown>)(event, { artifactId: 'a1' })
     expect(service.open).toHaveBeenCalledWith('a1')
     expect(service.reveal).toHaveBeenCalledWith('a1')
+    await (handlers.get(ARTIFACT_IPC.arm) as (...a: unknown[]) => Promise<unknown>)(event, { artifactId: 'a1' })
+    expect(service.arm).toHaveBeenCalledWith('a1')
   })
 
   it('rejects a payload carrying a path, extra fields or the wrong shape', async () => {

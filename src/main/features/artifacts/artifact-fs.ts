@@ -1,4 +1,4 @@
-import { createReadStream, lstatSync } from 'node:fs'
+import { createReadStream } from 'node:fs'
 import { lstat } from 'node:fs/promises'
 import { createHash } from 'node:crypto'
 
@@ -13,7 +13,6 @@ export interface ArtifactFileStat {
 /** The file operations the artifact feature needs, behind one seam so tests can pin edge cases. */
 export interface ArtifactFs {
   lstat(path: string): Promise<ArtifactFileStat | null>
-  lstatSync(path: string): ArtifactFileStat | null
   sha256(path: string): Promise<string>
 }
 
@@ -21,13 +20,6 @@ export const nodeArtifactFs: ArtifactFs = {
   async lstat(path) {
     try {
       return await lstat(path)
-    } catch {
-      return null
-    }
-  },
-  lstatSync(path) {
-    try {
-      return lstatSync(path)
     } catch {
       return null
     }

@@ -54,6 +54,7 @@ export function ArtifactChips({
       failure={failure}
       onOpen={(id) => run(window.toto.openArtifact(id))}
       onReveal={(id) => run(window.toto.revealArtifact(id))}
+      onArm={(id) => void window.toto.armArtifactDrag(id).catch(() => {})}
       onDrag={(id) => window.toto.startArtifactDrag(id)}
     />
   )
@@ -73,12 +74,14 @@ export function ArtifactChipList({
   failure,
   onOpen,
   onReveal,
+  onArm,
   onDrag
 }: {
   chips: ArtifactChip[]
   failure: string | null
   onOpen(artifactId: string): void
   onReveal(artifactId: string): void
+  onArm(artifactId: string): void
   onDrag(artifactId: string): void
 }): JSX.Element | null {
   if (chips.length === 0) return null
@@ -89,6 +92,7 @@ export function ArtifactChipList({
           <div
             key={chip.artifactId}
             draggable
+            onPointerDown={() => onArm(chip.artifactId)}
             onDragStart={(e) => {
               // The OS drag is started by main, for the recorded file only; the browser's own drag is cancelled.
               e.preventDefault()
