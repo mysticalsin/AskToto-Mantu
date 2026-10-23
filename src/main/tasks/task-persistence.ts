@@ -7,15 +7,18 @@ import type {
   TaskScope,
   TaskStatus
 } from './task-contract'
+import { cloneTaskRecoveryOwner, isTaskRecoveryOwner } from './task-recovery-owner'
 
 /**
  * Archive versions. The encoder writes the lowest version that can represent the state, so an archive that uses
  * no v2 feature stays readable by a build that only knows v1 (rollback). A v2 archive is only written once a task
  * actually uses a planning or quota_paused state, a multi-step flag, or metered usage. An older build then rejects
- * it as `unsupported-version` and the bridge sets it aside instead of misreading it.
+ * it as `unsupported-version` and the bridge sets it aside instead of misreading it. V3 adds stable recovery-owner
+ * attribution and is written only when that metadata is present; pre-v3 builds reject it as unsupported.
  */
 const ARCHIVE_VERSION_V1 = 1
 const ARCHIVE_VERSION_V2 = 2
+const ARCHIVE_VERSION_V3 = 3
 const V1_TASK_STATUSES = ['ready', 'dispatching', 'paused', 'cancelled', 'completed', 'uncertain'] as const
 const V2_TASK_STATUSES = new Set<TaskStatus>([...V1_TASK_STATUSES, 'planning', 'quota_paused'])
 const V1_TASK_STATUS_SET = new Set<TaskStatus>(V1_TASK_STATUSES)
@@ -25,7 +28,7 @@ const EFFECT_OUTCOMES = new Set<EffectOutcome>(['applied', 'not-applied', 'uncer
 const ATTEMPT_STATUSES = new Set<TaskAttempt['status']>(['authorized', 'uncertain', 'settled', 'reconciled'])
 
 interface TaskRuntimeArchive {
-  readonly version: 1 | 2
+  readonly version: 1 | 2 | 3
   readonly tasks: readonly TaskRecord[]
   readonly attempts: readonly TaskAttempt[]
   readonly consumedGrantIds: readonly string[]
@@ -183,7 +186,11 @@ function usesV2(task: TaskRecord): boolean {
   return V2_ONLY_STATUSES.has(task.status) || V2_TASK_KEYS.some((key) => task[key] !== undefined)
 }
 
-function isTaskRecord(value: unknown, limits: TaskStateCodecLimits, version: 1 | 2 = 2): value is TaskRecord {
+function usesV3(task: TaskRecord): boolean {
+  return task.recoveryOwner !== undefined
+}
+
+function isTaskRecord(value: unknown, limits: TaskStateCodecLimits, version: 1 | 2 | 3 = 2): value is TaskRecord {
   if (
     !isObject(value) ||
     !hasExactKeys(
@@ -206,7 +213,8 @@ function isTaskRecord(value: unknown, limits: TaskStateCodecLimits, version: 1 |
         'effectOutcome',
         'activeAttemptId',
         'lastAttemptId',
-        ...(version === 2 ? V2_TASK_KEYS : [])
+        ...(version >= 2 ? V2_TASK_KEYS : []),
+        ...(version >= 3 ? ['recoveryOwner'] : [])
       ]
     )
   )
@@ -234,9 +242,10 @@ function isTaskRecord(value: unknown, limits: TaskStateCodecLimits, version: 1 |
     Number.isFinite(task.expiresAt) &&
     task.expiresAt === task.createdAt + task.retentionMs &&
     typeof task.status === 'string' &&
-    (version === 2 ? V2_TASK_STATUSES : V1_TASK_STATUS_SET).has(task.status as TaskStatus)
+    (version >= 2 ? V2_TASK_STATUSES : V1_TASK_STATUS_SET).has(task.status as TaskStatus)
   if (!baseValid) return false
   if (!isV2TaskFieldsValid(task)) return false
+  if (task.recoveryOwner !== undefined && (version < 3 || !isTaskRecoveryOwner(task.recoveryOwner))) return false
   if (task.parentTaskId !== undefined && (typeof task.parentTaskId !== 'string' || task.parentTaskId.length === 0))
     return false
   if (
@@ -340,7 +349,12 @@ function freezeGrantScope(scope: TaskAttempt['scope']): TaskAttempt['scope'] {
 }
 
 function freezeTask(task: TaskRecord): TaskRecord {
-  return Object.freeze({ ...task, owner: freezeOwner(task.owner), scope: freezeScope(task.scope) })
+  return Object.freeze({
+    ...task,
+    owner: freezeOwner(task.owner),
+    scope: freezeScope(task.scope),
+    ...(task.recoveryOwner ? { recoveryOwner: cloneTaskRecoveryOwner(task.recoveryOwner)! } : {})
+  })
 }
 
 function freezeAttempt(attempt: TaskAttempt): TaskAttempt {
@@ -402,7 +416,12 @@ function isStrictlyNarrowerScope(child: TaskScope, parent: TaskScope): boolean {
  */
 export function encodeTaskRuntimeState(state: TaskRuntimeState, limits: TaskStateCodecLimits): string {
   assertLimits(limits)
-  const version: 1 | 2 = [...state.tasks.values()].some(usesV2) ? ARCHIVE_VERSION_V2 : ARCHIVE_VERSION_V1
+  const tasks = [...state.tasks.values()]
+  const version: 1 | 2 | 3 = tasks.some(usesV3)
+    ? ARCHIVE_VERSION_V3
+    : tasks.some(usesV2)
+      ? ARCHIVE_VERSION_V2
+      : ARCHIVE_VERSION_V1
   if (
     state.tasks.size > limits.maxTasks ||
     state.attempts.size > limits.maxAttempts ||
@@ -443,7 +462,11 @@ export function decodeTaskRuntimeState(read: TaskStateReadResult, limits: TaskSt
     return { kind: 'corrupt', reason: 'invalid-shape' }
   }
   // v1 archives are read as they always were; a v1 label never admits a v2 field or status.
-  if (parsed.version !== ARCHIVE_VERSION_V1 && parsed.version !== ARCHIVE_VERSION_V2) {
+  if (
+    parsed.version !== ARCHIVE_VERSION_V1 &&
+    parsed.version !== ARCHIVE_VERSION_V2 &&
+    parsed.version !== ARCHIVE_VERSION_V3
+  ) {
     return { kind: 'corrupt', reason: 'unsupported-version' }
   }
   const version = parsed.version

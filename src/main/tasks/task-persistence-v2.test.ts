@@ -172,7 +172,27 @@ describe('task codec v2: backward read', () => {
     const quota = JSON.parse(encode(v2State())) as { version: number }
     expect(quota.version).toBe(2)
     expect(decode(JSON.stringify({ ...quota, version: 1 }))).toEqual({ kind: 'corrupt', reason: 'invalid-shape' })
-    expect(decode(JSON.stringify({ ...quota, version: 3 }))).toEqual({
+
+    const v3 = JSON.parse(JSON.stringify(quota)) as {
+      version: number
+      tasks: Array<Record<string, unknown> & { taskId?: string }>
+    }
+    v3.version = 3
+    const multi = v3.tasks.find((task) => task.taskId === 'multi')
+    expect(multi).toBeDefined()
+    if (!multi) return
+    multi.recoveryOwner = { ownerKey: 'a'.repeat(64), tenantKey: 'b'.repeat(64) }
+    const loaded = decode(JSON.stringify(v3))
+    expect(loaded.kind).toBe('loaded')
+    if (loaded.kind === 'loaded') {
+      expect(loaded.state.tasks.get('multi')).toMatchObject({ status: 'quota_paused', multiStep: true })
+      expect(loaded.state.tasks.get('multi')?.recoveryOwner).toEqual({
+        ownerKey: 'a'.repeat(64),
+        tenantKey: 'b'.repeat(64)
+      })
+    }
+
+    expect(decode(JSON.stringify({ ...quota, version: 4 }))).toEqual({
       kind: 'corrupt',
       reason: 'unsupported-version'
     })

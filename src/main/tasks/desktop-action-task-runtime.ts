@@ -4,6 +4,7 @@ import { dirname, join } from 'node:path'
 import { createProductionDesktopAdapterDeps } from '../desktop-adapter-deps'
 import { executeDesktopAction } from '../desktop-adapters'
 import { authSessionGeneration } from '../auth'
+import { currentOwnerSession } from '../lifecycle/owner-session-wiring'
 import { auditLog, mainLog } from '../logger'
 import { QA_IDENTITY_BUILD } from '../qa-identity'
 import { createQaDesktopSink, qaDesktopSinkEnabled } from '../qa-voice-hooks'
@@ -72,6 +73,12 @@ export function createDesktopActionTaskBridge(): DesktopActionTaskBridge {
     }),
     acknowledgements: createAcknowledgementStore(() => join(app.getPath('userData'), 'desktop-action-acks.json')),
     authSessionGeneration,
+    recoveryPrincipal: () => {
+      const ownerSession = currentOwnerSession()
+      const ownerKey = ownerSession?.currentOwnerKey() ?? null
+      const tenantKey = ownerSession?.currentTenantKey() ?? null
+      return ownerKey && tenantKey ? { ownerKey, tenantKey } : null
+    },
     gesture: {
       bindingFor: (webContentsId) => gestureSource?.bindingFor(webContentsId) ?? null,
       currentTarget: () => gestureSource?.currentTarget() ?? null,

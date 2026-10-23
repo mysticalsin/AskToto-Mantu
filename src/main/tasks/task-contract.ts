@@ -25,6 +25,12 @@ export interface TaskScope {
   readonly resources: Readonly<Record<string, number>>
 }
 
+/** Stable main-owned account/tenant attribution used only to scope restart recovery notices. */
+export interface TaskRecoveryOwner {
+  readonly ownerKey: string
+  readonly tenantKey: string
+}
+
 /** Every policy value is required input. This contract defines no task types, capability names, resource
  * budgets, retention period, or grant lifetime by default. */
 export interface TaskPolicy {
@@ -48,6 +54,8 @@ export interface TaskDefinition {
   readonly retentionMs: number
   readonly parentTaskId?: string
   readonly parentTaskRevision?: number
+  /** Optional attribution for recovery disclosure only; it grants no execution authority. */
+  readonly recoveryOwner?: TaskRecoveryOwner
   /**
    * A multi-step task survives a verified step: it returns to `ready` and meters its budget across every step
    * and every helper. A task without this flag keeps the single-action behaviour (an applied effect completes it).

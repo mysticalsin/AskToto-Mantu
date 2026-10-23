@@ -36,6 +36,7 @@ import {
   validPolicy,
   validScope
 } from './task-state-internal'
+import { isTaskRecoveryOwner } from './task-recovery-owner'
 
 export { completeTask, pauseTaskForQuota, resumeAfterQuota, steerTask } from './task-session'
 export { TaskStepLeases, type StepLease, type StepLeaseCheck } from './task-step-lease'
@@ -76,6 +77,7 @@ export function createTask(
     definition.retentionMs < 0 ||
     (initialStatus !== 'ready' && initialStatus !== 'planning') ||
     (definition.multiStep !== undefined && typeof definition.multiStep !== 'boolean') ||
+    (definition.recoveryOwner !== undefined && !isTaskRecoveryOwner(definition.recoveryOwner)) ||
     // A helper is created under an approved parent, so it cannot start unapproved.
     (initialStatus === 'planning' && definition.parentTaskId !== undefined)
   ) {

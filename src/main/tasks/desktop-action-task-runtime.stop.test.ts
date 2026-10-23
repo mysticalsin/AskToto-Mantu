@@ -17,7 +17,11 @@ const mocks = vi.hoisted(() => {
       observe: vi.fn(() => ({ ready: async () => true, matched: async () => true, cancel: vi.fn() }))
     }
   }
-  return { adapter }
+  const ownerSession = {
+    currentOwnerKey: vi.fn(() => 'a'.repeat(64)),
+    currentTenantKey: vi.fn(() => 'b'.repeat(64))
+  }
+  return { adapter, ownerSession }
 })
 
 vi.mock('electron', () => ({
@@ -27,6 +31,7 @@ vi.mock('../desktop-adapter-deps', () => ({
   createProductionDesktopAdapterDeps: () => mocks.adapter
 }))
 vi.mock('../auth', () => ({ authSessionGeneration: () => 1 }))
+vi.mock('../lifecycle/owner-session-wiring', () => ({ currentOwnerSession: () => mocks.ownerSession }))
 vi.mock('../logger', () => ({ auditLog: vi.fn(), mainLog: { warn: vi.fn(), error: vi.fn() } }))
 vi.mock('../qa-identity', () => ({ QA_IDENTITY_BUILD: false }))
 vi.mock('../qa-voice-hooks', () => ({ qaDesktopSinkEnabled: vi.fn(() => false), createQaDesktopSink: vi.fn() }))
@@ -76,6 +81,8 @@ describe('production desktop-action task bridge Stop reaches adapter waits', () 
   beforeEach(() => {
     Object.defineProperty(process, 'platform', { value: 'darwin', configurable: true })
     vi.clearAllMocks()
+    mocks.ownerSession.currentOwnerKey.mockReturnValue('a'.repeat(64))
+    mocks.ownerSession.currentTenantKey.mockReturnValue('b'.repeat(64))
     mocks.adapter.exec.mockResolvedValue({ ok: true, stdout: '', stderr: '', timedOut: false })
     mocks.adapter.automationStatus.mockResolvedValue('granted')
     mocks.adapter.accessibilityTrusted.mockReturnValue(true)

@@ -1,5 +1,4 @@
 import { randomBytes } from 'node:crypto'
-import { recoveredUncertainCopy } from '@shared/command-copy'
 import type { DesktopActionRequest, DesktopActionResult } from '@shared/desktop-actions'
 import type { MetisCommandRecoveryNotice } from '@shared/metis-command-contract'
 import { checkGestureTarget, type GestureBinding, type GestureTarget } from '@shared/gesture-binding'
@@ -13,7 +12,15 @@ import {
   type ActionEnvelope
 } from '../action-guard'
 import type { CommandExecutionContext, CommandExecutor } from '../command-control'
-import type { EffectOutcome, TaskOwner, TaskPolicy, TaskRecord, TaskRuntimeState, TaskStatus } from './task-contract'
+import type {
+  EffectOutcome,
+  TaskOwner,
+  TaskPolicy,
+  TaskRecord,
+  TaskRecoveryOwner,
+  TaskRuntimeState,
+  TaskStatus
+} from './task-contract'
 import { TASK_STORE_DECRYPT_FAILED, type TaskStateStore } from './encrypted-task-file-store'
 import {
   decodeTaskRuntimeState,
@@ -35,6 +42,7 @@ import { TaskCards } from './desktop-action-task-cards'
 import { TaskScheduler, type SchedulerJob, type SchedulerLimits, type SchedulerResult } from './task-scheduler'
 import { TaskSteeringInbox, type PendingSteer } from './task-steering'
 import { TaskStepLeases, type StepLease } from './task-step-lease'
+import { DesktopActionTaskRecovery as DesktopActionTaskRecoveryManager } from './desktop-action-task-recovery'
 import {
   authorizeDispatch,
   cancelTask,
@@ -146,6 +154,8 @@ export interface DesktopActionTaskBridgeDeps {
   recipient?: DesktopActionRecipientGate
   store: TaskStateStore
   authSessionGeneration: () => number
+  /** Stable owner/tenant pair for recovery disclosure only. Missing attribution never changes task admission. */
+  recoveryPrincipal?: () => TaskRecoveryOwner | null
   /**
    * Which uncertain tasks the person has already been told about. Without it a recovered uncertain task is
    * reported again at every boot until it expires.
@@ -223,8 +233,8 @@ export class DesktopActionTaskBridge {
   private state: TaskRuntimeState = createTaskRuntimeState()
   private progress: TaskProgressState = createTaskProgressState()
   private loaded = false
-  private acknowledged: Set<string> | null = null
   private tail: Promise<unknown> = Promise.resolve()
+  private readonly recoveryManager: DesktopActionTaskRecoveryManager
   private readonly scheduler: TaskScheduler
   private readonly leases = new TaskStepLeases()
   private readonly steering = new TaskSteeringInbox()
@@ -263,6 +273,15 @@ export class DesktopActionTaskBridge {
     // Bound in the constructor, not as arrow class properties: the main bundle's bytecode step cannot
     // compile arrow functions inside class property initializers.
     this.scheduler = deps.scheduler ?? new TaskScheduler(DESKTOP_ACTION_SCHEDULER_LIMITS)
+    this.recoveryManager = new DesktopActionTaskRecoveryManager({
+      acknowledgements: deps.acknowledgements,
+      currentPrincipal: () => deps.recoveryPrincipal?.() ?? null,
+      authSessionGeneration: deps.authSessionGeneration,
+      withLock: (fn) => this.locked(fn),
+      tasks: () => this.state.tasks.values(),
+      loaded: () => this.loaded,
+      log: deps.log
+    })
     this.execute = this.schedule.bind(this)
     this.stop = this.stopAll.bind(this)
     this.cards = this.taskCards.list.bind(this.taskCards)
@@ -278,44 +297,7 @@ export class DesktopActionTaskBridge {
    * it never replays anything. Empty until recovery has run.
    */
   async takeRecoveryNotices(): Promise<MetisCommandRecoveryNotice[]> {
-    if (!this.loaded) return []
-    return this.locked(async () => {
-      const acknowledged = await this.loadAcknowledgements()
-      const fresh = [...this.state.tasks.values()].filter(
-        (task) => task.effectOutcome === 'uncertain' && !acknowledged.has(task.taskId)
-      )
-      if (fresh.length === 0) return []
-      for (const task of fresh) acknowledged.add(task.taskId)
-      await this.persistAcknowledgements()
-      return fresh.map((task) => {
-        const actionId = task.scope.capabilities[0] ?? ''
-        return { taskId: task.taskId, actionId, copy: recoveredUncertainCopy(actionId) }
-      })
-    })
-  }
-
-  private async loadAcknowledgements(): Promise<Set<string>> {
-    if (this.acknowledged) return this.acknowledged
-    let ids: readonly string[] = []
-    try {
-      ids = (await this.deps.acknowledgements?.read()) ?? []
-    } catch (error) {
-      this.deps.log?.warn('[desktop-action-task] could not read acknowledgements; notices may repeat once:', error)
-    }
-    this.acknowledged = new Set(ids)
-    return this.acknowledged
-  }
-
-  /** Forget acknowledgements for tasks that no longer exist, then write. Best effort: a notice may repeat once. */
-  private async persistAcknowledgements(): Promise<void> {
-    if (!this.acknowledged || !this.deps.acknowledgements) return
-    const live = [...this.acknowledged].filter((id) => this.state.tasks.has(id))
-    this.acknowledged = new Set(live)
-    try {
-      await this.deps.acknowledgements.write(live)
-    } catch (error) {
-      this.deps.log?.warn('[desktop-action-task] could not persist acknowledgements:', error)
-    }
+    return this.recoveryManager.takeRecoveryNotices()
   }
 
   snapshot(): DesktopActionTaskSnapshot[] {
@@ -334,6 +316,7 @@ export class DesktopActionTaskBridge {
     context: CommandExecutionContext
   ): Promise<DesktopActionResult> {
     const authSessionGeneration = this.deps.authSessionGeneration()
+    const recoveryOwner = this.recoveryManager.captureRecoveryPrincipal() ?? undefined
     const bound = this.deps.gesture?.bindingFor(context.owner.webContentsId) ?? null
     const owner = `webContents:${context.owner.webContentsId}`
     const job: SchedulerJob<DesktopActionResult> = {
@@ -341,7 +324,7 @@ export class DesktopActionTaskBridge {
       owner,
       effect: 'effect',
       resources: desktopActionResources(request),
-      run: (signal) => this.run(request, context, signal, bound, authSessionGeneration)
+      run: (signal) => this.run(request, context, signal, bound, authSessionGeneration, recoveryOwner)
     }
     const card = this.taskCards.open(context.proposalId, owner, authSessionGeneration, request.id)
     let queued: SchedulerResult<DesktopActionResult>
@@ -408,7 +391,8 @@ export class DesktopActionTaskBridge {
     context: CommandExecutionContext,
     signal: AbortSignal,
     bound: GestureBinding | null,
-    authSessionGeneration: number
+    authSessionGeneration: number,
+    recoveryOwner: TaskRecoveryOwner | undefined
   ): Promise<DesktopActionResult> {
     const generation = this.stopGeneration
     const card = this.taskCards.forKey(context.proposalId)
@@ -426,7 +410,7 @@ export class DesktopActionTaskBridge {
     if (card && card.phase === 'queued') this.taskCards.setPhase(card, 'running')
     let begun: Begun
     try {
-      begun = await this.begin(request, context, authSessionGeneration)
+      begun = await this.begin(request, context, authSessionGeneration, recoveryOwner)
     } catch (error) {
       // Nothing was dispatched: the adapter has not been called, so this is a clean failure.
       this.deps.log?.error('[desktop-action-task] could not start the task:', error)
@@ -616,7 +600,8 @@ export class DesktopActionTaskBridge {
   private async begin(
     request: DesktopActionRequest,
     context: CommandExecutionContext,
-    authSessionGeneration: number
+    authSessionGeneration: number,
+    recoveryOwner: TaskRecoveryOwner | undefined
   ): Promise<Begun> {
     const envelope = this.bindEnvelope(request, context)
     if (!envelope) return { ok: false, reason: 'arguments_changed' }
@@ -633,6 +618,7 @@ export class DesktopActionTaskBridge {
       const scope = { capabilities: [request.id], resources: { [ACTIONS_RESOURCE]: 1 } }
       const grantScope = { capability: request.id, resources: { [ACTIONS_RESOURCE]: 1 } }
       const issuedAt = this.now()
+      const boundRecoveryOwner = this.recoveryManager.retainScheduledPrincipal(recoveryOwner, authSessionGeneration)
 
       this.state = pruneState(this.state, issuedAt, DESKTOP_ACTION_TASK_CODEC_LIMITS)
       if (!archiveHasRoom(this.state, DESKTOP_ACTION_TASK_CODEC_LIMITS)) return { ok: false, reason: 'task_state_full' }
@@ -656,7 +642,8 @@ export class DesktopActionTaskBridge {
           argumentsDigest,
           scope,
           createdAt: issuedAt,
-          retentionMs: DESKTOP_ACTION_TASK_POLICY.maxRetentionMs
+          retentionMs: DESKTOP_ACTION_TASK_POLICY.maxRetentionMs,
+          ...(boundRecoveryOwner ? { recoveryOwner: boundRecoveryOwner } : {})
         },
         DESKTOP_ACTION_TASK_POLICY
       )
@@ -773,9 +760,7 @@ export class DesktopActionTaskBridge {
         if (outcome === 'uncertain') {
           this.deps.audit?.('task.effect_uncertain', { taskId: begun.taskId, actionId: request.id })
           // The person sees this result now, so a later boot does not announce it a second time.
-          const acknowledged = await this.loadAcknowledgements()
-          acknowledged.add(begun.taskId)
-          await this.persistAcknowledgements()
+          await this.recoveryManager.acknowledgeSettled(begun.taskId)
         }
         // The step has settled: a steer that waited for this boundary is handed over now, exactly once.
         const waiting = this.steering.take(begun.taskId)

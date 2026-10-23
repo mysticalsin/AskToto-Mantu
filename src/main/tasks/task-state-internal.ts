@@ -12,6 +12,7 @@ import type {
   TaskTransitionDenial,
   TransitionResult
 } from './task-contract'
+import { cloneTaskRecoveryOwner } from './task-recovery-owner'
 
 export const deny = (state: TaskRuntimeState, reason: TaskTransitionDenial): TransitionResult => ({
   ok: false,
@@ -40,6 +41,7 @@ export function snapshotTask(task: TaskRecord): TaskRecord {
     ...task,
     owner: snapshotOwner(task.owner),
     scope: snapshotScope(task.scope),
+    ...(task.recoveryOwner ? { recoveryOwner: cloneTaskRecoveryOwner(task.recoveryOwner)! } : {}),
     ...(task.usedResources ? { usedResources: Object.freeze({ ...task.usedResources }) } : {})
   })
 }

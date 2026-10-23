@@ -7,6 +7,7 @@ import type { TaskStateStore } from './encrypted-task-file-store'
 import type { TaskStateReadResult } from './task-persistence'
 
 const NOTE: DesktopActionRequest = { id: 'desktop.create_note', args: { title: 'Groceries' } }
+const RECOVERY_OWNER = { ownerKey: 'a'.repeat(64), tenantKey: 'b'.repeat(64) }
 
 class MemoryStore implements TaskStateStore {
   serialized: string | null = null
@@ -50,6 +51,7 @@ function make(store: MemoryStore, acknowledgements: MemoryAcks, overrides: Parti
     store,
     acknowledgements,
     authSessionGeneration: () => 1,
+    recoveryPrincipal: () => RECOVERY_OWNER,
     newId: () => `id-${(id += 1)}`,
     now: () => 1_000_000,
     ...overrides
