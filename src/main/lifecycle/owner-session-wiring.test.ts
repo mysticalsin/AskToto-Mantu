@@ -2,6 +2,7 @@ import { EventEmitter } from 'node:events'
 import { describe, expect, it, vi } from 'vitest'
 import { CloudSpeechSegmentEventSchema } from '@shared/cloud-speech'
 import { OWNER_SESSION_IPC } from '@shared/contracts/owner-session'
+import { CONNECTOR_ACCOUNTS_IPC } from '@shared/connector-accounts'
 import { ASSISTANT_IPC } from '@shared/assistants'
 import { DICTATION_MEMORY_IPC } from '@shared/dictation-memory'
 import { USER_MEMORY_IPC } from '@shared/user-memory'
@@ -68,10 +69,11 @@ function wire() {
 }
 
 describe('owner session wiring', () => {
-  it('registers the owner-session status channel, the ledger line seam, the live journal write seam and the dictation memory seam (G26) the assistants seam (G48) and the user memory seam (G57), nothing else', () => {
+  it('registers the owner session, connector accounts, ledger, journal, artifact, assistant and user memory seams', () => {
     const { ipcMain } = wire()
     expect(ipcMain.handle.mock.calls.map((call) => call[0])).toEqual([
       OWNER_SESSION_IPC.status,
+      ...Object.values(CONNECTOR_ACCOUNTS_IPC),
       SESSION_CONTEXT_IPC.appendLine,
       IPC.appendMeetingJournal,
       ...Object.values(DICTATION_MEMORY_IPC),
@@ -117,13 +119,13 @@ describe('owner session wiring', () => {
       currentInputSessionContext: () => ({ authSessionGeneration: 1, contextRevision: 3 }),
       privateView: () => false
     })
-    // Every handler (owner-session status, ledger line seam, live journal seam, the dictation memory seam, the artifact,
-    // assistants and user memory seams) registers after the policy is installed.
+    // Every handler (including owner session, connector accounts, ledger, journal and feature seams) follows policy setup.
     expect(installedAtFirstHandler).toEqual(
       Array.from(
         {
           length:
             3 +
+            Object.values(CONNECTOR_ACCOUNTS_IPC).length +
             Object.values(DICTATION_MEMORY_IPC).length +
             4 +
             Object.values(ASSISTANT_IPC).length +

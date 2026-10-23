@@ -4,7 +4,12 @@ const { getGraphToken, auditLog } = vi.hoisted(() => ({ getGraphToken: vi.fn(), 
 vi.mock('./auth', () => ({ getGraphToken }))
 vi.mock('./logger', () => ({ auditLog }))
 
-import { createOutlookDraft, createOutlookEvent, outlookWriteStatus } from './outlook-write'
+import {
+  createOutlookDraft,
+  createOutlookDraftForConnector,
+  createOutlookEvent,
+  outlookWriteStatus
+} from './outlook-write'
 
 afterEach(() => {
   getGraphToken.mockReset()
@@ -33,6 +38,34 @@ describe('outlookWriteStatus', () => {
 })
 
 describe('createOutlookDraft — never send', () => {
+  it('returns an explicit consent health signal only when token acquisition reports no token', async () => {
+    getGraphToken.mockResolvedValue(null)
+    await expect(createOutlookDraftForConnector({ subject: 'Hi', body: 'Next steps' })).resolves.toMatchObject({
+      ok: false,
+      needsConsent: true,
+      healthSignal: 'consent_required'
+    })
+  })
+
+  it('reports transport failures as transient health signals', async () => {
+    getGraphToken.mockResolvedValue('tok')
+    vi.stubGlobal('fetch', vi.fn(async () => { throw new Error('provider detail') }))
+    await expect(createOutlookDraftForConnector({ subject: 'Hi', body: 'Next steps' })).resolves.toMatchObject({
+      ok: false,
+      healthSignal: 'transient_failure'
+    })
+  })
+
+  it('reports real provider authorization responses as consent health signals', async () => {
+    getGraphToken.mockResolvedValue('tok')
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: false, status: 403, json: async () => ({}) })))
+    await expect(createOutlookDraftForConnector({ subject: 'Hi', body: 'Next steps' })).resolves.toMatchObject({
+      ok: false,
+      needsConsent: true,
+      healthSignal: 'consent_required'
+    })
+  })
+
   it('refuses when write consent is missing', async () => {
     getGraphToken.mockResolvedValue(null)
     const r = await createOutlookDraft({ subject: 'Hi', body: 'Next steps' })

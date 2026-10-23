@@ -1,9 +1,10 @@
 import { randomBytes } from 'node:crypto'
-import { CONNECTOR_CATALOG, CONNECTOR_CATALOG_REVISION, type ConnectorResult } from '@shared/connector-catalog'
+import { CONNECTOR_CATALOG, CONNECTOR_CATALOG_REVISION, type AccountRef, type ConnectorKind, type ConnectorResult } from '@shared/connector-catalog'
 import { getGraphToken } from '../../auth'
 import { auditLog } from '../../logger'
 import { OUTLOOK_DRAFT_CONSENT_COPY, OUTLOOK_EVENT_CONSENT_COPY, type OutlookWriteResult } from '../../outlook-write'
-import { singleAccountResolver } from './account-ref'
+import type { AccountResolver } from './account-ref'
+import type { ConnectorAccountRegistry } from './account-registry'
 import { createCatalogPublisher } from './catalog-publisher'
 import {
   createActionGuardWriteGate,
@@ -26,7 +27,7 @@ export const graphScopeGrants: ConnectorGrantSeam = {
     try {
       return (await getGraphToken([...scopes])) ? 'granted' : 'stale'
     } catch {
-      return 'stale'
+      return 'transient'
     }
   }
 }
@@ -37,13 +38,37 @@ export const connectorCatalog = createCatalogPublisher({
   operations: CONNECTOR_CATALOG
 })
 
+export interface ConnectorAccountRuntime {
+  registry: ConnectorAccountRegistry
+  ensureCurrentAccount(kind: ConnectorKind): Promise<AccountRef | null>
+}
+
+let accountRuntime: ConnectorAccountRuntime | null = null
+
+/** Wired once by the lifecycle composition root. Tests use an in-memory registry through this same seam. */
+export function configureConnectorAccountRuntime(runtime: ConnectorAccountRuntime | null): void {
+  accountRuntime = runtime
+}
+
+export async function ensureCurrentConnectorAccount(kind: ConnectorKind): Promise<AccountRef | null> {
+  if (!accountRuntime) return null
+  await accountRuntime.registry.prepareCurrentScope()
+  return accountRuntime.ensureCurrentAccount(kind)
+}
+
+const registeredAccounts: AccountResolver = {
+  resolve: (kind, requested) => accountRuntime?.registry.resolve(kind, requested) ?? null,
+  isReady: (kind, ref, effect) => accountRuntime?.registry.isReady(kind, ref, effect) ?? false,
+  observe: async (kind, ref, signal) => accountRuntime?.registry.observe(kind, ref, signal) ?? false
+}
+
 let executor: ConnectorExecutor | null = null
 export function connectorExecutor(): ConnectorExecutor {
   executor ??= createConnectorExecutor({
     catalog: connectorCatalog,
     handlers: createBuiltinHandlers(),
     grants: graphScopeGrants,
-    accounts: singleAccountResolver,
+    accounts: registeredAccounts,
     writeGate: createActionGuardWriteGate(),
     audit: (event, metadata) => auditLog(event as never, metadata as never)
   })
@@ -64,9 +89,23 @@ export async function runConnectorWriteDetailed(
   const planned = exec.plan(opId, input)
   const op = CONNECTOR_CATALOG.find((o) => o.opId === opId)
   const parsed = op?.input.safeParse(input)
-  if (!planned.ok || !parsed?.success) {
+  if (!planned.ok || !op || !parsed?.success) {
     const result = await exec.execute({ opId, revision: connectorCatalog.current().revision, input })
     return { ok: false, error: result.ok ? undefined : result.message, result }
+  }
+  let accountRef: AccountRef | null = null
+  try {
+    accountRef = await ensureCurrentConnectorAccount(op.kind)
+  } catch {
+    accountRef = null
+  }
+  if (!accountRef) {
+    const result: ConnectorResult = {
+      ok: false,
+      reason: 'account_unavailable',
+      message: 'No connected account is available for this operation.'
+    }
+    return { ok: false, error: result.message, result }
   }
   const result = await exec.execute({
     opId,
@@ -78,7 +117,7 @@ export async function runConnectorWriteDetailed(
     }
   })
   if (result.ok) return { ok: true, id: (result.output as { id: string }).id, result }
-  const consent = result.reason === 'grant_stale' ? OUTLOOK_CONSENT_COPY[opId] : undefined
+  const consent = result.needsConsent ? OUTLOOK_CONSENT_COPY[opId] : undefined
   return {
     ok: false,
     error: consent ?? result.error ?? result.message,

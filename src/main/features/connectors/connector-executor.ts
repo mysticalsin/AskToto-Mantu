@@ -6,6 +6,7 @@ import {
   type ConnectorResult,
   isWriteEffect
 } from '@shared/connector-catalog'
+import type { ConnectorAccountHealthSignal } from '@shared/connector-accounts'
 import { ACTION_OBSERVATION_MAX_CHARS, actionDigest, actionIdempotencyKey, isArgsHash } from '../../action-guard'
 import type { AccountResolver } from './account-ref'
 import type { CatalogPublisher } from './catalog-publisher'
@@ -21,6 +22,8 @@ export interface ConnectorCall {
   /** The catalog revision this call was planned against. */
   revision: number
   input: unknown
+  /** Optional explicit owner selection. Omission resolves only when exactly one account is available. */
+  accountRef?: AccountRef
   approval?: ConnectorApproval
 }
 
@@ -30,7 +33,9 @@ export interface HandlerContext {
   idempotencyKey?: string
 }
 
-export type HandlerOutcome = { ok: true; output: unknown } | { ok: false; error?: string; needsConsent?: boolean }
+export type HandlerOutcome =
+  | { ok: true; output: unknown }
+  | { ok: false; error?: string; needsConsent?: boolean; healthSignal?: ConnectorAccountHealthSignal }
 
 export type ConnectorHandler = (input: never, ctx: HandlerContext) => Promise<HandlerOutcome>
 export type ConnectorHandlers = Readonly<Record<string, ConnectorHandler>>
@@ -42,7 +47,7 @@ export interface ConnectorGrantSeam {
     opId: string
     scopes: readonly string[]
     accountRef: AccountRef
-  }): Promise<'granted' | 'stale'> | 'granted' | 'stale'
+  }): Promise<'granted' | 'stale' | 'transient'> | 'granted' | 'stale' | 'transient'
 }
 
 export interface ConnectorWriteGate {
@@ -96,6 +101,7 @@ const MESSAGES: Record<ConnectorRefusalReason, string> = {
   catalog_changed: 'The connector catalog changed after this was planned. Plan it again.',
   input_invalid: 'The request does not match what this connector operation accepts.',
   account_unavailable: 'No connected account is available for this operation.',
+  account_not_ready: 'This account is still connecting or needs attention before it can be used.',
   grant_stale: 'The permission for this account is no longer valid. Reconnect it and try again.',
   not_approved: 'This change needs your confirmation first. Nothing was changed.',
   handler_failed: 'The connector could not complete the operation. Nothing was confirmed.',
@@ -144,7 +150,7 @@ export function createConnectorExecutor(deps: ConnectorExecutorDeps): ConnectorE
       const parsed = op.input.safeParse(call.input)
       if (!parsed.success) return refuse('input_invalid')
 
-      const accountRef = deps.accounts.resolve(op.kind)
+      const accountRef = deps.accounts.resolve(op.kind, call.accountRef)
       if (!accountRef) return refuse('account_unavailable')
       const provenance: ConnectorProvenance = {
         connectorKind: op.kind,
@@ -153,13 +159,28 @@ export function createConnectorExecutor(deps: ConnectorExecutorDeps): ConnectorE
         revision: snapshot.revision
       }
 
-      let grant: 'granted' | 'stale'
+      let grant: 'granted' | 'stale' | 'transient'
       try {
         grant = await deps.grants.check({ connectorKind: op.kind, opId: op.opId, scopes: op.scopes, accountRef })
       } catch {
-        grant = 'stale'
+        grant = 'transient'
       }
-      if (grant !== 'granted') return refuse('grant_stale', provenance, { needsConsent: true })
+      const grantSignal: ConnectorAccountHealthSignal =
+        grant === 'granted'
+          ? 'token_refresh_succeeded'
+          : grant === 'stale'
+            ? 'token_refresh_rejected'
+            : 'token_refresh_transient'
+      let observed: boolean
+      try {
+        observed = await deps.accounts.observe(op.kind, accountRef, grantSignal)
+      } catch {
+        observed = false
+      }
+      if (!observed) return refuse('account_not_ready', provenance)
+      if (!deps.accounts.isReady(op.kind, accountRef, op.effect)) {
+        return refuse('account_not_ready', provenance, grant === 'stale' ? { needsConsent: true } : {})
+      }
 
       let ctx: HandlerContext = { accountRef }
       let argsHash = ''
@@ -176,13 +197,34 @@ export function createConnectorExecutor(deps: ConnectorExecutorDeps): ConnectorE
         outcome = await handler(parsed.data as never, ctx)
       } catch {
         // The thrown text may carry provider detail; it is deliberately not forwarded.
+        try {
+          const recorded = await deps.accounts.observe(op.kind, accountRef, 'transient_failure')
+          if (!recorded) return refuse('account_not_ready', provenance)
+        } catch {
+          return refuse('account_not_ready', provenance)
+        }
         return refuse('handler_failed', provenance)
       }
       if (!outcome.ok) {
+        const healthSignal = outcome.healthSignal ?? (outcome.needsConsent ? 'consent_required' : undefined)
+        if (healthSignal) {
+          try {
+            const recorded = await deps.accounts.observe(op.kind, accountRef, healthSignal)
+            if (!recorded) return refuse('account_not_ready', provenance)
+          } catch {
+            return refuse('account_not_ready', provenance)
+          }
+        }
         return refuse('handler_failed', provenance, {
           ...(outcome.needsConsent ? { needsConsent: true } : {}),
           ...(outcome.error ? { error: outcome.error } : {})
         })
+      }
+      try {
+        const recorded = await deps.accounts.observe(op.kind, accountRef, 'operation_succeeded')
+        if (!recorded) return refuse('account_not_ready', provenance)
+      } catch {
+        return refuse('account_not_ready', provenance)
       }
       const output = op.output.safeParse(outcome.output)
       if (!output.success) return refuse('output_invalid', provenance)

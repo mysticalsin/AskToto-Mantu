@@ -96,8 +96,24 @@ function toEvent(ev: any): CalendarEvent {
 }
 
 export async function calendarToday(tz: string): Promise<CalendarTodayResult> {
-  const token = await getGraphToken(['Calendars.Read'])
-  if (!token) return { ok: false, needsConsent: true }
+  const result = await calendarTodayForConnector(tz)
+  const { healthSignal: _healthSignal, ...legacy } = result
+  return legacy
+}
+
+export type CalendarConnectorResult = CalendarTodayResult & {
+  healthSignal?: 'consent_required' | 'transient_failure' | 'operation_succeeded'
+}
+
+/** Connector-only variant keeps provider outcome metadata in main; the legacy renderer result remains unchanged. */
+export async function calendarTodayForConnector(tz: string): Promise<CalendarConnectorResult> {
+  let token: string | null
+  try {
+    token = await getGraphToken(['Calendars.Read'])
+  } catch {
+    return { ok: false, error: 'Calendar unavailable — try again.', healthSignal: 'transient_failure' }
+  }
+  if (!token) return { ok: false, needsConsent: true, healthSignal: 'consent_required' }
 
   const zone = safeTimeZone(tz)
 
@@ -110,13 +126,21 @@ export async function calendarToday(tz: string): Promise<CalendarTodayResult> {
       headers: { Authorization: `Bearer ${token}`, Prefer: `outlook.timezone="${zone}"` },
       signal: AbortSignal.timeout(GRAPH_TIMEOUT_MS)
     })
-    if (res.status === 401 || res.status === 403) return { ok: false, needsConsent: true }
-    if (!res.ok) return { ok: false, error: 'Calendar unavailable — try again.' }
+    if (res.status === 401 || res.status === 403) {
+      return { ok: false, needsConsent: true, healthSignal: 'consent_required' }
+    }
+    if (!res.ok) {
+      return {
+        ok: false,
+        error: 'Calendar unavailable — try again.',
+        ...(res.status >= 500 ? { healthSignal: 'transient_failure' as const } : {})
+      }
+    }
     const data = (await res.json()) as { value?: unknown[] }
     const events = Array.isArray(data.value) ? data.value.map(toEvent) : []
     auditLog('calendar.read', { count: events.length }) // metadata only — never the event bodies
-    return { ok: true, events }
+    return { ok: true, events, healthSignal: 'operation_succeeded' }
   } catch {
-    return { ok: false, error: 'Calendar unavailable — try again.' }
+    return { ok: false, error: 'Calendar unavailable — try again.', healthSignal: 'transient_failure' }
   }
 }
