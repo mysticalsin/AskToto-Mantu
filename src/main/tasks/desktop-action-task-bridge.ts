@@ -1,7 +1,6 @@
 import { randomBytes } from 'node:crypto'
 import { recoveredUncertainCopy } from '@shared/command-copy'
 import type { DesktopActionRequest, DesktopActionResult } from '@shared/desktop-actions'
-import type { TaskCardView } from '@shared/task-card'
 import type { MetisCommandRecoveryNotice } from '@shared/metis-command-contract'
 import { checkGestureTarget, type GestureBinding, type GestureTarget } from '@shared/gesture-binding'
 import { recipientFieldsIn, recipientsMatchResolution, type ResolvedRecipient } from '@shared/recipient-resolution'
@@ -241,7 +240,11 @@ export class DesktopActionTaskBridge {
   readonly recover: () => Promise<DesktopActionTaskRecovery>
 
   /** Bound Stop: invalidates queued work, aborts running step leases, drops pending steers. */
-  readonly stop: () => void
+  readonly stop: (reason?: string) => void
+  readonly cards: TaskCards['list']
+  readonly onCardsChanged: TaskCards['onChanged']
+  readonly stopCard: TaskCards['stopCard']
+  readonly dismissCard: TaskCards['dismiss']
 
   constructor(private readonly deps: DesktopActionTaskBridgeDeps) {
     this.now = deps.now ?? Date.now
@@ -249,13 +252,23 @@ export class DesktopActionTaskBridge {
     this.taskCards = new TaskCards({
       now: this.now,
       newCardId: deps.newCardId ?? (() => randomBytes(16).toString('hex')),
-      warn: (message, ...args) => deps.log?.warn(message, ...args)
+      warn: (message, ...args) => deps.log?.warn(message, ...args),
+      authSessionGeneration: deps.authSessionGeneration,
+      stopTask: (record, running) => {
+        if (running) this.leases.abortTask(taskIdFor(record.key), 'revoked')
+        this.scheduler.cancel(record.key)
+        deps.audit?.('task.stopped', { actionId: record.actionId, queued: '0', running: '1', steers: '0' })
+      }
     })
     // Bound in the constructor, not as arrow class properties: the main bundle's bytecode step cannot
     // compile arrow functions inside class property initializers.
     this.scheduler = deps.scheduler ?? new TaskScheduler(DESKTOP_ACTION_SCHEDULER_LIMITS)
     this.execute = this.schedule.bind(this)
     this.stop = this.stopAll.bind(this)
+    this.cards = this.taskCards.list.bind(this.taskCards)
+    this.onCardsChanged = this.taskCards.onChanged.bind(this.taskCards)
+    this.stopCard = this.taskCards.stopCard.bind(this.taskCards)
+    this.dismissCard = this.taskCards.dismiss.bind(this.taskCards)
     this.recover = this.recoverState.bind(this)
   }
 
@@ -320,6 +333,7 @@ export class DesktopActionTaskBridge {
     request: DesktopActionRequest,
     context: CommandExecutionContext
   ): Promise<DesktopActionResult> {
+    const authSessionGeneration = this.deps.authSessionGeneration()
     const bound = this.deps.gesture?.bindingFor(context.owner.webContentsId) ?? null
     const owner = `webContents:${context.owner.webContentsId}`
     const job: SchedulerJob<DesktopActionResult> = {
@@ -327,9 +341,9 @@ export class DesktopActionTaskBridge {
       owner,
       effect: 'effect',
       resources: desktopActionResources(request),
-      run: (signal) => this.run(request, context, signal, bound)
+      run: (signal) => this.run(request, context, signal, bound, authSessionGeneration)
     }
-    const card = this.taskCards.open(context.proposalId, owner, request.id)
+    const card = this.taskCards.open(context.proposalId, owner, authSessionGeneration, request.id)
     let queued: SchedulerResult<DesktopActionResult>
     try {
       queued = await this.scheduler.submit(job)
@@ -340,46 +354,17 @@ export class DesktopActionTaskBridge {
     }
     if (queued.status === 'ran') return queued.value
     // Never dispatched: a clean refusal, not an unknown effect.
-    if (card) {
-      if (queued.reason === 'invalid_job') this.taskCards.drop(card)
-      else this.taskCards.finish(card, 'not_done', queued.reason === 'stopped' ? 'stopped_before_start' : 'refused')
-    }
+    this.taskCards.rejectQueued(card, queued.reason)
     this.deps.audit?.('task.dispatch_denied', { actionId: request.id, reason: `queue_${queued.reason}` })
     return queued.reason === 'stopped'
       ? { id: request.id, ok: false, outcome: 'cancelled', detail: 'stopped' }
       : failedResult(request.id, `task_denied:queue_${queued.reason}`)
   }
 
-  /** The cards one owner window may show (G33). Views carry the action id and phase only. */
-  cards(owner: string): TaskCardView[] {
-    return this.taskCards.list(owner)
-  }
-
-  onCardsChanged(listener: () => void): () => void {
-    return this.taskCards.onChanged(listener)
-  }
-
-  /** Stop one card: cancels a queued task outright, or aborts the running step. Uncertain stays uncertain. */
-  stopCard(owner: string, cardId: string): boolean {
-    const record = this.taskCards.find(owner, cardId)
-    if (!record || (record.phase !== 'queued' && record.phase !== 'running')) return false
-    if (record.phase === 'running') {
-      this.taskCards.setPhase(record, 'stopping')
-      this.leases.abortTask(taskIdFor(record.key), 'revoked')
-    }
-    this.scheduler.cancel(record.key)
-    this.deps.audit?.('task.stopped', { actionId: record.actionId, queued: '0', running: '1', steers: '0' })
-    return true
-  }
-
-  dismissCard(owner: string, cardId: string): boolean {
-    return this.taskCards.dismiss(owner, cardId)
-  }
-
   /** Stop. Running steps finish settling on their own: an abort cannot prove the effect did not happen. */
-  private stopAll(): void {
+  private stopAll(reason?: string): void {
+    if (!this.taskCards.clearForLifecycle(reason)) this.taskCards.stoppingAllRunning()
     this.stopGeneration += 1
-    this.taskCards.stoppingAllRunning()
     const summary = this.scheduler.stop()
     this.leases.abortAll('revoked')
     const droppedSteers = this.steering.dropAll()
@@ -422,10 +407,15 @@ export class DesktopActionTaskBridge {
     request: DesktopActionRequest,
     context: CommandExecutionContext,
     signal: AbortSignal,
-    bound: GestureBinding | null
+    bound: GestureBinding | null,
+    authSessionGeneration: number
   ): Promise<DesktopActionResult> {
     const generation = this.stopGeneration
     const card = this.taskCards.forKey(context.proposalId)
+    if (this.deps.authSessionGeneration() !== authSessionGeneration) {
+      if (card) this.taskCards.drop(card)
+      return { id: request.id, ok: false, outcome: 'cancelled', detail: 'stale_owner' }
+    }
     const refusal = this.gestureRefusal(request, context, bound)
     if (refusal) {
       // Nothing was created or dispatched: a clean refusal that never retargets.
@@ -436,7 +426,7 @@ export class DesktopActionTaskBridge {
     if (card && card.phase === 'queued') this.taskCards.setPhase(card, 'running')
     let begun: Begun
     try {
-      begun = await this.begin(request, context)
+      begun = await this.begin(request, context, authSessionGeneration)
     } catch (error) {
       // Nothing was dispatched: the adapter has not been called, so this is a clean failure.
       this.deps.log?.error('[desktop-action-task] could not start the task:', error)
@@ -450,7 +440,12 @@ export class DesktopActionTaskBridge {
     }
 
     // Stop reached the job between authorization and dispatch: nothing ran, so close the task cleanly.
-    if (signal.aborted || begun.lease.signal.aborted || generation !== this.stopGeneration) {
+    if (
+      signal.aborted ||
+      begun.lease.signal.aborted ||
+      generation !== this.stopGeneration ||
+      this.deps.authSessionGeneration() !== authSessionGeneration
+    ) {
       await this.locked(async () => {
         this.recordNotApplied(begun.taskId, begun.attemptId)
         this.leases.sync(this.state, this.now())
@@ -471,11 +466,7 @@ export class DesktopActionTaskBridge {
       outcome = 'uncertain'
     }
     await this.settle(begun, request, outcome)
-    if (card) {
-      if (outcome === 'applied') this.taskCards.finish(card, 'done')
-      else if (outcome === 'not-applied') this.taskCards.finish(card, 'not_done')
-      else this.taskCards.finish(card, 'uncertain')
-    }
+    if (card) this.taskCards.finishEffect(card, outcome)
 
     if (!result) return unknownResult(request.id, 'dispatch_threw')
     if (outcome === 'uncertain' && result.outcome !== 'unknown') return unknownResult(request.id, 'outcome_unverified')
@@ -592,13 +583,13 @@ export class DesktopActionTaskBridge {
     }
   }
 
-  private ownerFor(context: CommandExecutionContext): TaskOwner {
+  private ownerFor(context: CommandExecutionContext, authSessionGeneration: number): TaskOwner {
     // assertMainWindow admits only the main frame before confirm is called, so the top frame is the only owner frame.
     return {
       webContentsId: context.owner.webContentsId,
       frameId: 'main',
       isTopFrame: true,
-      authSessionGeneration: this.deps.authSessionGeneration(),
+      authSessionGeneration,
       contextRevision: context.owner.revision
     }
   }
@@ -622,15 +613,22 @@ export class DesktopActionTaskBridge {
     return true
   }
 
-  private async begin(request: DesktopActionRequest, context: CommandExecutionContext): Promise<Begun> {
+  private async begin(
+    request: DesktopActionRequest,
+    context: CommandExecutionContext,
+    authSessionGeneration: number
+  ): Promise<Begun> {
     const envelope = this.bindEnvelope(request, context)
     if (!envelope) return { ok: false, reason: 'arguments_changed' }
+    if (this.deps.authSessionGeneration() !== authSessionGeneration) return { ok: false, reason: 'wrong_owner' }
     const recovery = await this.recoverState()
+    if (this.deps.authSessionGeneration() !== authSessionGeneration) return { ok: false, reason: 'wrong_owner' }
     if (!recovery.available) return { ok: false, reason: 'task_state_unavailable' }
     return this.locked(async (): Promise<Begun> => {
+      if (this.deps.authSessionGeneration() !== authSessionGeneration) return { ok: false, reason: 'wrong_owner' }
       const taskId = taskIdFor(context.proposalId)
       const attemptId = this.newId()
-      const owner = this.ownerFor(context)
+      const owner = this.ownerFor(context, authSessionGeneration)
       const argumentsDigest = envelope.argsHash
       const scope = { capabilities: [request.id], resources: { [ACTIONS_RESOURCE]: 1 } }
       const grantScope = { capability: request.id, resources: { [ACTIONS_RESOURCE]: 1 } }
@@ -686,7 +684,7 @@ export class DesktopActionTaskBridge {
         attemptId,
         taskId,
         taskRevision: 1,
-        owner: this.ownerFor(context),
+        owner: this.ownerFor(context, authSessionGeneration),
         argumentsDigest,
         scope: grantScope,
         now: this.now()

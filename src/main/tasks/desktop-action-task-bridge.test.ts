@@ -48,9 +48,18 @@ class MemoryStore implements TaskStateStore {
   serialized: string | null = null
   readOverride: TaskStateReadResult | null = null
   writeError: Error | null = null
+  readGate: Promise<void> | null = null
+  readStarted: (() => void) | null = null
+  writeGate: Promise<void> | null = null
+  writeStarted: (() => void) | null = null
   quarantined = 0
   writes = 0
   async read(): Promise<TaskStateReadResult> {
+    this.readStarted?.()
+    this.readStarted = null
+    const gate = this.readGate
+    this.readGate = null
+    if (gate) await gate
     if (this.readOverride) return this.readOverride
     return this.serialized === null ? { kind: 'not-found' } : { kind: 'found', serialized: this.serialized }
   }
@@ -58,6 +67,11 @@ class MemoryStore implements TaskStateStore {
     if (this.writeError) throw this.writeError
     this.writes += 1
     this.serialized = serialized
+    this.writeStarted?.()
+    this.writeStarted = null
+    const gate = this.writeGate
+    this.writeGate = null
+    if (gate) await gate
   }
   async quarantine(): Promise<void> {
     this.quarantined += 1
@@ -135,24 +149,64 @@ describe('DesktopActionTaskBridge', () => {
     expect(bridge.snapshot()[0]).toMatchObject({ status: 'cancelled' })
   })
 
-  it('rejects a grant presented by a different owner generation and does not dispatch', async () => {
-    let generation = 0
-    const { bridge, execute } = make({ authSessionGeneration: () => (generation += 1) })
-    const result = await bridge.execute(NOTES, context('p1'))
+  it('refuses an owner-generation mismatch across a held recovery read', async () => {
+    const readGate = barrier()
+    const readStarted = barrier()
+    const store = new MemoryStore()
+    let readWasStarted = false
+    store.readGate = readGate.promise
+    store.readStarted = () => {
+      readWasStarted = true
+      readStarted.release()
+    }
+    let generation = 1
+    const { bridge, execute } = make({ authSessionGeneration: () => generation }, store)
+    let pending: Promise<DesktopActionResult> | undefined
+    try {
+      pending = bridge.execute(NOTES, context('p1'))
+      await vi.waitFor(() => expect(readWasStarted).toBe(true))
+      generation = 2
+      readGate.release()
+      const result = await pending
 
-    expect(result).toMatchObject({ ok: false, outcome: 'failed', detail: 'task_denied:wrong_owner' })
-    expect(execute).not.toHaveBeenCalled()
+      expect(result).toMatchObject({ ok: false, outcome: 'failed', detail: 'task_denied:wrong_owner' })
+      expect(execute).not.toHaveBeenCalled()
+      expect(store.serialized).toBeNull()
+    } finally {
+      readGate.release()
+      if (pending) await Promise.allSettled([pending])
+    }
   })
 
-  it('does not dispatch when the session changes after the dispatching state was made durable', async () => {
-    const generations = [1, 1, 2]
-    let calls = 0
-    const { bridge, execute } = make({ authSessionGeneration: () => generations[Math.min(calls++, 2)]! })
-    const result = await bridge.execute(NOTES, context('p1'))
+  it('cancels a durable dispatch as not applied when auth changes during its held write', async () => {
+    const writeGate = barrier()
+    const writeStarted = barrier()
+    const store = new MemoryStore()
+    let writeWasStarted = false
+    store.writeGate = writeGate.promise
+    store.writeStarted = () => {
+      writeWasStarted = true
+      writeStarted.release()
+    }
+    let generation = 1
+    const { bridge, execute } = make({ authSessionGeneration: () => generation }, store)
+    let pending: Promise<DesktopActionResult> | undefined
+    try {
+      pending = bridge.execute(NOTES, context('p1'))
+      await vi.waitFor(() => expect(writeWasStarted).toBe(true))
+      expect(store.serialized).toContain('"status":"dispatching"')
+      generation = 2
+      writeGate.release()
+      const result = await pending
 
-    expect(result).toMatchObject({ ok: false, outcome: 'failed', detail: 'task_denied:wrong_owner' })
-    expect(execute).not.toHaveBeenCalled()
-    expect(bridge.snapshot()[0]).toMatchObject({ status: 'cancelled', effectOutcome: 'not-applied' })
+      expect(result).toMatchObject({ ok: false, outcome: 'failed', detail: 'task_denied:wrong_owner' })
+      expect(execute).not.toHaveBeenCalled()
+      expect(bridge.snapshot()[0]).toMatchObject({ status: 'cancelled', effectOutcome: 'not-applied' })
+      expect(store.serialized).toContain('"effectOutcome":"not-applied"')
+    } finally {
+      writeGate.release()
+      if (pending) await Promise.allSettled([pending])
+    }
   })
 
   it('records a dispatch that threw as uncertain, reports it unknown and never retries', async () => {
@@ -457,6 +511,14 @@ describe('DesktopActionTaskBridge restart recovery', () => {
   })
 })
 
+function barrier() {
+  let release!: () => void
+  const promise = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  return { promise, release }
+}
+
 function deferred() {
   let release!: (value: DesktopActionResult) => void
   const promise = new Promise<DesktopActionResult>((resolve) => {
@@ -507,19 +569,26 @@ describe('DesktopActionTaskBridge scheduling (G32)', () => {
     const started: string[] = []
     const { bridge } = make({
       execute: async (request, envelope) => {
-        started.push(`${request.id}`)
+        started.push(request.id)
         await gate.promise
         return verified(request.id, envelope)
       }
     })
-    void bridge.execute(NOTES, context('p1', 7))
-    void bridge.execute(CREATE_NOTE, context('p2', 8, CREATE_NOTE))
-    void bridge.execute(OPEN_ARC, context('p3', 9, OPEN_ARC))
-    await flush()
-    expect(started).toEqual(['desktop.open_notes', 'desktop.open_arc'])
-    gate.release(verified())
-    await flush()
-    expect(started).toContain('desktop.create_note')
+    const notes = bridge.execute(NOTES, context('p1', 7))
+    const secondNotes = bridge.execute(CREATE_NOTE, context('p2', 8, CREATE_NOTE))
+    const arc = bridge.execute(OPEN_ARC, context('p3', 9, OPEN_ARC))
+    try {
+      await vi.waitFor(() => expect(started).toHaveLength(2))
+      expect(new Set(started)).toEqual(new Set(['desktop.open_notes', 'desktop.open_arc']))
+      gate.release(verified())
+      await Promise.all([notes, secondNotes, arc])
+      expect(started).toHaveLength(3)
+      expect(started).toContain('desktop.open_arc')
+      expect(started.indexOf('desktop.create_note')).toBeGreaterThan(started.indexOf('desktop.open_notes'))
+    } finally {
+      gate.release(verified())
+      await Promise.allSettled([notes, secondNotes, arc])
+    }
   })
 
   it('Stop cancels queued work unrun, aborts the running lease, and still classifies the running effect by receipt', async () => {

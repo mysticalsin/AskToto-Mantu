@@ -16,13 +16,15 @@ export function useTaskCards(): {
     const api = window.toto?.taskCards
     if (!api) return
     let live = true
+    let receivedPush = false
     const unsubscribe = api.onCards((next) => {
+      receivedPush = true
       if (live) setCards(next)
     })
     void api
       .list()
       .then((initial) => {
-        if (live) setCards(initial)
+        if (live && !receivedPush) setCards(initial)
       })
       .catch(() => {})
     return () => {

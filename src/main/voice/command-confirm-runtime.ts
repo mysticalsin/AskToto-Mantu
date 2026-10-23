@@ -81,9 +81,9 @@ export function createCommandConfirmRuntime(options: CommandConfirmRuntimeOption
     deps: {
       execute: tasks.execute,
       recoverTasks: tasks.recoverTasks,
-      stopTasks: () => {
+      stopTasks: (reason) => {
         gestures.clear()
-        tasks.stopTasks()
+        tasks.stopTasks(reason)
       },
       preflight: (request, stage) => {
         ensureWatcher()
