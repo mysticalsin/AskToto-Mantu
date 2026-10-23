@@ -232,7 +232,7 @@ out="$(printf 'not json' | "$helper" ax-insert 2>/dev/null)"; code=$?
 expect_exit "ax-insert with a malformed request exits 0" 0 "$code"
 if printf '%s' "$out" | py 'import json,sys; d=json.load(sys.stdin); assert d["outcome"]=="refused" and d["reason"]=="invalid_request" and d.get("textHash") is None'; then pass "ax-insert refuses a malformed request"; else fail "ax-insert malformed: $out"; fi
 
-out="$(printf '{"pid":1,"windowId":"w","token":"t","valueHash":"%s","valueLength":0,"selectionLocation":0,"selectionLength":0,"text":"synthetic","allowPaste":true}' "$(printf 'a%.0s' $(seq 64))" | "$helper" ax-insert 2>/dev/null)"; code=$?
+out="$(printf '{"pid":1,"processStartMs":1,"windowId":"w","token":"t","valueHash":"%s","valueLength":0,"selectionLocation":0,"selectionLength":0,"text":"synthetic","allowPaste":true}' "$(printf 'a%.0s' $(seq 64))" | "$helper" ax-insert 2>/dev/null)"; code=$?
 expect_exit "ax-insert with a request that matches no field exits 0" 0 "$code"
 if printf '%s' "$out" | py 'import json,sys; d=json.load(sys.stdin); assert d["outcome"]=="refused" and d["reason"] in ("permission","target_changed","secure_field") and d["method"]=="none"'; then pass "ax-insert writes nothing for a field it cannot match"; else fail "ax-insert unmatched: $out"; fi
 

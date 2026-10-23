@@ -126,6 +126,7 @@ describe('helperRequestFor (G23)', () => {
   it('restates the bound target for the helper to compare again', () => {
     expect(helperRequestFor(request())).toEqual({
       pid: 4242,
+      processStartMs: 1_700_000_000_000,
       windowId: 'wsynthetic01',
       token: 'tok0123456789abcdef',
       valueHash: VALUE_HASH,

@@ -64,6 +64,8 @@ export type AxInsertResult = z.infer<typeof InsertSchema>
 /** What `ax-insert` must still find in the field, and the text. The pid is one argv-free JSON number. */
 export interface AxInsertRequest {
   pid: number
+  /** The process start (ms) from the snapshot: a reused pid is a different process. */
+  processStartMs: number
   windowId: string
   token: string
   valueHash: string
@@ -104,6 +106,7 @@ export function parseAxInsert(stdout: string): AxInsertResult | null {
 export function axInsertRequestBody(request: AxInsertRequest): string {
   return JSON.stringify({
     pid: request.pid,
+    processStartMs: request.processStartMs,
     windowId: request.windowId,
     token: request.token,
     valueHash: request.valueHash,

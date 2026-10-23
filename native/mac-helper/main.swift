@@ -1271,6 +1271,7 @@ func terminalSafe(_ text: String) -> String {
 
 struct AxInsertRequest: Decodable {
     let pid: Int32
+    let processStartMs: Int64
     let windowId: String
     let token: String
     let valueHash: String
@@ -1361,7 +1362,8 @@ func restorePasteboard(_ pasteboard: NSPasteboard, _ saved: SavedPasteboard) {
 }
 
 func axSameTarget(_ snapshot: AxSnapshot, _ request: AxInsertRequest) -> Bool {
-    snapshot.pid == request.pid && snapshot.windowId == request.windowId && snapshot.token == request.token
+    snapshot.pid == request.pid && snapshot.processStartMs == request.processStartMs
+        && snapshot.windowId == request.windowId && snapshot.token == request.token
 }
 
 /// The field is still exactly what the guard bound: identity, editability, value AND selection.

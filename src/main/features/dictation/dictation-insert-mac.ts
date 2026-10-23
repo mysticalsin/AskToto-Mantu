@@ -145,6 +145,7 @@ export function helperRequestFor(request: DictationInsertRequest): HelperRequest
   if (!Number.isSafeInteger(pid) || pid <= 0 || pid > 2 ** 31 - 1) return null
   return {
     pid,
+    processStartMs: Number(instance[2]),
     windowId: target.windowId,
     token: target.elementId,
     valueHash: revision[1],

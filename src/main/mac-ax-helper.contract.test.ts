@@ -9,6 +9,7 @@ vi.mock('./mac-helper', () => ({
   macHelperPath: () => '/synthetic/metis-mac-helper',
   runHelperOnce: vi.fn(async () => null)
 }))
+import { terminalSafeText } from './features/dictation/dictation-insert-mac'
 import {
   AX_REFUSAL_REASONS,
   axInsertRequestBody,
@@ -76,6 +77,7 @@ describe('ax helper gateway (G23)', () => {
   it('writes the request as JSON for stdin and nowhere else', () => {
     const body = JSON.parse(
       axInsertRequestBody({
+        processStartMs: 1,
         pid: 4242,
         windowId: 'w1',
         token: 't1',
@@ -91,6 +93,7 @@ describe('ax helper gateway (G23)', () => {
       [
         'allowPaste',
         'pid',
+        'processStartMs',
         'selectionLength',
         'selectionLocation',
         'text',
@@ -248,7 +251,7 @@ describe('metis-mac-helper ax-*: privacy and safety by construction (G23)', () =
       expect(insert).toContain(check)
     }
     expect(block('func axSameTarget')).toMatch(
-      /pid == request\.pid[\s\S]*windowId == request\.windowId[\s\S]*token == request\.token/
+      /pid == request\.pid[\s\S]*processStartMs == request\.processStartMs[\s\S]*windowId == request\.windowId[\s\S]*token == request\.token/
     )
   })
 
@@ -314,5 +317,63 @@ describe('metis-mac-helper ax-*: privacy and safety by construction (G23)', () =
     expect(swift).toContain('"com.apple.Terminal"')
     expect(swift).toContain('"com.googlecode.iterm2"')
     expect(block('func resolveFocusedElement')).toMatch(/description\.contains\("terminal"\)/)
+  })
+})
+
+describe('terminal sink parity: the TypeScript mirror and the Swift sink strip exactly the same scalars', () => {
+  type Range = [number, number]
+  const parseCase = (label: string): Range[] => {
+    const body = block('func terminalSafe')
+    const line = body
+      .split('\n')
+      .find((l) => l.trim().startsWith('case ') && l.includes(label === 'space' ? '0x0A' : '0x00...0x1F'))
+    expect(line, label).toBeTruthy()
+    return line!
+      .trim()
+      .replace(/^case /, '')
+      .replace(/:$/, '')
+      .split(',')
+      .map((part) => part.trim())
+      .map((part): Range => {
+        const [lo, hi] = part.split('...').map((n) => Number.parseInt(n, 16))
+        return [lo!, hi ?? lo!]
+      })
+  }
+  const space = parseCase('space')
+  const drop = parseCase('drop')
+  const inRanges = (v: number, ranges: Range[]): boolean => ranges.some(([lo, hi]) => v >= lo && v <= hi)
+  // The Swift sink as modelled from its own source: first matching case wins, then trailing blanks are trimmed.
+  const swiftSink = (text: string): string => {
+    let out = ''
+    for (const ch of text) {
+      const v = ch.codePointAt(0)!
+      if (inRanges(v, space)) out += ' '
+      else if (inRanges(v, drop)) continue
+      else out += ch
+    }
+    return out.replace(/ +$/, '')
+  }
+
+  it('parses both case lists from main.swift', () => {
+    expect(space.length).toBeGreaterThan(3)
+    expect(drop.length).toBeGreaterThan(3)
+  })
+
+  it('agrees on every scalar from U+0000 to U+2FFF and on a spread above, alone and in context', () => {
+    const scalars: number[] = []
+    for (let v = 0; v <= 0x2fff; v++) if (v < 0xd800 || v > 0xdfff) scalars.push(v)
+    for (const v of [0x3000, 0xfeff, 0xfff9, 0xfffd, 0x1f600, 0x10ffff]) scalars.push(v)
+    for (const v of scalars) {
+      const ch = String.fromCodePoint(v)
+      for (const input of [ch, `a${ch}b`, `a${ch}`, `${ch} `]) {
+        expect(terminalSafeText(input), `U+${v.toString(16)} in ${JSON.stringify(input)}`).toBe(swiftSink(input))
+      }
+    }
+  })
+
+  it('never leaves a line break, a control character or a trailing blank in the output', () => {
+    const out = terminalSafeText('a\nb\r\nc\td\u001b[0m\u2028e\u0085f   ')
+    expect(out).toBe('a b  c d[0m e f')
+    expect(out).not.toMatch(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]| $/)
   })
 })
