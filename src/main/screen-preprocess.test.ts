@@ -800,9 +800,12 @@ describe('foreground watcher — idle, opt-in only, no history (R111, D-19)', ()
     h.sp.refresh()
     for (let i = 0; i < 25; i++) h.sp._test.handleWindowChange({ windowId: `app.${i}`, pid: i, title: `t${i}` })
     expect(h.peek()).toBeNull()
+    // G46 added `foreground()`: a read-only view of the single latest observation, never a list.
     expect(Object.keys(h.sp).sort()).toEqual(
-      ['_test', 'canRun', 'currentFreshContext', 'isActive', 'refresh', 'stop'].sort()
+      ['_test', 'canRun', 'currentFreshContext', 'foreground', 'isActive', 'refresh', 'stop'].sort()
     )
+    const latest = h.sp.foreground()
+    expect(Array.isArray(latest)).toBe(false)
   })
 
   it('writes no window id, pid or title to the audit log when it describes a window', async () => {
