@@ -21,6 +21,7 @@ import type { VoiceActionsRuntimeDeps } from './voice-actions-runtime'
 import { randomUUID } from 'node:crypto'
 import type { ClarifyDropReason } from './clarify-protocol'
 import { createWalkthroughRuntime } from '../features/walkthrough'
+import { QA_IDENTITY_BUILD } from '../qa-identity'
 import { createVoiceTurnPipeline, type VoiceTurnOutcome } from './voice-turn-handler'
 
 interface WindowLike {
@@ -38,7 +39,7 @@ export interface MainVoiceTurnsDeps {
   execute?: CommandExecutor
   /**
    * G44 feature switch (Preview rule): ON in the QA identity build, OFF in release until the owner checklist.
-   * Absent means off. Read on every turn.
+   * Absent means the build default: the QA identity flag. Read on every turn.
    */
   walkthroughEnabled?(): boolean
   /** V04 and V05 render the outcome (card, pill). Nothing in main depends on it. */
@@ -64,7 +65,7 @@ export function createMainVoiceTurns(deps: MainVoiceTurnsDeps): NonNullable<Voic
   // G44: guides only. No observer or planner is bound yet (G46/G38 and the R114 teaching packs are later tickets), so
   // a started walkthrough says plainly that it cannot guide that yet and does nothing.
   const walkthrough = createWalkthroughRuntime({
-    enabled: () => deps.walkthroughEnabled?.() === true,
+    enabled: () => (deps.walkthroughEnabled ? deps.walkthroughEnabled() : QA_IDENTITY_BUILD),
     ownerKey,
     meetingActive: () => deps.authority.hasMeetingReservation,
     // The renderer-safe view reaches the UI through the turn outcome (V04/V05 subscribe); G45 draws it.
