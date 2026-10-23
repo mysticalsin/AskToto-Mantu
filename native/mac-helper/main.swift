@@ -1326,10 +1326,13 @@ func axWaitForValue(_ element: AXUIElement, expectedHash: String, seconds: TimeI
 }
 
 struct SavedPasteboard {
+    /// The pasteboard's change count at the moment the contents were read: the owner of what was saved.
+    let changeCount: Int
     let items: [[(NSPasteboard.PasteboardType, Data)]]
 }
 
 func savePasteboard(_ pasteboard: NSPasteboard) -> SavedPasteboard? {
+    let count = pasteboard.changeCount
     var total = 0
     var items: [[(NSPasteboard.PasteboardType, Data)]] = []
     for item in pasteboard.pasteboardItems ?? [] {
@@ -1342,7 +1345,9 @@ func savePasteboard(_ pasteboard: NSPasteboard) -> SavedPasteboard? {
         }
         items.append(entries)
     }
-    return SavedPasteboard(items: items)
+    // A copy that landed while the contents were being read makes the snapshot stale: never act on it.
+    guard pasteboard.changeCount == count else { return nil }
+    return SavedPasteboard(changeCount: count, items: items)
 }
 
 func restorePasteboard(_ pasteboard: NSPasteboard, _ saved: SavedPasteboard) {
@@ -1357,6 +1362,14 @@ func restorePasteboard(_ pasteboard: NSPasteboard, _ saved: SavedPasteboard) {
 
 func axSameTarget(_ snapshot: AxSnapshot, _ request: AxInsertRequest) -> Bool {
     snapshot.pid == request.pid && snapshot.windowId == request.windowId && snapshot.token == request.token
+}
+
+/// The field is still exactly what the guard bound: identity, editability, value AND selection.
+func axStillBound(_ snapshot: AxSnapshot, _ request: AxInsertRequest) -> Bool {
+    guard axSameTarget(snapshot, request), snapshot.editable, let value = snapshot.value,
+          let selection = snapshot.selection else { return false }
+    return sha256Hex(value) == request.valueHash && value.utf16.count == request.valueLength
+        && selection.location == request.selectionLocation && selection.length == request.selectionLength
 }
 
 func runAxInsert() -> Never {
@@ -1417,7 +1430,7 @@ func runAxInsert() -> Never {
     }
     // The front application and the field must still be the same one at the moment of the paste.
     switch resolveFocusedElement() {
-    case .found(let again) where axSameTarget(again, request) && again.value.map({ sha256Hex($0) }) == request.valueHash:
+    case .found(let again) where axStillBound(again, request):
         break
     case .permission:
         emitJson(axInsertResult("refused", reason: "permission", terminal: terminal), command: "ax-insert")
@@ -1426,13 +1439,18 @@ func runAxInsert() -> Never {
     default:
         emitJson(axInsertResult("refused", reason: "target_changed", terminal: terminal), command: "ax-insert")
     }
+    // Nothing of the user's may be overwritten that this helper did not save: a copy made during the look above wins.
+    guard pasteboard.changeCount == saved.changeCount else {
+        emitJson(axInsertResult("refused", reason: "target_changed", terminal: terminal), command: "ax-insert")
+    }
     let concealed = NSPasteboard.PasteboardType("org.nspasteboard.ConcealedType")
     let transient = NSPasteboard.PasteboardType("org.nspasteboard.TransientType")
     let token = pasteboard.declareTypes([.string, concealed, transient], owner: nil)
     let wrote = pasteboard.setString(text, forType: .string)
         && pasteboard.setData(Data(), forType: concealed) && pasteboard.setData(Data(), forType: transient)
     guard wrote, pasteboard.changeCount == token else {
-        // Someone else wrote in between: nothing of ours is left to take back, and nothing was pasted.
+        // Still ours (a partial write): give the user's contents back. A newer copy is never touched.
+        if pasteboard.changeCount == token { restorePasteboard(pasteboard, saved) }
         emitJson(axInsertResult("refused", reason: "target_changed", terminal: terminal), command: "ax-insert")
     }
     guard let source = CGEventSource(stateID: .hidSystemState),

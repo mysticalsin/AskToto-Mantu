@@ -153,6 +153,49 @@ describe('ax helper gateway (G23)', () => {
   })
 })
 
+describe('metis-mac-helper ax-insert: the paste fallback re-checks and owns the clipboard (G23 review)', () => {
+  const insert = (): string => block('func runAxInsert')
+  const afterSave = (): string => insert().slice(insert().indexOf('savePasteboard(pasteboard)'))
+
+  it('P1: the final look compares identity, editability, value AND selection, before any clipboard write or key event', () => {
+    const still = block('func axStillBound')
+    for (const check of [
+      'axSameTarget(snapshot, request)',
+      'snapshot.editable',
+      'sha256Hex(value) == request.valueHash',
+      'value.utf16.count == request.valueLength',
+      'selection.location == request.selectionLocation',
+      'selection.length == request.selectionLength'
+    ]) {
+      expect(still).toContain(check)
+    }
+    const tail = afterSave()
+    const finalLook = tail.indexOf('case .found(let again) where axStillBound(again, request)')
+    expect(finalLook).toBeGreaterThan(-1)
+    for (const mutation of ['declareTypes(', 'setString(', 'CGEvent(keyboardEventSource', 'postToPid(']) {
+      expect(tail.indexOf(mutation), mutation).toBeGreaterThan(finalLook)
+    }
+  })
+
+  it('P1: the clipboard snapshot carries its change count and ownership is verified right before the first mutation', () => {
+    expect(block('struct SavedPasteboard')).toMatch(/let changeCount: Int/)
+    const save = block('func savePasteboard')
+    expect(save).toMatch(/let count = pasteboard\.changeCount/)
+    expect(save).toMatch(/pasteboard\.changeCount == count/)
+    const tail = afterSave()
+    const owned = tail.indexOf('pasteboard.changeCount == saved.changeCount')
+    expect(owned).toBeGreaterThan(tail.indexOf('axStillBound(again, request)'))
+    expect(owned).toBeLessThan(tail.indexOf('declareTypes('))
+  })
+
+  it('P2: a partial clipboard write that left the token ours is restored before the refusal', () => {
+    const tail = afterSave()
+    const failure = tail.slice(tail.indexOf('guard wrote'), tail.indexOf('guard let source'))
+    expect(failure).toMatch(/if pasteboard\.changeCount == token \{ restorePasteboard\(pasteboard, saved\) \}/)
+    expect(failure.indexOf('restorePasteboard')).toBeLessThan(failure.indexOf('emitJson'))
+  })
+})
+
 describe('metis-mac-helper ax-*: privacy and safety by construction (G23)', () => {
   it('registers both subcommands and lists them in the usage line', () => {
     expect(swift).toMatch(/case "ax-focus-snapshot":/)

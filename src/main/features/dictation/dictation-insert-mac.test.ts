@@ -8,6 +8,7 @@ import {
   createMacDictationPorts,
   helperRequestFor,
   targetFromSnapshot,
+  terminalSafeText,
   type MacInsertAudit
 } from './dictation-insert-mac'
 
@@ -224,14 +225,33 @@ describe('createMacDictationPorts: insertion outcomes (G23)', () => {
     })
   })
 
-  it('a terminal that made the text inert is verified for the inert text and says so', async () => {
+  it('a terminal that made the text inert is verified only for exactly the inert text it was expected to write', async () => {
+    const dictated = 'synthetic line one\nsynthetic line two\r\u001b[31m '
+    const inert = 'synthetic line one synthetic line two [31m'
+    expect(terminalSafeText(dictated)).toBe(inert)
     const { client } = fakeClient({
-      insert: inserted({ method: 'paste', terminal: true, sanitized: true, textHash: sha('x') })
+      insert: inserted({ method: 'paste', terminal: true, sanitized: true, textHash: sha(inert) })
     })
     const audits: MacInsertAudit[] = []
-    const result = await ports(client, (a) => audits.push(a)).insertion.insert(request())
+    const result = await ports(client, (a) => audits.push(a)).insertion.insert(request(undefined, dictated))
     expect(result).toMatchObject({ outcome: 'verified', evidenceId: 'ax:verified:paste:inert' })
     expect(audits[0]).toMatchObject({ method: 'paste', terminal: true, sanitized: true })
+  })
+
+  it('a sanitized claim never verifies an unrelated helper hash, or any non-terminal sanitizing (review P2)', async () => {
+    const dictated = 'synthetic line one\nsynthetic line two'
+    for (const patch of [
+      { terminal: true, sanitized: true, textHash: sha('something unrelated') },
+      { terminal: true, sanitized: true, textHash: sha(dictated) },
+      { terminal: false, sanitized: true, textHash: sha(terminalSafeText(dictated)) },
+      { terminal: true, sanitized: true, textHash: null }
+    ]) {
+      const { client } = fakeClient({ insert: inserted({ method: 'paste', ...patch }) })
+      expect(await ports(client).insertion.insert(request(undefined, dictated))).toEqual({
+        outcome: 'uncertain',
+        evidenceId: 'ax:text-hash-mismatch'
+      })
+    }
   })
 
   it('a failing audit sink never changes the outcome', async () => {

@@ -67,6 +67,30 @@ const fnv32 = (text: string): number => {
   return hash
 }
 
+/**
+ * The terminal sink's transform, mirrored from the helper so a sanitized claim can be checked against the exact text
+ * the helper must have written: control characters, DEL, C1, bidi overrides dropped; line breaks and tabs become a
+ * space; trailing spaces trimmed. Keep in step with `terminalSafe` in native/mac-helper/main.swift.
+ */
+export function terminalSafeText(text: string): string {
+  let out = ''
+  for (const char of text) {
+    const v = char.codePointAt(0) as number
+    if ([0x0a, 0x0d, 0x09, 0x0b, 0x0c, 0x85, 0x2028, 0x2029].includes(v)) out += ' '
+    else if (
+      v <= 0x1f ||
+      (v >= 0x7f && v <= 0x9f) ||
+      v === 0x200e ||
+      v === 0x200f ||
+      (v >= 0x202a && v <= 0x202e) ||
+      (v >= 0x2066 && v <= 0x2069)
+    )
+      continue
+    else out += char
+  }
+  return out.replace(/ +$/, '')
+}
+
 const sha256 = (text: string): string => createHash('sha256').update(text, 'utf8').digest('hex')
 
 /** `<value sha256>.<length>.<selection start>.<selection length>`: the revision the helper compares again. */
@@ -220,9 +244,11 @@ export function createMacDictationPorts(deps: MacDictationPortsDeps = {}): Dicta
       }
       if (outcome.kind === 'inserted_unverified')
         return { outcome: 'uncertain', evidenceId: `ax:unverified:${outcome.method}` }
-      // A verified claim must name the text the helper reports writing. A terminal may have made it inert (spaces for
-      // line breaks, control characters dropped), which is then the one allowed difference.
-      if (result.textHash === null || (!result.sanitized && result.textHash !== sha256(request.args.text))) {
+      // A verified claim must name exactly the text this adapter expects the helper to have written: the dictated text,
+      // or, only for a terminal that reports making it inert, that text after the terminal sink's own transform. Any
+      // other hash (or an inert claim from a non-terminal) is not a verified insertion.
+      const expected = sha256(result.sanitized ? terminalSafeText(request.args.text) : request.args.text)
+      if (result.textHash !== expected || (result.sanitized && !result.terminal)) {
         return { outcome: 'uncertain', evidenceId: 'ax:text-hash-mismatch' }
       }
       return {
