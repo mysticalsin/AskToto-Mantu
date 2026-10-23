@@ -7,11 +7,8 @@ import {
   desktopActionArgumentsDigest,
   type DesktopActionTaskBridgeDeps
 } from './desktop-action-task-bridge'
-import {
-  DESKTOP_ACTION_TASK_CODEC_LIMITS,
-  DESKTOP_ACTION_TASK_POLICY,
-  desktopActionResources
-} from './desktop-action-task-bridge'
+import { DESKTOP_ACTION_TASK_CODEC_LIMITS } from './desktop-action-task-bridge'
+import { DESKTOP_ACTION_TASK_POLICY, desktopActionResources } from './desktop-action-task-policy'
 import { createTask, createTaskRuntimeState, pauseTaskForQuota } from './task-state'
 import { encodeTaskRuntimeState } from './task-persistence'
 import { TASK_STORE_DECRYPT_FAILED, type TaskStateStore } from './encrypted-task-file-store'

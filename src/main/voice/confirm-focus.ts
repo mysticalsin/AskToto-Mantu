@@ -33,6 +33,11 @@ export interface ConfirmFocusDeps {
 export interface ConfirmFocus {
   /** A proposed card appeared: remember the previous app and take focus. */
   presented(): void
+  /**
+   * G40: remember the app in front without showing anything. Escape release (src/main/tasks/escape-release.ts)
+   * returns focus there with `release('cancelled')`. A no-op while a card or capture is already active.
+   */
+  capture(): void
   /** The card ended. Restores focus for the reasons where the person is still looking at the card. */
   release(reason: string): Promise<void>
   previous(): PreviousApp | null
@@ -63,6 +68,12 @@ export function createConfirmFocus(deps: ConfirmFocusDeps): ConfirmFocus {
         active = true
       }
       deps.showForConfirm()
+    },
+    capture() {
+      if (active) return
+      const front = deps.frontmost()
+      previous = front && front.pid !== deps.ownPid ? front : null
+      active = true
     },
     async release(reason) {
       if (!active) return

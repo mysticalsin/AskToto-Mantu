@@ -103,6 +103,8 @@ export type CommandExecutionContext = ActionEnvelope & {
   owner: { webContentsId: number; revision: number }
   /** Proposal ids that must already be verified. The durable task bridge enforces it. */
   dependsOn: readonly string[]
+  /** G40: this dispatch was approved by a standing grant, not the confirm card. Foreground control still asks. */
+  viaGrant?: boolean
 }
 
 export type CommandExecutor = (

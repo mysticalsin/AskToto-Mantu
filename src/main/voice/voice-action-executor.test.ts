@@ -80,7 +80,14 @@ function harness(
       request.id === 'desktop.google_search' ? handedOff(request) : verifiedWith(request, envelope)
     )
   const audit = vi.fn()
-  const bridge = new DesktopActionTaskBridge({ execute: adapter, store, authSessionGeneration: () => 1, audit })
+  const bridge = new DesktopActionTaskBridge({
+    execute: adapter,
+    store,
+    authSessionGeneration: () => 1,
+    audit,
+    // The bridge decides foreground control from the platform, so it follows the simulated one.
+    platform: (options.platform ?? 'darwin') as NodeJS.Platform
+  })
   const control = new CommandControl({
     execute: bridge.execute,
     policyAllows: () => true,

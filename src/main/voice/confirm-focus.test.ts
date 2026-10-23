@@ -104,3 +104,23 @@ describe('confirmation focus exception (D-10: the card is the third exception to
     }
   })
 })
+
+describe('capture for Escape release (G40)', () => {
+  it('remembers the previous app without showing anything, and restores it on release', async () => {
+    const activatePid = vi.fn(async () => true)
+    const showForConfirm = vi.fn()
+    const focus = createConfirmFocus({
+      platform: 'darwin',
+      ownPid: 1,
+      frontmost: () => ({ pid: 42, windowId: 'com.example' }),
+      showForConfirm,
+      activatePid,
+      blurWindow: vi.fn()
+    })
+    focus.capture()
+    expect(showForConfirm).not.toHaveBeenCalled()
+    expect(focus.previous()).toEqual({ pid: 42, windowId: 'com.example' })
+    await focus.release('cancelled')
+    expect(activatePid).toHaveBeenCalledWith(42)
+  })
+})

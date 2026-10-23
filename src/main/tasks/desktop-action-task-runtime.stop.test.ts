@@ -41,6 +41,11 @@ vi.mock('node:fs/promises', async (importOriginal) => {
   const original = await importOriginal<typeof import('node:fs/promises')>()
   return { ...original, mkdir: vi.fn(async () => undefined), readFile: vi.fn(async () => '') }
 })
+// G40: Photo Booth is foreground-only; the decision and Escape hold have their own tests. Here the step grants.
+vi.mock('./focus-request-wiring', () => ({
+  createDesktopActionFocusStep: () => ({ run: async () => ({ ok: true, hold: null }) }),
+  NO_FOCUS_HOST_RESULT: { ok: false, reason: 'focus_unavailable', copy: '' }
+}))
 vi.mock('./encrypted-task-file-store', () => ({
   createEncryptedTaskFileStore: () => ({
     read: async () => ({ kind: 'not-found' }),
@@ -49,7 +54,7 @@ vi.mock('./encrypted-task-file-store', () => ({
   })
 }))
 
-import { createDesktopActionTaskBridge } from './desktop-action-task-runtime'
+import { createDesktopActionTaskBridge, setDesktopActionFocusHost } from './desktop-action-task-runtime'
 
 const REAL_PLATFORM = process.platform
 
@@ -94,6 +99,7 @@ describe('production desktop-action task bridge Stop reaches adapter waits', () 
   })
 
   afterEach(() => {
+    setDesktopActionFocusHost(null)
     Object.defineProperty(process, 'platform', { value: REAL_PLATFORM, configurable: true })
   })
 
@@ -127,6 +133,7 @@ describe('production desktop-action task bridge Stop reaches adapter waits', () 
       matched: () => matched.promise,
       cancel: cancelObservation
     })
+    setDesktopActionFocusHost({} as never)
     const bridge = createDesktopActionTaskBridge()
     const request: DesktopActionRequest = { id: 'desktop.photo_booth_capture', args: {} }
     const run = bridge.execute(request, dispatchContext('photo-booth-stop', request))

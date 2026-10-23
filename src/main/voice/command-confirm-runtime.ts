@@ -15,6 +15,7 @@ import type { TaskCardRuntime } from '../ipc/task-card-ipc'
 import {
   desktopActionTaskCards,
   desktopActionTaskDeps,
+  setDesktopActionFocusHost,
   setDesktopActionGestureSource
 } from '../tasks/desktop-action-task-runtime'
 import { createGestureBindings } from './gesture-binding'
@@ -77,6 +78,19 @@ export function createCommandConfirmRuntime(options: CommandConfirmRuntimeOption
     activatePid,
     blurWindow: options.blurWindow
   })
+  // G40: foreground-only adapters ask their own question and arm Escape release before Métis takes control.
+  setDesktopActionFocusHost({
+    platform,
+    ownPid: process.pid,
+    frontmost: () => ensureWatcher().current(),
+    activatePid,
+    blurWindow: options.blurWindow,
+    preflight: async (request) => {
+      ensureWatcher()
+      const result = await preflight(request, 'propose')
+      return result.ok ? { ok: true } : { ok: false, code: result.notice.code, copy: result.notice.copy }
+    }
+  })
   return {
     deps: {
       execute: tasks.execute,
@@ -99,6 +113,7 @@ export function createCommandConfirmRuntime(options: CommandConfirmRuntimeOption
     },
     dispose: () => {
       setDesktopActionGestureSource(null)
+      setDesktopActionFocusHost(null)
       gestures.clear()
       watcher?.stop()
     }
