@@ -9,6 +9,7 @@ const base: UserMemoryItem = {
   text: 'x',
   source: 'owner-typed',
   at: 0,
+  turnId: 'ask-1',
   revision: 1,
   expiresAt: null,
   conversation: null

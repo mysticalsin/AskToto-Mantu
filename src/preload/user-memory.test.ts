@@ -21,6 +21,7 @@ describe('user memory preload bridge (G57)', () => {
       text: 'Answer in Portuguese',
       source: 'owner-typed',
       at: 1,
+      turnId: 'ask-1',
       revision: 1,
       expiresAt: null,
       conversation: null

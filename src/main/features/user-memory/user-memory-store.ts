@@ -95,14 +95,13 @@ const FileSchema = z
     v: z.literal(1),
     partition: z.string().min(1).max(64),
     items: z.array(StoredItemSchema).max(500),
-    tombstones: z.array(z.object({ h: z.string().length(64), at: z.number().int().nonnegative() }).strict()).max(2_000),
+    tombstones: z.array(z.object({ h: z.string().length(64), at: z.number().int().nonnegative() }).strict()),
     tombstoneCount: z.number().int().nonnegative()
   })
   .strict()
 type Stored = z.infer<typeof FileSchema>
 
 const PARTITION = /^(?:legacy|[0-9a-f]{24,32})$/
-const TOMBSTONE_KEEP = 1_000
 const REFRESH_MIN_MS = 3_600_000
 const isMissing = (error: unknown): boolean => (error as NodeJS.ErrnoException | undefined)?.code === 'ENOENT'
 const normalize = (text: string): string => text.trim().replace(/\s+/g, ' ').toLowerCase()
@@ -159,8 +158,7 @@ export function createUserMemoryStore(deps: UserMemoryStoreDeps): UserMemoryStor
   async function save(partition: string, stored: Stored): Promise<boolean> {
     try {
       if (partitionOf() !== partition) return false
-      const trimmed: Stored = { ...stored, tombstones: stored.tombstones.slice(-TOMBSTONE_KEEP) }
-      const sealed = await deps.keyring.seal(Buffer.from(JSON.stringify(trimmed), 'utf8'), aadOf(partition))
+      const sealed = await deps.keyring.seal(Buffer.from(JSON.stringify(stored), 'utf8'), aadOf(partition))
       if (!sealed || partitionOf() !== partition) return false
       await mkdir(deps.rootDir(), { recursive: true, mode: 0o700 })
       await atomicSavedWrite(pathOf(partition), sealed, () => {
@@ -209,6 +207,11 @@ export function createUserMemoryStore(deps: UserMemoryStoreDeps): UserMemoryStor
     }
   }
 
+  function addTombstone(stored: Stored, hash: string, now: number): void {
+    if (!stored.tombstones.some((tombstone) => tombstone.h === hash)) stored.tombstones.push({ h: hash, at: now })
+    stored.tombstoneCount += 1
+  }
+
   function place(
     stored: Stored,
     partition: string,
@@ -228,6 +231,14 @@ export function createUserMemoryStore(deps: UserMemoryStoreDeps): UserMemoryStor
     if (same) {
       same.lastUsedAt = now
       same.expiresAt = expiresAt
+      // A repeated owner command updates its source and turn provenance. Derived syncs never downgrade an
+      // owner-stated record, but refresh an already-derived record's provenance and TTL.
+      if (entry.source !== 'derived' || same.source === 'derived') {
+        same.source = entry.source
+        same.at = now
+        same.turnId = entry.turnId
+        same.conversation = entry.conversation
+      }
       return
     }
     stored.items.push({
@@ -251,6 +262,7 @@ export function createUserMemoryStore(deps: UserMemoryStoreDeps): UserMemoryStor
     text: item.text,
     source: item.source,
     at: item.at,
+    turnId: item.turnId,
     revision: item.revision,
     expiresAt: item.expiresAt,
     conversation: item.conversation
@@ -326,27 +338,29 @@ export function createUserMemoryStore(deps: UserMemoryStoreDeps): UserMemoryStor
       const cleaned = clean(text)
       if (!cleaned) return Promise.resolve(false)
       return mutate(false, (stored, partition, now) => {
-        sweep(stored, now)
+        const swept = sweep(stored, now)
         const old = stored.items.find((item) => item.id === id)
-        if (!old) return { result: false, dirty: false }
+        if (!old) return { result: false, dirty: swept }
+        if (normalize(old.text) === normalize(cleaned)) return { result: true, dirty: swept }
         const rest = stored.items.filter((item) => item.id !== id)
-        stored.tombstones.push({ h: hashOf(partition, old.kind, old.text), at: now })
-        stored.tombstoneCount += 1
-        stored.tombstones = stored.tombstones.filter((t) => t.h !== hashOf(partition, old.kind, cleaned))
         const duplicate = rest.find((item) => item.kind === old.kind && normalize(item.text) === normalize(cleaned))
-        stored.items = duplicate
-          ? rest
-          : [
-              ...rest,
-              {
-                ...old,
-                id: newId(),
-                text: cleaned,
-                revision: old.revision + 1,
-                lastUsedAt: now,
-                expiresAt: old.kind === 'project-context' ? now + PROJECT_CONTEXT_TTL_MS : null
-              }
-            ]
+        addTombstone(stored, hashOf(partition, old.kind, old.text), now)
+        const newHash = hashOf(partition, old.kind, cleaned)
+        // The correction is explicit owner input, so it may deliberately reintroduce a prior value.
+        stored.tombstones = stored.tombstones.filter((tombstone) => tombstone.h !== newHash)
+        const revised: StoredItem = {
+          ...old,
+          id: newId(),
+          text: cleaned,
+          source: 'settings',
+          at: now,
+          turnId: null,
+          conversation: null,
+          revision: Math.max(old.revision, duplicate?.revision ?? 0) + 1,
+          lastUsedAt: now,
+          expiresAt: old.kind === 'project-context' ? now + PROJECT_CONTEXT_TTL_MS : null
+        }
+        stored.items = [...rest.filter((item) => item.id !== duplicate?.id), revised]
         return { result: true, dirty: true }
       })
     },
@@ -357,8 +371,7 @@ export function createUserMemoryStore(deps: UserMemoryStoreDeps): UserMemoryStor
         const old = stored.items.find((item) => item.id === id)
         if (!old) return { result: false, dirty: false }
         stored.items = stored.items.filter((item) => item.id !== id)
-        stored.tombstones.push({ h: hashOf(partition, old.kind, old.text), at: now })
-        stored.tombstoneCount += 1
+        addTombstone(stored, hashOf(partition, old.kind, old.text), now)
         return { result: true, dirty: true }
       })
     },
