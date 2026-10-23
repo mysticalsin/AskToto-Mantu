@@ -368,7 +368,7 @@ describe('CommandProposalHost late detached settlement', () => {
   beforeAll(async () => {
     bundle = await bundleHarness()
     const { chromium } = await import('playwright')
-    browser = await chromium.launch({ headless: true, chromiumSandbox: true })
+    browser = await chromium.launch({ headless: true })
   }, 120_000)
 
   beforeEach(async () => {
