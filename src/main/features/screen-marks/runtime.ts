@@ -1,12 +1,10 @@
 import { join } from 'node:path'
 import { app, screen } from 'electron'
 import { devEnv } from '../../dev-env'
-import { registerScreenMarksQaIpc } from '../../ipc/screen-marks-qa-ipc'
+import { QA_IDENTITY_BUILD } from '../../qa-identity'
+import { qaScreenMarksEnabled, registerScreenMarksQaIpc } from '../../ipc/screen-marks-qa-ipc'
 import { createAnnotationWindow } from '../../windows/annotation-window'
 import { createScreenMarksRuntimeCore, type ScreenMarksRuntimeCore } from './runtime-core'
-
-/** QA-only switch for the mark placement IPC; absent in a packaged build (devEnv ignores the environment there). */
-export const QA_SCREEN_MARKS_ENV = 'METIS_QA_SCREEN_MARKS'
 
 /**
  * The real screen marks runtime (G43): displays from Electron, a click-through content-protected window per display,
@@ -37,6 +35,7 @@ export function createScreenMarksRuntime(
     screen.on('display-metrics-changed', () => core.displaysChanged())
   })
   app.once('will-quit', () => core.destroy('quit'))
-  if (devEnv(QA_SCREEN_MARKS_ENV) === '1') registerScreenMarksQaIpc(assertMainWindow, core)
+  if (QA_IDENTITY_BUILD && qaScreenMarksEnabled({ qaIdentity: QA_IDENTITY_BUILD, packaged: app.isPackaged, env: process.env }))
+    registerScreenMarksQaIpc(assertMainWindow, core)
   return core
 }

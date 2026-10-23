@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { SCREEN_MARKS_IPC } from '@shared/screen-marks'
+import { QA_SCREEN_MARKS_IPC } from '@shared/screen-marks-qa'
 import { readModuleSource } from '../../../test-helpers/module-source'
 
 /** G43 wiring pins: the runtime is built and fed by the observation, channels match the preloads, QA IPC is flag-gated. */
@@ -18,17 +19,18 @@ describe('screen marks wiring (G43)', () => {
     for (const event of ['display-added', 'display-removed', 'display-metrics-changed']) expect(runtime).toContain(event)
   })
 
-  it('registers the QA placement IPC only under the QA flag', () => {
-    expect(runtime).toMatch(/if \(devEnv\(QA_SCREEN_MARKS_ENV\) === '1'\) registerScreenMarksQaIpc\(/)
-    expect(runtime).toContain("QA_SCREEN_MARKS_ENV = 'METIS_QA_SCREEN_MARKS'")
+  it('registers the QA placement IPC only under the compile-time QA identity', () => {
+    expect(runtime).toMatch(/if \(\s*QA_IDENTITY_BUILD &&\s*qaScreenMarksEnabled\(/)
+    expect(runtime).not.toContain('METIS_QA_SCREEN_MARKS')
+    expect(runtime).not.toContain('screenMarks:qa')
   })
 
-  it('the preload channel literals equal the shared channel table', () => {
+  it('the preload channel literals equal the shared channel tables', () => {
     const annotation = readModuleSource(__dirname, '../../../preload/annotation').text
     const qa = readModuleSource(__dirname, '../../../preload/screen-marks').text
     expect(annotation).toContain(`'${SCREEN_MARKS_IPC.marks}'`)
-    expect(qa).toContain(`'${SCREEN_MARKS_IPC.qaPlace}'`)
-    expect(qa).toContain(`'${SCREEN_MARKS_IPC.qaClear}'`)
+    expect(qa).toContain(`'${QA_SCREEN_MARKS_IPC.place}'`)
+    expect(qa).toContain(`'${QA_SCREEN_MARKS_IPC.clear}'`)
   })
 
   it('the annotation window is created only by the runtime, with a fixed bundled page and its own preload', () => {
