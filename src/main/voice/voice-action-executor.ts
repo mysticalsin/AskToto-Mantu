@@ -190,7 +190,8 @@ export function createVoiceActionExecutor(deps: VoiceActionExecutorDeps): VoiceA
         proposalId,
         owner: owner as { webContentsId: number; revision: number },
         ...envelope,
-        dependsOn: []
+        dependsOn: [],
+        ...(grantId !== undefined ? { viaGrant: true } : {})
       })
     } catch {
       // The adapter was already invoked: a rejection does not prove the effect did not happen.

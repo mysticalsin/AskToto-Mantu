@@ -37,10 +37,20 @@ import {
   type TaskProgressRecord,
   type TaskProgressState
 } from './task-progress'
+import type { FocusRequestStep } from './focus-request'
+import {
+  ACTIONS_RESOURCE,
+  DESKTOP_ACTION_SCHEDULER_LIMITS,
+  DESKTOP_ACTION_TASK_POLICY,
+  DESKTOP_ACTION_TASK_TYPE,
+  GRANT_TTL_MS,
+  desktopActionResources
+} from './desktop-action-task-policy'
 import { archiveHasRoom, pruneState } from './desktop-action-task-archive'
 import { TaskCards, type CardRecord } from './desktop-action-task-cards'
 import { TaskScheduler, type SchedulerJob, type SchedulerLimits, type SchedulerResult } from './task-scheduler'
 import { TaskSteeringInbox, type PendingSteer } from './task-steering'
+import { enterForeground } from './desktop-action-foreground'
 import { TaskStepLeases, type StepLease } from './task-step-lease'
 import { DesktopActionTaskRecovery as DesktopActionTaskRecoveryManager } from './desktop-action-task-recovery'
 import {
@@ -52,53 +62,6 @@ import {
   recordEffectOutcome,
   steerTask
 } from './task-state'
-
-/** One confirmed desktop command is one task. The capability is the adapter id, so a grant cannot cross actions. */
-export const DESKTOP_ACTION_TASK_TYPE = 'desktop-action'
-const ACTIONS_RESOURCE = 'actions'
-const DAY_MS = 24 * 60 * 60 * 1000
-
-/** Owner-chosen limits for the desktop command path. The task modules deliberately define none of their own. */
-export const DESKTOP_ACTION_TASK_POLICY: TaskPolicy = {
-  allowedTaskTypes: [DESKTOP_ACTION_TASK_TYPE],
-  allowedCapabilities: DESKTOP_ADAPTER_IDS,
-  resourceBudgets: { [ACTIONS_RESOURCE]: 1 },
-  maxRetentionMs: DAY_MS,
-  // A dispatch grant is issued after confirmation and used at once, so a grant that outlives 10 s is a bug, not a slow
-  // user. The card's own lifetime (12 s, 30 s with assistive technology) is a different clock.
-  maxGrantTtlMs: 10_000
-}
-const GRANT_TTL_MS = 10_000
-
-/**
- * Owner-approved 2026-10-22: one desktop-effect task per owner, four read-only, and a 10 s queue wait (no longer
- * than a confirmation lives), so a confirmed action never fires long after it was approved.
- */
-export const DESKTOP_ACTION_SCHEDULER_LIMITS: SchedulerLimits = {
-  maxEffectPerOwner: 1,
-  maxReadOnlyPerOwner: 4,
-  maxQueuedPerOwner: 8,
-  maxQueueWaitMs: GRANT_TTL_MS
-}
-
-/**
- * The named resources an action touches, so two tasks never act on the same app or device at once. Every desktop
- * adapter launches or drives an app, so each is an effect job; the resource is the app it acts on.
- */
-export function desktopActionResources(request: DesktopActionRequest): string[] {
-  switch (request.id) {
-    case 'desktop.open_notes':
-    case 'desktop.create_note':
-      return ['app:notes']
-    case 'desktop.open_arc':
-      return ['app:arc']
-    case 'desktop.google_search':
-    case 'desktop.open_x':
-      return [request.args.browser === 'arc' ? 'app:arc' : 'app:default-browser']
-    case 'desktop.photo_booth_capture':
-      return ['app:photo-booth', 'device:camera']
-  }
-}
 
 export const DESKTOP_ACTION_TASK_CODEC_LIMITS: TaskStateCodecLimits = {
   maxBytes: 1_048_576,
@@ -122,6 +85,8 @@ export type DesktopActionTaskAuditEvent =
   | 'task.effect_uncertain'
   | 'task.dispatch_denied'
   | 'task.stopped'
+  | 'task.focus_requested'
+  | 'task.escape_release'
 
 /**
  * G34: the gesture the task came from. `bindingFor` is read when the command is submitted (the binding that was live
@@ -150,6 +115,9 @@ export interface DesktopActionTaskBridgeDeps {
     signal?: AbortSignal
   ) => Promise<DesktopActionResult>
   scheduler?: TaskScheduler
+  /** G40: the separate decision and Escape release for foreground-only adapters. Absent means those are refused. */
+  focus?: FocusRequestStep
+  platform?: NodeJS.Platform
   gesture?: DesktopActionGestureGate
   recipient?: DesktopActionRecipientGate
   store: TaskStateStore
@@ -416,6 +384,45 @@ export class DesktopActionTaskBridge {
       return failedResult(request.id, `task_denied:${refusal}`)
     }
     if (card && card.phase === 'queued') this.taskCards.setPhase(card, 'running')
+    // G40: a foreground-only adapter needs its own decision and an Escape release before anything is authorized.
+    const foreground = await enterForeground(this.deps, request, context, signal, () => {
+      if (card) this.taskCards.stopCard(`webContents:${context.owner.webContentsId}`, card.cardId)
+      else this.leases.abortTask(taskIdFor(context.proposalId), 'revoked')
+    })
+    if (!foreground.ok) {
+      this.deps.audit?.('task.dispatch_denied', { actionId: request.id, reason: foreground.reason })
+      if (card) this.taskCards.finish(card, 'not_done', foreground.stopped ? 'stopped_before_start' : 'refused')
+      return foreground.stopped
+        ? { id: request.id, ok: false, outcome: 'cancelled', detail: 'stopped' }
+        : failedResult(request.id, `task_denied:${foreground.reason}`)
+    }
+    const hold = foreground.hold
+    try {
+      return await this.dispatch(
+        request,
+        context,
+        signal,
+        generation,
+        authSessionGeneration,
+        recoveryOwner,
+        card,
+        settlementRecipientIsCurrent
+      )
+    } finally {
+      hold?.end()
+    }
+  }
+
+  private async dispatch(
+    request: DesktopActionRequest,
+    context: CommandExecutionContext,
+    signal: AbortSignal,
+    generation: number,
+    authSessionGeneration: number,
+    recoveryOwner: TaskRecoveryOwner | undefined,
+    card: CardRecord | undefined,
+    settlementRecipientIsCurrent: () => boolean
+  ): Promise<DesktopActionResult> {
     let begun: Begun
     try {
       begun = await this.begin(request, context, authSessionGeneration, recoveryOwner)

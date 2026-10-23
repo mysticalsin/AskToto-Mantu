@@ -17,7 +17,10 @@ import {
   type DesktopActionTaskBridgeDeps
 } from './desktop-action-task-bridge'
 import type { TaskCardRuntime } from '../ipc/task-card-ipc'
+import { validateAdapterCapabilities } from '@shared/voice/adapter-capabilities'
 import { createEncryptedTaskFileStore } from './encrypted-task-file-store'
+import type { FocusRequestStep } from './focus-request'
+import { createDesktopActionFocusStep, NO_FOCUS_HOST_RESULT, type DesktopActionFocusHost } from './focus-request-wiring'
 
 /** Task ids the person has been told about (random hex, no arguments), so boot recovery announces each once. */
 function createAcknowledgementStore(file: () => string): NonNullable<DesktopActionTaskBridgeDeps['acknowledgements']> {
@@ -47,11 +50,31 @@ export function setDesktopActionGestureSource(source: Omit<DesktopActionGestureG
 }
 
 /**
+ * G40: what the foreground-only focus step needs from the confirm runtime. Without it (or after dispose) a
+ * foreground-only action is refused rather than run without a decision and an Escape release.
+ */
+let focusHost: DesktopActionFocusHost | null = null
+export function setDesktopActionFocusHost(host: DesktopActionFocusHost | null): void {
+  focusHost = host
+}
+
+/** QA-identity builds dispatch into a sink and never drive another app, so there is no foreground to hold. */
+const SINK_FOCUS: FocusRequestStep = { run: async () => ({ ok: true, hold: null }) }
+const PRODUCTION_FOCUS: FocusRequestStep = {
+  run: (request, input) =>
+    focusHost ? createDesktopActionFocusStep(focusHost).run(request, input) : Promise.resolve(NO_FOCUS_HOST_RESULT)
+}
+
+/**
  * Production composition for confirmed desktop commands. Task history lives in userData, encrypted with the
  * per-install AES-256-GCM key that already protects settings and meeting envelopes (secrets.ts), and is replaced
  * atomically. Paths resolve lazily because userData can be redirected after this module loads.
  */
 export function createDesktopActionTaskBridge(): DesktopActionTaskBridge {
+  // G40: a missing or inconsistent adapter declaration is a defect. It is logged loudly, and an undeclared adapter
+  // is treated as foreground-only, so it still cannot run without the focus decision and Escape release.
+  for (const problem of validateAdapterCapabilities())
+    mainLog.error(`[desktop-action-task] adapter capability: ${problem}`)
   // QA-identity builds only (V08, compiled out of shipping bytes): the acceptance run records dispatches in a sink so
   // the sandbox never opens the owner's real Notes, browser or camera. Everything above the executor stays real.
   const qaSink =
@@ -79,6 +102,7 @@ export function createDesktopActionTaskBridge(): DesktopActionTaskBridge {
       const tenantKey = ownerSession?.currentTenantKey() ?? null
       return ownerKey && tenantKey ? { ownerKey, tenantKey } : null
     },
+    focus: qaSink ? SINK_FOCUS : PRODUCTION_FOCUS,
     gesture: {
       bindingFor: (webContentsId) => gestureSource?.bindingFor(webContentsId) ?? null,
       currentTarget: () => gestureSource?.currentTarget() ?? null,
