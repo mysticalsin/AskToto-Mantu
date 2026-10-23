@@ -358,13 +358,12 @@ export function createScreenPreprocess(deps: ScreenPreprocessDeps): ScreenPrepro
         screenHash: hash,
         generation
       }
-      // `mode` is only meaningful (and only emitted) where an OCR engine exists — keeps the Windows
-      // audit-log record byte-identical to pre-OCR builds (review finding).
+      // R111 / D-19: the audit log persists to disk, so it never carries the foreground window or app id. That
+      // would be a timestamped history of what the user had in front of them; the watcher stays in memory only.
+      // `mode` is only meaningful (and only emitted) where an OCR engine exists.
       deps.audit?.(
         'screen.preprocess.describe',
-        deps.extractScreenText
-          ? { windowId: forWindowId, chars: text.length, mode }
-          : { windowId: forWindowId, chars: text.length }
+        deps.extractScreenText ? { chars: text.length, mode } : { chars: text.length }
       )
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e)
