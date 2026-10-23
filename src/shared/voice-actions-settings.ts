@@ -11,6 +11,7 @@
  */
 import { z } from 'zod'
 import { defineSettingsFeature } from './settings-feature-module'
+import { DEFAULT_CONVERSATION_SETTINGS, ConversationSettingsSchema } from './conversation/conversation-options'
 import { DEFAULT_DICTATION_SETTINGS, DictationSettingsSchema } from './dictation-options'
 import { VOICE_CHORD_TOKENS, type VoiceChordToken } from './voice/chord-tokens'
 
@@ -47,7 +48,9 @@ export const VoiceActionsSettingsSchema = z.object({
   /** How many times the first-use hint has been shown (V05). */
   firstUseHintsShown: z.number().int().min(0).max(1000).default(0),
   /** Dictation (G22): its own switch and chord, a Preview feature like the hold itself. */
-  dictation: DictationSettingsSchema.default(DEFAULT_DICTATION_SETTINGS)
+  dictation: DictationSettingsSchema.default(DEFAULT_DICTATION_SETTINGS),
+  /** Continuous conversation (G28): an explicit, expiring session of voice turns, a Preview feature like the hold. */
+  conversation: ConversationSettingsSchema.default(DEFAULT_CONVERSATION_SETTINGS)
 })
 export type VoiceActionsSettings = z.infer<typeof VoiceActionsSettingsSchema>
 
@@ -57,7 +60,8 @@ export const DEFAULT_VOICE_ACTIONS_SETTINGS: VoiceActionsSettings = {
   doublePressLatch: false,
   wakeWord: false,
   firstUseHintsShown: 0,
-  dictation: DEFAULT_DICTATION_SETTINGS
+  dictation: DEFAULT_DICTATION_SETTINGS,
+  conversation: DEFAULT_CONVERSATION_SETTINGS
 }
 
 export const VOICE_ACTIONS_FEATURE = defineSettingsFeature({
