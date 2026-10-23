@@ -23,7 +23,11 @@ export function createTombstoneGuardedMemoryServerAdapter(server: MemoryServerAd
       const live = recalled.value.filter((record) => !deleted.has(record.sourceId))
       return live.length ? { status: 'found', value: live } : { status: 'no-results' }
     },
-    correct: (scope, memoryId, correction) => server.correct(scope, memoryId, correction),
+    async correct(scope, memoryId, correction) {
+      const corrected = await server.correct(scope, memoryId, correction)
+      // A correction has a direct target, so absence and tombstone denial share one non-enumerating status.
+      return corrected.status === 'no-results' ? { status: 'denied' } : corrected
+    },
     delete: (scope, target) => server.delete(scope, target),
     listTombstones: (scope, sourceId) => server.listTombstones(scope, sourceId)
   }

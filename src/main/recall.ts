@@ -42,7 +42,7 @@ import { UNREADABLE, isMeetingDocumentType, meetingFiles, readMeetings } from '.
 import { isMeetingConfidentialOnDisk, isOwnedMeetingFile } from './meeting-privacy'
 import { editMeetingIndex, removeMeetingFile } from './meeting-files'
 import { getSettings } from './store'
-import { deleteMemoryForLocalMeeting } from './memory-server/meeting-deletion'
+import { deleteMeetingWithMemoryPropagation, propagateMeetingMemoryDeletion } from './memory-server/delete-propagation'
 import { readLegacyTranscript } from './features/meetings/legacy-transcript'
 import { measuredDurationMs } from '@shared/meeting-duration'
 import { readRecapStatus, recapStatusValidationError, type RecapStatus } from '@shared/recap-status'
@@ -316,34 +316,7 @@ export async function deleteMeetingAtPath(settings: Settings, path: string): Pro
 }
 
 function deleteMeetingInFolder(folder: string, safeName: string): Promise<{ ok: boolean; error?: string }> {
-  return withMeetingMutation(join(folder, safeName), () => deleteMeetingUnlocked(folder, safeName))
-}
-
-async function deleteMeetingUnlocked(folder: string, safeName: string): Promise<{ ok: boolean; error?: string }> {
-  try {
-    await removeMeetingFile(folder, safeName)
-  } catch (err) {
-    const code = (err as NodeJS.ErrnoException).code
-    if (code === 'ENOENT') return { ok: false, error: 'Meeting file not found.' }
-    return { ok: false, error: 'Could not delete meeting file.' }
-  }
-  // G59: main's configured server adapter receives the source tombstone only after the local delete succeeds.
-  // With D-17 unprovisioned the adapter reports unavailable and the local history deletion remains usable.
-  await deleteMemoryForLocalMeeting(safeName)
-  // Remove the matching row from index.md (best-effort — a missing / unreadable index is not fatal).
-  try {
-    // Each row ends with `| [open](safeName) |` — match the exact filename in the link cell.
-    const escaped = safeName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-    await editMeetingIndex(folder, (raw) =>
-      raw
-        .split('\n')
-        .filter((line) => !new RegExp(`\\(${escaped}\\)`).test(line))
-        .join('\n')
-    )
-  } catch {
-    /* index update is best-effort; never fail the delete because of it */
-  }
-  return { ok: true }
+  return withMeetingMutation(join(folder, safeName), () => deleteMeetingWithMemoryPropagation(folder, safeName))
 }
 
 // Sanitize a user-typed title for safe storage in YAML frontmatter and a markdown H1: strip
@@ -784,8 +757,7 @@ export async function deleteAllMeetings(): Promise<{
     try {
       await removeMeetingFile(folder, file)
       deleted++
-      // Keep whole-account deletion on the same per-source tombstone path as one-at-a-time deletion.
-      await deleteMemoryForLocalMeeting(file)
+      await propagateMeetingMemoryDeletion(file)
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code !== 'ENOENT') failed.push(file)
     }
