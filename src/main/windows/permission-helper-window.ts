@@ -5,6 +5,7 @@
  * taskbar, and it loads only its own bundled page with a minimal preload (src/preload/permission-helper.ts).
  */
 import { BrowserWindow } from 'electron'
+import { windowPolicy } from '@shared/window-layering'
 import { devToolsEnabled } from '../dev-env'
 
 export interface PermissionHelperWindowOptions {
@@ -42,7 +43,8 @@ export function createPermissionHelperWindow(opts: PermissionHelperWindowOptions
     }
   })
   // Above System Settings / Settings (a normal window), below system alerts.
-  win.setAlwaysOnTop(true, 'floating')
+  const level = windowPolicy('permission-helper').alwaysOnTop // layering matrix (R038)
+  if (level) win.setAlwaysOnTop(true, level)
   win.setContentProtection(opts.contentProtection)
   win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
   win.webContents.on('will-navigate', (event) => event.preventDefault())
