@@ -1,7 +1,12 @@
 import { mkdir, readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { IpcMain } from 'electron'
-import { createAssistantService, createAssistantStore, type AssistantService, type CustomMode } from '../features/assistants'
+import {
+  createAssistantService,
+  createAssistantStore,
+  type AssistantService,
+  type CustomMode
+} from '../features/assistants'
 import type { AssistantAuditPhase } from '../features/assistants'
 import { atomicSavedWrite } from '../infra/storage/atomic-saved-write'
 import { registerAssistantsIpc } from '../ipc/assistants-ipc'

@@ -33,7 +33,10 @@ describe('assistant service: propose, confirm, create (G48)', () => {
     if (!proposal.ok) return
     expect(proposal.expiresAt).toBe(h.clock.now + ASSISTANT_PROPOSAL_TTL_MS)
     const confirmed = await service.confirm({ proposalId: proposal.proposalId, previewHash: proposal.previewHash })
-    expect(confirmed).toMatchObject({ ok: true, assistants: [{ created: true, assistant: { name: 'Sales Coach', revision: 1 } }] })
+    expect(confirmed).toMatchObject({
+      ok: true,
+      assistants: [{ created: true, assistant: { name: 'Sales Coach', revision: 1 } }]
+    })
     expect(await userAssistants(service)).toHaveLength(1)
   })
 
@@ -181,8 +184,14 @@ describe('assistant service: isolation (G48, CAP-26)', () => {
     const { confirmed } = await createOne(service)
     const id = confirmed.assistants[0]!.assistant.assistantId
     h.current.scope = scopeOf(KEY_B, TENANT_1)
-    expect(await service.update({ assistantId: id, expectedRevision: 1, name: 'Hijack' })).toEqual({ ok: false, reason: 'not-found' })
-    expect(await service.archive({ assistantId: id, expectedRevision: 1, archived: true })).toEqual({ ok: false, reason: 'not-found' })
+    expect(await service.update({ assistantId: id, expectedRevision: 1, name: 'Hijack' })).toEqual({
+      ok: false,
+      reason: 'not-found'
+    })
+    expect(await service.archive({ assistantId: id, expectedRevision: 1, archived: true })).toEqual({
+      ok: false,
+      reason: 'not-found'
+    })
     expect(await service.update({ assistantId: `a_${'0'.repeat(32)}`, expectedRevision: 1, name: 'x' })).toEqual({
       ok: false,
       reason: 'not-found'
@@ -266,7 +275,10 @@ describe('assistant service: update and archive (G48)', () => {
       ok: true,
       assistant: { archived: true, revision: 2 }
     })
-    expect(await service.update({ assistantId: id, expectedRevision: 2, name: 'No' })).toEqual({ ok: false, reason: 'archived' })
+    expect(await service.update({ assistantId: id, expectedRevision: 2, name: 'No' })).toEqual({
+      ok: false,
+      reason: 'archived'
+    })
     expect(await service.archive({ assistantId: id, expectedRevision: 2, archived: false })).toMatchObject({
       ok: true,
       assistant: { archived: false, revision: 3 }
@@ -280,13 +292,19 @@ describe('assistant service: update and archive (G48)', () => {
     await service.update({ assistantId: id, expectedRevision: 1, name: 'Renamed' })
     await service.archive({ assistantId: id, expectedRevision: 2, archived: true })
     const replay = await service.confirm({ proposalId: proposal.proposalId, previewHash: proposal.previewHash })
-    expect(replay).toMatchObject({ ok: true, assistants: [{ created: false, assistant: { name: 'Renamed', archived: true } }] })
+    expect(replay).toMatchObject({
+      ok: true,
+      assistants: [{ created: false, assistant: { name: 'Renamed', archived: true } }]
+    })
     expect(await userAssistants(service)).toHaveLength(1)
   })
 
   it('system assistants are read-only', async () => {
     const service = harness().newService()
-    expect(await service.update({ assistantId: 'sys-sales', expectedRevision: 1, name: 'x' })).toEqual({ ok: false, reason: 'read-only' })
+    expect(await service.update({ assistantId: 'sys-sales', expectedRevision: 1, name: 'x' })).toEqual({
+      ok: false,
+      reason: 'read-only'
+    })
     expect(await service.archive({ assistantId: 'sys-sales', expectedRevision: 1, archived: true })).toEqual({
       ok: false,
       reason: 'read-only'

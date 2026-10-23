@@ -65,7 +65,8 @@ interface Proposal {
 type Created = Array<{ assistant: AssistantView; created: boolean }>
 const MAX_PENDING_PROPOSALS = 16
 const scopeKeyOf = (scope: AssistantScope): string => `${scope.partitionId}\0${scope.tenantKey}\0${scope.ownerKey}`
-const sameScope = (a: AssistantScope, b: AssistantScope | null): boolean => b !== null && scopeKeyOf(a) === scopeKeyOf(b)
+const sameScope = (a: AssistantScope, b: AssistantScope | null): boolean =>
+  b !== null && scopeKeyOf(a) === scopeKeyOf(b)
 const isSystemId = (id: string): boolean => id.startsWith('sys-')
 
 export function createAssistantService(deps: AssistantServiceDeps): AssistantService {
@@ -180,16 +181,21 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
     async update(input) {
       const parsed = UpdateRequestSchema.safeParse(input)
       if (!parsed.success) return refused('invalid')
-      return change(parsed.data.assistantId, parsed.data.expectedRevision, (entity) => {
-        const next = normalizeDraft({
-          name: parsed.data.name ?? entity.name,
-          base: parsed.data.base ?? entity.base,
-          instructions: parsed.data.instructions ?? entity.instructions
-        })
-        return validPreviewItem(next)
-          ? { ...entity, name: next.name, base: next.base, instructions: next.instructions }
-          : 'invalid'
-      }, 'updated')
+      return change(
+        parsed.data.assistantId,
+        parsed.data.expectedRevision,
+        (entity) => {
+          const next = normalizeDraft({
+            name: parsed.data.name ?? entity.name,
+            base: parsed.data.base ?? entity.base,
+            instructions: parsed.data.instructions ?? entity.instructions
+          })
+          return validPreviewItem(next)
+            ? { ...entity, name: next.name, base: next.base, instructions: next.instructions }
+            : 'invalid'
+        },
+        'updated'
+      )
     },
 
     async archive(input) {
@@ -198,7 +204,8 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
       return change(
         parsed.data.assistantId,
         parsed.data.expectedRevision,
-        (entity) => (entity.archived === parsed.data.archived ? 'unchanged' : { ...entity, archived: parsed.data.archived }),
+        (entity) =>
+          entity.archived === parsed.data.archived ? 'unchanged' : { ...entity, archived: parsed.data.archived },
         'archived',
         true
       )
@@ -217,7 +224,10 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
       const custom = deps.customModes()
       const mapping = mapMeetingsToAssistants(meetings, custom)
       // The invariant the migration stands on: every meeting keeps its own id, in order, none added or lost.
-      if (mapping.length !== meetings.length || mapping.some((entry, index) => entry.meetingId !== meetings[index]!.file)) {
+      if (
+        mapping.length !== meetings.length ||
+        mapping.some((entry, index) => entry.meetingId !== meetings[index]!.file)
+      ) {
         return { ok: false, reason: 'unavailable' }
       }
       const now = deps.now()
@@ -258,12 +268,17 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
       const entity = view.own[index]
       if (!entity) return { commit: false, value: { ok: false, reason: 'not-found' } as MutationResult }
       if (entity.revision !== expectedRevision) {
-        return { commit: false, value: { ok: false, reason: 'stale-revision', current: viewOf(entity) } as MutationResult }
+        return {
+          commit: false,
+          value: { ok: false, reason: 'stale-revision', current: viewOf(entity) } as MutationResult
+        }
       }
-      if (entity.archived && !allowWhileArchived) return { commit: false, value: { ok: false, reason: 'archived' } as MutationResult }
+      if (entity.archived && !allowWhileArchived)
+        return { commit: false, value: { ok: false, reason: 'archived' } as MutationResult }
       const next = apply(entity)
       if (next === 'invalid') return { commit: false, value: { ok: false, reason: 'invalid' } as MutationResult }
-      if (next === 'unchanged') return { commit: false, value: { ok: true, assistant: viewOf(entity) } as MutationResult }
+      if (next === 'unchanged')
+        return { commit: false, value: { ok: true, assistant: viewOf(entity) } as MutationResult }
       const saved: AssistantEntity = { ...next, revision: entity.revision + 1, updatedAt: now }
       const own = [...view.own]
       own[index] = saved

@@ -53,7 +53,8 @@ export function createAssistantsPreloadApi(ipc: Pick<IpcRenderer, 'invoke'>): {
     assistants: {
       list: () => call(ListResultSchema, ASSISTANT_IPC.list),
       propose: (drafts) => call(ProposeResultSchema, ASSISTANT_IPC.propose, { drafts }),
-      confirm: (proposalId, previewHash) => call(ConfirmResultSchema, ASSISTANT_IPC.confirm, { proposalId, previewHash }),
+      confirm: (proposalId, previewHash) =>
+        call(ConfirmResultSchema, ASSISTANT_IPC.confirm, { proposalId, previewHash }),
       update: (input) => call(MutationResultSchema, ASSISTANT_IPC.update, input),
       archive: (assistantId, expectedRevision, archived) =>
         call(MutationResultSchema, ASSISTANT_IPC.archive, { assistantId, expectedRevision, archived }),
