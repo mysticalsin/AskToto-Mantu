@@ -409,6 +409,8 @@ export type AuditEvent =
   | 'dictation.memory'
   // G48: the assistant store (proposed, created, replayed, updated, archived, migrated, refused). Phase, enum reason and counts only; never a name, instructions or an id.
   | 'assistant.store'
+  // G57: the user memory (a correction or delete of a remembered preference or project context). Action and outcome only; never text.
+  | 'user.memory'
   // V03: one voice action decision and its outcome (action id, class, source, status; never a title, query or words).
   | 'voice.action'
   // G44: one walkthrough event (started, planned, advanced, paused, completed, abandoned; step number and enum reason only, never the goal, an instruction or screen text).

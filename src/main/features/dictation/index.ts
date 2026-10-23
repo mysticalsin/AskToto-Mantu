@@ -22,4 +22,4 @@ export {
   type DictationMemorySink
 } from './dictation-memory'
 export { currentDictationMemory, installDictationMemory } from './dictation-memory-registry'
-export type { DictationKeyCustody } from './dictation-memory-crypto'
+export { createMemoryKeyring, type DictationKeyCustody, type MemoryKeyring } from './dictation-memory-crypto'

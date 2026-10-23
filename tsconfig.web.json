@@ -15,6 +15,6 @@
     "baseUrl": ".",
     "paths": { "@/*": ["src/renderer/src/*"], "@shared/*": ["src/shared/*"] }
   },
-  "include": ["src/renderer/src/**/*", "src/shared/**/*", "src/preload/index.d.ts", "src/preload/speech-pack.ts", "src/preload/cloud-speech.ts", "src/preload/transcript-revision.ts", "src/preload/metrics.ts", "src/preload/voice-actions.ts", "src/preload/command-confirm.ts", "src/preload/task-cards.ts", "src/preload/dictation-memory.ts", "src/preload/feature-apis.ts", "src/preload/session-context.ts", "src/preload/context-grants.ts", "src/preload/screen-marks.ts", "src/preload/task-browser.ts", "src/preload/export-reveal.ts", "src/preload/walkthrough.ts", "src/preload/spoken-replies.ts", "src/preload/artifacts.ts", "src/preload/assistants.ts"],
+  "include": ["src/renderer/src/**/*", "src/shared/**/*", "src/preload/index.d.ts", "src/preload/speech-pack.ts", "src/preload/cloud-speech.ts", "src/preload/transcript-revision.ts", "src/preload/metrics.ts", "src/preload/voice-actions.ts", "src/preload/command-confirm.ts", "src/preload/task-cards.ts", "src/preload/dictation-memory.ts", "src/preload/feature-apis.ts", "src/preload/session-context.ts", "src/preload/context-grants.ts", "src/preload/screen-marks.ts", "src/preload/task-browser.ts", "src/preload/export-reveal.ts", "src/preload/walkthrough.ts", "src/preload/spoken-replies.ts", "src/preload/artifacts.ts", "src/preload/assistants.ts", "src/preload/user-memory.ts"],
   "exclude": ["**/*.test.ts", "**/*.spec.ts", "**/*.test.tsx", "**/*.spec.tsx"]
 }

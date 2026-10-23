@@ -3,6 +3,7 @@ import type { SnapshotKind } from '@shared/context-manifest'
 import { createDocumentGrants, type DocumentGrants } from './document-grants'
 import { registerContextIpc } from '../../ipc/context-grants-ipc'
 import { createManifestLog, type ManifestLog } from './manifest'
+import { currentUserMemory } from '../user-memory'
 import { createContextRuntime, type ContextRuntime } from './runtime'
 import { createSnapshotFileIo } from './snapshot-io'
 import { createSnapshotStore, type ObservedContent, type SnapshotStore } from './snapshot-store'
@@ -56,7 +57,13 @@ export function createContextGrants(deps: ContextGrantsDeps): ContextGrants {
     now
   })
   const manifests = createManifestLog({ owner: deps.owner, now })
-  const runtime = createContextRuntime({ store, grants, manifests })
+  const runtime = createContextRuntime({
+    store,
+    grants,
+    manifests,
+    userMemory: currentUserMemory,
+    conversation: deps.sessionId
+  })
   const revokeAll = async (reason: string): Promise<void> => {
     grants.revokeAll(reason)
     manifests.clear()

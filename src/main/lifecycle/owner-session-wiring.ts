@@ -21,6 +21,7 @@ import type { SpeechDesktopHooks } from '../speech-desktop-boundary'
 import type { RendererResetSource } from '../features/meetings/session-closure'
 import { bootstrapAssistants } from './assistants-wiring'
 import { bootstrapDictationMemory } from './dictation-memory-wiring'
+import { bootstrapUserMemory } from './user-memory-wiring'
 import { bootstrapLiveMeetingJournal } from './live-meeting-journal-wiring'
 import { bindMeetingSpeechInvalidation, bootstrapMeetingSpeech } from './meeting-speech-persistence-wiring'
 import { bootMainMemoryPartitions } from './memory-partition-wiring'
@@ -154,6 +155,14 @@ export function createOwnerSessionWiring(deps: OwnerSessionWiringDeps): OwnerSes
     customModes: () => getPublishedSettingsObservation()?.settings.customModes ?? [],
     meetings: async () => (await listMeetings()).map((row) => ({ file: row.file, mode: row.mode })),
     audit: (record) => auditLog('assistant.store', { ...record })
+  })
+  // G57 user memory: durable preferences and expiring project context, owner-scoped and sealed.
+  bootstrapUserMemory({
+    ipcMain,
+    authorizeSender,
+    requireAuth: () => requireAuth(),
+    userDataPath: () => app.getPath('userData'),
+    audit: (record) => auditLog('user.memory', { ...record })
   })
   return {
     ownerSession,

@@ -15,6 +15,7 @@ import { createWalkthroughPreloadApi } from './walkthrough'
 import { createSpokenRepliesPreloadApi } from './spoken-replies'
 import { createArtifactsPreloadApi } from './artifacts'
 import { createAssistantsPreloadApi } from './assistants'
+import { createUserMemoryPreloadApi } from './user-memory'
 
 /** The preload bridges that are one self-contained feature each, composed here so index.ts stays under its size cap. */
 export function createFeaturePreloadApis(ipc: IpcRenderer) {
@@ -34,6 +35,7 @@ export function createFeaturePreloadApis(ipc: IpcRenderer) {
     ...createWalkthroughPreloadApi(ipc),
     ...createSpokenRepliesPreloadApi(ipc),
     ...createArtifactsPreloadApi(ipc),
-    ...createAssistantsPreloadApi(ipc)
+    ...createAssistantsPreloadApi(ipc),
+    ...createUserMemoryPreloadApi(ipc)
   }
 }

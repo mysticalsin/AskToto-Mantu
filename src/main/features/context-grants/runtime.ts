@@ -1,8 +1,9 @@
-import { contextRecord, quoteAsData, type ContextOrigin } from '@shared/context-authority'
+import { contextRecord, ownerCommand, quoteAsData, type ContextOrigin } from '@shared/context-authority'
 import type { ContextManifestEntry } from '@shared/context-manifest'
 import type { DocumentGrants } from './document-grants'
 import { utf8Bytes, type ManifestLog } from './manifest'
 import type { SnapshotStore } from './snapshot-store'
+import type { UserMemory } from '../user-memory'
 
 /** The parts of an ask the manifest and the granted context care about. `prompt` is rewritten in place. */
 export interface TurnInput {
@@ -28,6 +29,10 @@ export interface ContextRuntimeDeps {
   store: SnapshotStore
   grants: DocumentGrants
   manifests: ManifestLog
+  /** G57: the owner's remembered preferences and project context, resolved on every turn (it is built after this). */
+  userMemory?(): UserMemory | null
+  /** The live conversation or meeting id, for the provenance of project context; 'idle' or empty means none. */
+  conversation?(): string
 }
 
 export interface ContextRuntime {
@@ -54,6 +59,7 @@ export function createContextRuntime(deps: ContextRuntimeDeps): ContextRuntime {
       const entries: ContextManifestEntry[] = []
       const blocks: string[] = []
       const questionBytes = utf8Bytes(input.prompt)
+      let memoryPrefix = ''
 
       if (input.brainContext) {
         entries.push({
@@ -72,6 +78,21 @@ export function createContextRuntime(deps: ContextRuntimeDeps): ContextRuntime {
           bytes: utf8Bytes(input.screenContext),
           via: 'ambient'
         })
+      }
+
+      const memory = GRANTED_MODES.has(input.mode) ? deps.userMemory?.() : null
+      if (memory) {
+        const conversation = deps.conversation?.()
+        // The owner's own turn may state a preference; what is remembered then joins this very turn as quoted data.
+        await memory.observeTurn(ownerCommand(extras.inputOrigin ?? 'user-typed', input.prompt), {
+          turnId: input.id,
+          conversation: conversation && conversation !== 'idle' ? `conversation ${conversation}`.slice(0, 80) : null
+        })
+        const carried = await memory.promptBlocks()
+        if (carried) {
+          memoryPrefix = carried.text
+          entries.push(...carried.entries)
+        }
       }
 
       if (GRANTED_MODES.has(input.mode)) {
@@ -103,6 +124,7 @@ export function createContextRuntime(deps: ContextRuntimeDeps): ContextRuntime {
         }
         if (blocks.length) input.prompt = `${HEADER}${blocks.join('\n')}\n\n${input.prompt}`
       }
+      if (memoryPrefix) input.prompt = `${memoryPrefix}${input.prompt}`
 
       entries.push(...collected)
       entries.push({
