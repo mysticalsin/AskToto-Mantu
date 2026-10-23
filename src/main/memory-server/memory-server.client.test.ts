@@ -46,4 +46,18 @@ describe('production memory server client', () => {
     )
     expect(fetcher).not.toHaveBeenCalled()
   })
+
+  it('does not reveal whether a correction target is absent or tombstoned', async () => {
+    const fetcher = vi.fn(async () => new Response(JSON.stringify({ status: 'no-results' }), { status: 200 }))
+    const adapter = createProductionMemoryServerAdapter({
+      endpoint: 'https://memory.example.test/v1',
+      verifiedScope: () => owner,
+      bearerToken: async () => 'synthetic-token',
+      fetch: fetcher as unknown as typeof fetch
+    })
+
+    await expect(
+      adapter.correct(owner, 'synthetic-id', { expectedRevision: 1, text: 'synthetic correction' })
+    ).resolves.toEqual({ status: 'denied' })
+  })
 })

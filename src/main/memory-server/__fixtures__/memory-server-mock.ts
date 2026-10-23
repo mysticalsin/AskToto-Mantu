@@ -51,7 +51,7 @@ export function createMemoryServerMock(currentScope: () => MemoryScope | null) {
       if (!authorized(requestScope)) return { status: 'denied' }
       const owner = scopeKey(requestScope)
       const held = records.get(memoryId)
-      if (!held || held.scopeKey !== owner) return { status: 'no-results' }
+      if (!held || held.scopeKey !== owner) return { status: 'denied' }
       if (
         [...tombstones.values()].some(
           (entry) => entry.scopeKey === owner && entry.tombstone.sourceId === held.record.sourceId

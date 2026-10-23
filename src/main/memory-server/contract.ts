@@ -51,6 +51,7 @@ export interface MemoryServerAdapter {
   /** Implementations must enforce both scope keys and make tombstones authoritative against retain/recall races. */
   retain(scope: MemoryScope, input: MemoryServerRetain): Promise<MemoryServerResult<MemoryServerRecord>>
   recall(scope: MemoryScope, query: string): Promise<MemoryServerResult<MemoryServerRecord[]>>
+  /** Missing, out-of-scope, and tombstoned IDs return denied to avoid exposing whether an ID exists. */
   correct(
     scope: MemoryScope,
     memoryId: string,
