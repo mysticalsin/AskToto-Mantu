@@ -274,6 +274,46 @@ describe('TaskScheduler (G32)', () => {
     expect(scheduler.snapshot()).toEqual({ running: 0, queued: 0 })
   })
 
+  it('cancel(key) rejects one queued job as stopped and leaves the others', async () => {
+    const scheduler = new TaskScheduler(LIMITS)
+    const events: string[] = []
+    const a = gate()
+    const b = gate()
+    const c = gate()
+    void scheduler.submit(job('a', 'o1', ['x'], events, a))
+    const queued = scheduler.submit(job('b', 'o1', ['x'], events, b))
+    const other = scheduler.submit(job('c', 'o1', ['y'], events, c))
+    await flush()
+
+    expect(scheduler.cancel('b')).toBe(true)
+    await expect(queued).resolves.toEqual({ status: 'rejected', reason: 'stopped' })
+    expect(scheduler.snapshot()).toEqual({ running: 1, queued: 1 })
+    a.open()
+    await flush()
+    c.open()
+    await expect(other).resolves.toEqual({ status: 'ran', value: 'c' })
+    expect(events).not.toContain('start:b')
+  })
+
+  it('cancel(key) aborts only that running job and reports whether it found the key', async () => {
+    const scheduler = new TaskScheduler({ ...LIMITS, maxEffectPerOwner: 2 })
+    const events: string[] = []
+    const a = gate()
+    const b = gate()
+    const first = scheduler.submit(job('a', 'o1', ['x'], events, a))
+    const second = scheduler.submit(job('b', 'o1', ['y'], events, b))
+    await flush()
+
+    expect(scheduler.cancel('a')).toBe(true)
+    expect(scheduler.cancel('missing')).toBe(false)
+    a.open()
+    b.open()
+    await expect(first).resolves.toEqual({ status: 'ran', value: 'a' })
+    await expect(second).resolves.toEqual({ status: 'ran', value: 'b' })
+    expect(events).toContain('end:a:aborted')
+    expect(events).toContain('end:b')
+  })
+
   it('rejects limits that are not positive integers', () => {
     expect(() => new TaskScheduler({ ...LIMITS, maxEffectPerOwner: 0 })).toThrow(TypeError)
     expect(() => new TaskScheduler({ ...LIMITS, maxQueueWaitMs: Number.NaN })).toThrow(TypeError)

@@ -146,6 +146,23 @@ export class TaskScheduler {
     return { queued, running }
   }
 
+  /** Stops one job by key: a queued job is rejected as stopped, a running one is aborted. False when no live job has it. */
+  cancel(key: string): boolean {
+    const waiting = this.queue.find((queued) => queued.job.key === key)
+    if (waiting) {
+      this.removeQueued(waiting)
+      waiting.resolve({ status: 'rejected', reason: 'stopped' })
+      this.drain()
+      return true
+    }
+    for (const active of this.running) {
+      if (active.job.key !== key) continue
+      if (!active.controller.signal.aborted) active.controller.abort('stopped')
+      return true
+    }
+    return false
+  }
+
   private hasKey(key: string): boolean {
     return this.queue.some((queued) => queued.job.key === key) || [...this.running].some((r) => r.job.key === key)
   }

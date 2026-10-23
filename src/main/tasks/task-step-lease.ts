@@ -76,6 +76,18 @@ export class TaskStepLeases {
     return this.entries.has(lease.attemptId) ? { ok: true } : { ok: false, reason: 'lease_stale' }
   }
 
+  /** Aborts the live lease of one task (Stop on its card). Returns whether one was open. */
+  abortTask(taskId: string, reason: StepLeaseAbortReason = 'revoked'): boolean {
+    let found = false
+    for (const [attemptId, { lease, controller }] of [...this.entries]) {
+      if (lease.taskId !== taskId) continue
+      this.entries.delete(attemptId)
+      controller.abort(reason)
+      found = true
+    }
+    return found
+  }
+
   abortAll(reason: StepLeaseAbortReason = 'revoked'): void {
     for (const { controller } of this.entries.values()) controller.abort(reason)
     this.entries.clear()

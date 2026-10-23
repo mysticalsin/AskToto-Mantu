@@ -1,6 +1,13 @@
 import { randomBytes } from 'node:crypto'
 import { recoveredUncertainCopy } from '@shared/command-copy'
 import type { DesktopActionRequest, DesktopActionResult } from '@shared/desktop-actions'
+import {
+  TASK_CARD_DONE_LINGER_MS,
+  TASK_CARD_LIMIT,
+  TASK_CARD_NOT_DONE_LINGER_MS,
+  type TaskCardPhase,
+  type TaskCardView
+} from '@shared/task-card'
 import type { MetisCommandRecoveryNotice } from '@shared/metis-command-contract'
 import { checkGestureTarget, type GestureBinding, type GestureTarget } from '@shared/gesture-binding'
 import { recipientFieldsIn, recipientsMatchResolution, type ResolvedRecipient } from '@shared/recipient-resolution'
@@ -30,7 +37,7 @@ import {
   type TaskProgressRecord,
   type TaskProgressState
 } from './task-progress'
-import { TaskScheduler, type SchedulerJob, type SchedulerLimits } from './task-scheduler'
+import { TaskScheduler, type SchedulerJob, type SchedulerLimits, type SchedulerResult } from './task-scheduler'
 import { TaskSteeringInbox, type PendingSteer } from './task-steering'
 import { TaskStepLeases, type StepLease } from './task-step-lease'
 import {
@@ -156,7 +163,25 @@ export interface DesktopActionTaskBridgeDeps {
   log?: { warn(message: string, ...args: unknown[]): void; error(message: string, ...args: unknown[]): void }
   now?: () => number
   newId?: () => string
+  /** Opaque card ids for the renderer (32 hex). Never derived from a task id; defaults to 16 random bytes. */
+  newCardId?: () => string
 }
+
+/** One card per scheduled desktop task. Lives in main only; the renderer gets TaskCardView. */
+interface CardRecord {
+  readonly cardId: string
+  /** The proposal id: also the scheduler key and the suffix of the task id. Never leaves main. */
+  readonly key: string
+  readonly owner: string
+  readonly actionId: string
+  phase: TaskCardPhase
+  reason?: 'stopped_before_start' | 'refused'
+  finishedAt?: number
+}
+
+const LIVE_PHASES: readonly TaskCardPhase[] = ['queued', 'running', 'stopping']
+/** Finished records kept in main beyond what is shown; the oldest go first. */
+const CARD_RECORD_CAP = TASK_CARD_LIMIT * 2
 
 export interface DesktopActionTaskRecovery {
   /** False while the archive cannot be read: dispatch stays closed rather than forgetting uncertain effects. */
@@ -256,6 +281,10 @@ export class DesktopActionTaskBridge {
   private readonly leases = new TaskStepLeases()
   private readonly steering = new TaskSteeringInbox()
   private stopGeneration = 0
+  private readonly cardRecords = new Map<string, CardRecord>()
+  private readonly cardsByKey = new Map<string, CardRecord>()
+  private readonly cardListeners = new Set<() => void>()
+  private readonly newCardId: () => string
   private readonly now: () => number
   private readonly newId: () => string
 
@@ -271,6 +300,7 @@ export class DesktopActionTaskBridge {
   constructor(private readonly deps: DesktopActionTaskBridgeDeps) {
     this.now = deps.now ?? Date.now
     this.newId = deps.newId ?? (() => randomBytes(16).toString('hex'))
+    this.newCardId = deps.newCardId ?? (() => randomBytes(16).toString('hex'))
     // Bound in the constructor, not as arrow class properties: the main bundle's bytecode step cannot
     // compile arrow functions inside class property initializers.
     this.scheduler = deps.scheduler ?? new TaskScheduler(DESKTOP_ACTION_SCHEDULER_LIMITS)
@@ -341,27 +371,176 @@ export class DesktopActionTaskBridge {
     context: CommandExecutionContext
   ): Promise<DesktopActionResult> {
     const bound = this.deps.gesture?.bindingFor(context.owner.webContentsId) ?? null
+    const owner = `webContents:${context.owner.webContentsId}`
     const job: SchedulerJob<DesktopActionResult> = {
       key: context.proposalId,
-      owner: `webContents:${context.owner.webContentsId}`,
+      owner,
       effect: 'effect',
       resources: desktopActionResources(request),
       run: (signal) => this.run(request, context, signal, bound)
     }
-    const queued = await this.scheduler.submit(job)
+    const card = this.openCard(context.proposalId, owner, request.id)
+    let queued: SchedulerResult<DesktopActionResult>
+    try {
+      queued = await this.scheduler.submit(job)
+    } catch (error) {
+      // The job ran and threw out of the bridge: run() settles every dispatch, so this is a defect, not an effect.
+      if (card) this.finishCard(card, 'uncertain')
+      throw error
+    }
     if (queued.status === 'ran') return queued.value
     // Never dispatched: a clean refusal, not an unknown effect.
+    if (card) {
+      if (queued.reason === 'invalid_job') this.dropCard(card)
+      else this.finishCard(card, 'not_done', queued.reason === 'stopped' ? 'stopped_before_start' : 'refused')
+    }
     this.deps.audit?.('task.dispatch_denied', { actionId: request.id, reason: `queue_${queued.reason}` })
     return queued.reason === 'stopped'
       ? { id: request.id, ok: false, outcome: 'cancelled', detail: 'stopped' }
       : failedResult(request.id, `task_denied:queue_${queued.reason}`)
   }
 
+  /**
+   * The cards the owner window may show, oldest first. A card id from another owner is simply absent. Views carry
+   * the action id and phase only: never a task id, grant, args hash, owner or argument.
+   */
+  cards(owner: string): TaskCardView[] {
+    const now = this.now()
+    const views: TaskCardView[] = []
+    for (const record of this.cardRecords.values()) {
+      if (record.owner !== owner || this.cardExpired(record, now)) continue
+      views.push({
+        cardId: record.cardId,
+        actionId: record.actionId,
+        phase: record.phase,
+        ...(record.reason ? { reason: record.reason } : {}),
+        stoppable: record.phase === 'queued' || record.phase === 'running',
+        dismissible: record.phase === 'not_done' || record.phase === 'uncertain'
+      })
+    }
+    return views.slice(-TASK_CARD_LIMIT)
+  }
+
+  onCardsChanged(listener: () => void): () => void {
+    this.cardListeners.add(listener)
+    return () => {
+      this.cardListeners.delete(listener)
+    }
+  }
+
+  /** Stop one card: cancels a queued task outright, or aborts the running step. Uncertain stays uncertain. */
+  stopCard(owner: string, cardId: string): boolean {
+    const record = this.cardFor(owner, cardId)
+    if (!record || (record.phase !== 'queued' && record.phase !== 'running')) return false
+    if (record.phase === 'running') {
+      record.phase = 'stopping'
+      this.leases.abortTask(taskIdFor(record.key), 'revoked')
+    }
+    this.scheduler.cancel(record.key)
+    this.deps.audit?.('task.stopped', { actionId: record.actionId, queued: '0', running: '1', steers: '0' })
+    this.emitCards()
+    return true
+  }
+
+  /** Dismiss a card that needs no more decisions (not done, or uncertain and acknowledged). */
+  dismissCard(owner: string, cardId: string): boolean {
+    const record = this.cardFor(owner, cardId)
+    if (!record || (record.phase !== 'not_done' && record.phase !== 'uncertain')) return false
+    this.dropCard(record)
+    return true
+  }
+
+  private cardFor(owner: string, cardId: string): CardRecord | undefined {
+    const record = this.cardRecords.get(cardId)
+    if (!record || record.owner !== owner || this.cardExpired(record, this.now())) return undefined
+    return record
+  }
+
+  private cardExpired(record: CardRecord, now: number): boolean {
+    if (record.finishedAt === undefined) return false
+    if (record.phase === 'done') return now - record.finishedAt >= TASK_CARD_DONE_LINGER_MS
+    if (record.phase === 'not_done') return now - record.finishedAt >= TASK_CARD_NOT_DONE_LINGER_MS
+    return false
+  }
+
+  /** A card for a newly submitted job. Returns undefined when the key already has a live card (a duplicate submit). */
+  private openCard(key: string, owner: string, actionId: string): CardRecord | undefined {
+    const existing = this.cardsByKey.get(key)
+    if (existing && LIVE_PHASES.includes(existing.phase)) return undefined
+    if (existing) this.dropCard(existing, false)
+    const record: CardRecord = { cardId: this.newCardId(), key, owner, actionId, phase: 'queued' }
+    this.cardRecords.set(record.cardId, record)
+    this.cardsByKey.set(key, record)
+    this.trimCards()
+    this.emitCards()
+    return record
+  }
+
+  private cardForKey(key: string): CardRecord | undefined {
+    return this.cardsByKey.get(key)
+  }
+
+  private setCardPhase(record: CardRecord, phase: TaskCardPhase): void {
+    if (record.phase === phase) return
+    record.phase = phase
+    this.emitCards()
+  }
+
+  private finishCard(
+    record: CardRecord,
+    phase: 'done' | 'not_done' | 'uncertain',
+    reason?: CardRecord['reason']
+  ): void {
+    record.phase = phase
+    if (reason) record.reason = reason
+    else delete record.reason
+    record.finishedAt = this.now()
+    const linger =
+      phase === 'done' ? TASK_CARD_DONE_LINGER_MS : phase === 'not_done' ? TASK_CARD_NOT_DONE_LINGER_MS : undefined
+    if (linger !== undefined) {
+      // Pushes the shrunken list once the linger passes. cards() filters by the injected clock either way.
+      const timer = setTimeout(() => {
+        if (this.cardRecords.get(record.cardId) === record && this.cardExpired(record, this.now())) {
+          this.dropCard(record)
+        }
+      }, linger + 1)
+      timer.unref?.()
+    }
+    this.emitCards()
+  }
+
+  private dropCard(record: CardRecord, emit = true): void {
+    this.cardRecords.delete(record.cardId)
+    if (this.cardsByKey.get(record.key) === record) this.cardsByKey.delete(record.key)
+    if (emit) this.emitCards()
+  }
+
+  /** Bounded memory: past the cap the oldest finished records go first. */
+  private trimCards(): void {
+    if (this.cardRecords.size <= CARD_RECORD_CAP) return
+    for (const record of [...this.cardRecords.values()]) {
+      if (this.cardRecords.size <= CARD_RECORD_CAP) break
+      if (record.finishedAt !== undefined) this.dropCard(record, false)
+    }
+  }
+
+  private emitCards(): void {
+    for (const listener of [...this.cardListeners]) {
+      try {
+        listener()
+      } catch (error) {
+        this.deps.log?.warn('[desktop-action-task] a task card listener threw:', error)
+      }
+    }
+  }
+
   /** Stop. Running steps finish settling on their own: an abort cannot prove the effect did not happen. */
   private stopAll(): void {
     this.stopGeneration += 1
+    for (const record of this.cardRecords.values()) if (record.phase === 'running') record.phase = 'stopping'
     const summary = this.scheduler.stop()
     this.leases.abortAll('revoked')
+    this.emitCards()
     const droppedSteers = this.steering.dropAll()
     if (summary.queued + summary.running + droppedSteers.length > 0) {
       this.deps.audit?.('task.stopped', {
@@ -405,22 +584,27 @@ export class DesktopActionTaskBridge {
     bound: GestureBinding | null
   ): Promise<DesktopActionResult> {
     const generation = this.stopGeneration
+    const card = this.cardForKey(context.proposalId)
     const refusal = this.gestureRefusal(request, context, bound)
     if (refusal) {
       // Nothing was created or dispatched: a clean refusal that never retargets.
       this.deps.audit?.('task.dispatch_denied', { actionId: request.id, reason: refusal })
+      if (card) this.finishCard(card, 'not_done', 'refused')
       return failedResult(request.id, `task_denied:${refusal}`)
     }
+    if (card && card.phase === 'queued') this.setCardPhase(card, 'running')
     let begun: Begun
     try {
       begun = await this.begin(request, context)
     } catch (error) {
       // Nothing was dispatched: the adapter has not been called, so this is a clean failure.
       this.deps.log?.error('[desktop-action-task] could not start the task:', error)
+      if (card) this.finishCard(card, 'not_done', 'refused')
       return failedResult(request.id, 'task_bridge_error')
     }
     if (!begun.ok) {
       this.deps.audit?.('task.dispatch_denied', { actionId: request.id, reason: begun.reason })
+      if (card) this.finishCard(card, 'not_done', 'refused')
       return failedResult(request.id, `task_denied:${begun.reason}`)
     }
 
@@ -432,6 +616,7 @@ export class DesktopActionTaskBridge {
         this.progress = forgetTaskProgress(this.progress, begun.taskId)
         await this.persistQuietly()
       })
+      if (card) this.finishCard(card, 'not_done', 'stopped_before_start')
       return { id: request.id, ok: false, outcome: 'cancelled', detail: 'stopped' }
     }
 
@@ -445,6 +630,11 @@ export class DesktopActionTaskBridge {
       outcome = 'uncertain'
     }
     await this.settle(begun, request, outcome)
+    if (card) {
+      if (outcome === 'applied') this.finishCard(card, 'done')
+      else if (outcome === 'not-applied') this.finishCard(card, 'not_done')
+      else this.finishCard(card, 'uncertain')
+    }
 
     if (!result) return unknownResult(request.id, 'dispatch_threw')
     if (outcome === 'uncertain' && result.outcome !== 'unknown') return unknownResult(request.id, 'outcome_unverified')

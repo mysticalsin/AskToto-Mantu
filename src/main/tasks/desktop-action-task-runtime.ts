@@ -15,6 +15,7 @@ import {
   type DesktopActionGestureGate,
   type DesktopActionTaskBridgeDeps
 } from './desktop-action-task-bridge'
+import type { TaskCardRuntime } from '../ipc/task-card-ipc'
 import { createEncryptedTaskFileStore } from './encrypted-task-file-store'
 
 /** Task ids the person has been told about (random hex, no arguments), so boot recovery announces each once. */
@@ -86,6 +87,12 @@ type DesktopActionTaskDeps = Pick<CommandConfirmationDeps, 'execute' | 'recoverT
     takeRecoveryNotices: DesktopActionTaskBridge['takeRecoveryNotices']
   }
 let sharedDeps: DesktopActionTaskDeps | null = null
+let sharedBridge: DesktopActionTaskBridge | null = null
+
+function desktopActionBridge(): DesktopActionTaskBridge {
+  sharedBridge ??= createDesktopActionTaskBridge()
+  return sharedBridge
+}
 
 /**
  * The executor and boot-recovery hook CommandConfirmation needs, backed by ONE production bridge for the process.
@@ -94,7 +101,7 @@ let sharedDeps: DesktopActionTaskDeps | null = null
  */
 export function desktopActionTaskDeps(): DesktopActionTaskDeps {
   if (!sharedDeps) {
-    const bridge = createDesktopActionTaskBridge()
+    const bridge = desktopActionBridge()
     sharedDeps = {
       execute: bridge.execute,
       recoverTasks: bridge.recover,
@@ -103,4 +110,15 @@ export function desktopActionTaskDeps(): DesktopActionTaskDeps {
     }
   }
   return sharedDeps
+}
+
+/** The task cards of the same shared bridge, for the sidecar's IPC (G33). */
+export function desktopActionTaskCards(): TaskCardRuntime {
+  const bridge = desktopActionBridge()
+  return {
+    cards: (owner) => bridge.cards(owner),
+    stopCard: (owner, cardId) => bridge.stopCard(owner, cardId),
+    dismissCard: (owner, cardId) => bridge.dismissCard(owner, cardId),
+    onCardsChanged: (listener) => bridge.onCardsChanged(listener)
+  }
 }
