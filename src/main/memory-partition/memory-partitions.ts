@@ -47,6 +47,8 @@ export interface MemoryPartitionsDeps {
 export interface MemoryPartitions {
   /** Synchronous and cheap. Refuses (with a typed status) rather than answering from a partition that is not the owner's. */
   access(): MemoryAccess
+  /** Main-only verified HMAC pair for server memory. Available only after this identity's partition is active. */
+  verifiedScope(): MemoryScope | null
   /** Resolves the verified owner's partition, recording the one-time adoption of the existing data. Never rejects. */
   activate(): Promise<MemoryAccess>
   onChange(listener: (change: MemoryPartitionChange) => void): () => void
@@ -194,6 +196,15 @@ export function createMemoryPartitions(deps: MemoryPartitionsDeps): MemoryPartit
       if (failedKey === key) return { status: 'unavailable' }
       void activate()
       return { status: 'stale' }
+    },
+    verifiedScope() {
+      try {
+        const identity = deps.source.identity()
+        if (identity.kind !== 'verified' || active?.key !== identityKey(identity)) return null
+        return { ...identity.scope }
+      } catch {
+        return null
+      }
     },
     activate,
     onChange(listener) {

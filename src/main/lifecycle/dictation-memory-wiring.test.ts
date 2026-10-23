@@ -119,6 +119,7 @@ describe('dictation memory wiring (G26)', () => {
     }
     const fake: MemoryPartitions = {
       access: () => access.value,
+      verifiedScope: () => null,
       activate: async () => access.value,
       onChange: () => () => undefined
     }

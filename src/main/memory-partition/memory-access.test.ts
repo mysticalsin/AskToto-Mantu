@@ -8,7 +8,8 @@ import {
   memoryRelRoot,
   reconcileMemoryAccess,
   resetMemoryAccessForTests,
-  resolveMemoryAccess
+  resolveMemoryAccess,
+  verifiedMemoryScope
 } from './memory-access'
 import { createMemoryPartitions, type MemoryIdentity } from './memory-partitions'
 
@@ -54,8 +55,21 @@ describe('memory access', () => {
   it('resolveMemoryAccess waits for a pending activation instead of answering stale', async () => {
     configured(verified('a'))
     expect(memoryAccess()).toEqual({ status: 'stale' })
+    expect(verifiedMemoryScope()).toBeNull()
     expect(await resolveMemoryAccess()).toMatchObject({ status: 'ok', legacy: true })
+    expect(verifiedMemoryScope()).toEqual({ tenantKey: key('1'), ownerKey: key('a') })
     expect(memoryRelRoot()).toBe('.brain')
+  })
+
+  it('only exposes the main-derived pair belonging to the active partition', async () => {
+    const t = configured(verified('a'))
+    await t.partitions.activate()
+    expect(verifiedMemoryScope()).toEqual({ tenantKey: key('1'), ownerKey: key('a') })
+
+    t.world.identity = verified('b')
+    expect(verifiedMemoryScope()).toBeNull()
+    await t.partitions.activate()
+    expect(verifiedMemoryScope()).toEqual({ tenantKey: key('1'), ownerKey: key('b') })
   })
 
   it('an activation that failed is tried again by the next awaited read', async () => {
