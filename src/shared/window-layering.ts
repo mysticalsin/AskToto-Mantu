@@ -12,7 +12,14 @@
  * With the user's setting OFF the window is capturable on purpose. Hidden worker windows are never composited.
  */
 
-export type NativeWindowId = 'overlay' | 'intelligence' | 'permission-helper' | 'import-decoder' | 'recap-pdf'
+export type NativeWindowId =
+  | 'overlay'
+  | 'intelligence'
+  | 'permission-helper'
+  | 'import-decoder'
+  | 'recap-pdf'
+  | 'task-browser'
+  | 'task-browser'
 
 /** `screen-saver` keeps the bar above full-screen apps; `floating` sits above System Settings, below system alerts. */
 export type AlwaysOnTopLevel = 'screen-saver' | 'floating' | null
@@ -57,6 +64,16 @@ export const NATIVE_WINDOW_MATRIX: readonly NativeWindowPolicy[] = [
     composited: true,
     contentProtection: 'follows-setting',
     alwaysOnTop: 'floating',
+    appearsInCaptureWhenProtected: false,
+    appearsInCaptureWhenUnprotected: true
+  },
+  {
+    // G41: the Métis-owned task browser window. A normal titled window (no always-on-top), hidden from capture by the setting.
+    id: 'task-browser',
+    site: { module: 'windows/task-browser-window', variable: 'win' },
+    composited: true,
+    contentProtection: 'follows-setting',
+    alwaysOnTop: null,
     appearsInCaptureWhenProtected: false,
     appearsInCaptureWhenUnprotected: true
   },

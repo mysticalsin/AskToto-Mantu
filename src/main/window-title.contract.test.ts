@@ -62,7 +62,8 @@ describe('M2-0420 — no window is ever titled with the package name', () => {
       'index.ts: pdfWin',
       'index.ts: win',
       'intelligence.ts: intelWin',
-      'windows/permission-helper-window.ts: win'
+      'windows/permission-helper-window.ts: win',
+      'windows/task-browser-window.ts: win'
     ])
     expect(audit.untitled).toEqual([])
   })
