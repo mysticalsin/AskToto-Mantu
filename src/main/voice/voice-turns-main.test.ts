@@ -29,7 +29,7 @@ const OPEN: CommandImmediateRunGate = {
   ownerWebContentsId: 7
 }
 
-function make(gate: () => CommandImmediateRunGate, meeting = false) {
+function make(gate: () => CommandImmediateRunGate, meeting = false, walkthroughEnabled?: () => boolean) {
   const execute = vi.fn(async (request: DesktopActionRequest, _context?: unknown) => ({
     id: request.id,
     ok: true,
@@ -44,6 +44,7 @@ function make(gate: () => CommandImmediateRunGate, meeting = false) {
     window: () => ({ isDestroyed: () => false, webContents: { send } }),
     platform: 'darwin',
     execute: execute as never,
+    walkthroughEnabled,
     onOutcome: (outcome) => void outcomes.push(outcome)
   })
   return { turns, execute, propose, send, outcomes }
@@ -114,5 +115,42 @@ describe('main voice turn composition', () => {
       await vi.waitFor(() => expect(h.outcomes).toHaveLength(1))
       expect(h.execute, JSON.stringify(override)).not.toHaveBeenCalled()
     }
+  })
+
+  describe('walkthrough start intent (G44)', () => {
+    it('is off by default outside the QA build: the words go to the Ask path and nothing is guided', async () => {
+      const h = make(() => OPEN)
+      h.turns.handle('walk me through saving a file', claim())
+      await vi.waitFor(() => expect(h.outcomes).toHaveLength(1))
+      expect(h.outcomes[0]).toMatchObject({ kind: 'ask' })
+    })
+
+    it('with the flag on it guides only: with no planner bound it says so and runs no action', async () => {
+      const h = make(
+        () => OPEN,
+        false,
+        () => true
+      )
+      h.turns.handle('walk me through saving a file', claim())
+      await vi.waitFor(() => expect(h.outcomes).toHaveLength(1))
+      expect(h.outcomes[0]).toMatchObject({
+        kind: 'walkthrough',
+        status: 'no_plan',
+        view: { phase: 'abandoned', stopReason: 'no_plan' }
+      })
+      expect(h.execute).not.toHaveBeenCalled()
+      expect(h.propose).not.toHaveBeenCalled()
+    })
+
+    it('does not start while a meeting holds the reservation', async () => {
+      const h = make(
+        () => OPEN,
+        true,
+        () => true
+      )
+      h.turns.handle('walk me through saving a file', claim())
+      await vi.waitFor(() => expect(h.outcomes).toHaveLength(1))
+      expect(h.outcomes[0]).toMatchObject({ kind: 'walkthrough', status: 'meeting' })
+    })
   })
 })

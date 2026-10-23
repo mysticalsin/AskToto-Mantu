@@ -26,8 +26,8 @@ describe('voice actions wiring (V03)', () => {
     expect(index).toMatch(
       /ingestTranscript: \(text\) => \{\r?\n\s+if \(!voiceActions\?\.onTranscript\(text\)\) getMetisCommandRuntime\(\)\?\.ingestTranscript\(text, 'command'\)\r?\n\s+\},/
     )
-    expect(index).toMatch(
-      /turns: createMainVoiceTurns\(\{\s+commandControl,\s+authority: inputSessionAuthority,\s+window: \(\) => win,\s+walkthroughEnabled: \(\) => QA_IDENTITY_BUILD/
+    expect(index).toContain(
+      'turns: createMainVoiceTurns({ commandControl, authority: inputSessionAuthority, window: () => win })'
     )
   })
 
