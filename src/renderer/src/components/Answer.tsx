@@ -5,6 +5,7 @@ import { isScreenCapturePermissionError, needsAppRelaunchForScreenCapture } from
 import { Markdown } from './Markdown'
 import { TextButton } from './ui'
 import { AgentStatus } from './AgentStatus'
+import { ArtifactChips } from './ArtifactChips'
 import { useFlash } from '../lib/useFlash'
 import { accelLabel } from '../lib/keys'
 import { isOnboardingDemoActive } from '../lib/onboarding-demo-guard'
@@ -288,6 +289,7 @@ export const Answer = memo(function Answer({
           </div>
         )}
       </div>
+      <ArtifactChips turnId={askId} settled={!streaming} />
       {saveError && (
         <div role="alert" className="rounded-lg border border-[var(--color-danger)]/30 bg-[var(--color-danger)]/10 px-2 py-1 text-[11px] text-[var(--color-danger)]">
           {saveError}

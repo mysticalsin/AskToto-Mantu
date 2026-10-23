@@ -13,6 +13,7 @@ import { createTaskBrowserPreloadApi } from './task-browser'
 import { createExportPreloadApi } from './export-reveal'
 import { createWalkthroughPreloadApi } from './walkthrough'
 import { createSpokenRepliesPreloadApi } from './spoken-replies'
+import { createArtifactsPreloadApi } from './artifacts'
 
 /** The preload bridges that are one self-contained feature each, composed here so index.ts stays under its size cap. */
 export function createFeaturePreloadApis(ipc: IpcRenderer) {
@@ -30,6 +31,7 @@ export function createFeaturePreloadApis(ipc: IpcRenderer) {
     ...createTaskBrowserPreloadApi(ipc),
     ...createExportPreloadApi(ipc),
     ...createWalkthroughPreloadApi(ipc),
-    ...createSpokenRepliesPreloadApi(ipc)
+    ...createSpokenRepliesPreloadApi(ipc),
+    ...createArtifactsPreloadApi(ipc)
   }
 }
