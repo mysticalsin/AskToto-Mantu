@@ -1,9 +1,15 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { IPC } from '@shared/ipc'
 import { DEFAULT_SPOKEN_REPLIES_SETTINGS, type SpokenRepliesSettings } from '@shared/spoken-replies-settings'
 import type { SpokenRepliesState, TtsVoice } from '@shared/spoken-replies'
 import { SPOKEN_REPLIES_PREVIEW_TEXT } from '@shared/spoken-replies'
-import { createSpokenReplies, VOICE_LIST_TTL_MS, type SpokenRepliesAudit } from './spoken-replies-service'
+import {
+  createSpokenReplies,
+  VOICE_LIST_TTL_MS,
+  type ReplyLifecycleEvent,
+  type SpokenRepliesAudit,
+  type SpokenRepliesDeps
+} from './spoken-replies-service'
 import type { TtsAdapter, TtsPlaybackHandlers, TtsSpeakRequest } from './tts-adapter'
 
 const SAMANTHA: TtsVoice = { id: 'com.apple.voice.compact.en-US.Samantha', name: 'Samantha', language: 'en-US' }
@@ -51,28 +57,41 @@ function fakeAdapter(voices: TtsVoice[] | null = [SAMANTHA, AMELIE, NOVELTY]) {
 
 function harness(
   overrides: Partial<SpokenRepliesSettings> = {},
-  options: { adapter?: TtsAdapter | null; meeting?: boolean } = {}
+  options: {
+    adapter?: TtsAdapter | null
+    fake?: ReturnType<typeof fakeAdapter>
+    meeting?: boolean
+    onReplyLifecycle?: (event: ReplyLifecycleEvent) => void
+  } = {}
 ) {
-  const fake = fakeAdapter()
+  const fake = options.fake ?? fakeAdapter()
   let settings: SpokenRepliesSettings = { ...DEFAULT_SPOKEN_REPLIES_SETTINGS, speakReplies: true, ...overrides }
   let meeting = options.meeting ?? false
   let now = 1_000
   const states: SpokenRepliesState[] = []
   const audits: SpokenRepliesAudit[] = []
-  const service = createSpokenReplies({
+  const lifecycle: ReplyLifecycleEvent[] = []
+  const deps: SpokenRepliesDeps = {
     adapter: options.adapter === undefined ? fake.adapter : options.adapter,
     platform: 'darwin',
     getSettings: () => ({ spokenReplies: settings }),
     meetingLive: () => meeting,
     now: () => now,
     onState: (state) => states.push(state),
-    audit: (event) => audits.push(event)
-  })
+    audit: (event) => audits.push(event),
+    // The lifecycle port is intentionally cast during the tests-first slice; production has no port yet.
+    onReplyLifecycle: (event: ReplyLifecycleEvent) => {
+      lifecycle.push(event)
+      options.onReplyLifecycle?.(event)
+    }
+  }
+  const service = createSpokenReplies(deps)
   return {
     service,
     fake,
     states,
     audits,
+    lifecycle,
     set: (next: Partial<SpokenRepliesSettings>) => {
       settings = { ...settings, ...next }
     },
@@ -214,6 +233,479 @@ describe('approved voices (G27, D-13)', () => {
 })
 
 describe('playback generation and barge-in (G27)', () => {
+  it('keeps the ask identity through pending enumeration and settles one terminal despite duplicate/late callbacks', async () => {
+    let h!: ReturnType<typeof harness>
+    const listCallsAtPending: number[] = []
+    h = harness(
+      { voiceId: AMELIE.id },
+      {
+        onReplyLifecycle(event) {
+          if (event.phase === 'pending') listCallsAtPending.push(h.fake.listCalls())
+          throw new Error('observer is isolated')
+        }
+      }
+    )
+    h.fake.holdVoiceList()
+    await answer(h.service, 'ask-lifecycle', 'A synthetic answer.')
+    const generation = h.service.snapshot().generation
+
+    expect(h.lifecycle).toEqual([{ phase: 'pending', askId: 'ask-lifecycle', generation }])
+    expect(listCallsAtPending).toEqual([0])
+    expect(h.fake.listCalls()).toBe(1)
+
+    h.fake.releaseVoiceList([SAMANTHA, AMELIE])
+    await vi.waitFor(() => expect(h.fake.plays).toHaveLength(1))
+    h.fake.plays[0].handlers.onStarted()
+    h.fake.plays[0].handlers.onStarted()
+    h.fake.plays[0].handlers.onEnded('finished')
+    h.fake.plays[0].handlers.onEnded('finished')
+    h.fake.plays[0].handlers.onFailed('spawn')
+
+    expect(h.lifecycle).toEqual([
+      { phase: 'pending', askId: 'ask-lifecycle', generation },
+      { phase: 'started', askId: 'ask-lifecycle', generation },
+      { phase: 'settled', askId: 'ask-lifecycle', generation, outcome: 'finished' }
+    ])
+    expect(h.service.snapshot().playback).toBe('idle')
+  })
+
+  it('settles muted, unavailable, meeting and empty answers without starting playback', async () => {
+    const off = harness({ speakReplies: false })
+    await answer(off.service, 'off-answer', 'Muted answer.')
+    expect(off.lifecycle.map((event) => (event.phase === 'settled' ? event.outcome : event.phase))).toEqual([
+      'pending',
+      'off'
+    ])
+
+    const unavailable = harness({}, { adapter: null })
+    await answer(unavailable.service, 'unavailable-answer', 'Unavailable answer.')
+    expect(unavailable.lifecycle.map((event) => (event.phase === 'settled' ? event.outcome : event.phase))).toEqual([
+      'pending',
+      'unavailable'
+    ])
+
+    const meeting = harness({}, { meeting: true })
+    await answer(meeting.service, 'meeting-answer', 'Muted meeting answer.')
+    expect(meeting.lifecycle.map((event) => (event.phase === 'settled' ? event.outcome : event.phase))).toEqual([
+      'pending',
+      'meeting'
+    ])
+
+    const empty = harness()
+    await answer(empty.service, 'empty-answer', '```\ncode only\n```')
+    expect(empty.lifecycle.map((event) => (event.phase === 'settled' ? event.outcome : event.phase))).toEqual([
+      'pending',
+      'empty'
+    ])
+    expect(off.fake.plays).toHaveLength(0)
+    expect(unavailable.fake.plays).toHaveLength(0)
+    expect(meeting.fake.plays).toHaveLength(0)
+    expect(empty.fake.plays).toHaveLength(0)
+  })
+
+  it('settles an engine failure once, even when the adapter reports more callbacks afterward', async () => {
+    const h = harness()
+    await answer(h.service, 'failed-answer', 'A synthetic answer.')
+    h.fake.plays[0].handlers.onFailed('spawn')
+    h.fake.plays[0].handlers.onEnded('finished')
+    h.fake.plays[0].handlers.onFailed('spawn')
+
+    expect(h.lifecycle.filter((event) => event.phase === 'settled')).toEqual([
+      { phase: 'settled', askId: 'failed-answer', generation: 1, outcome: 'failed' }
+    ])
+  })
+
+  it('settles an Ask stream error while its answer is still being collected', () => {
+    const h = harness()
+    h.service.observeAsk({ type: 'begin', id: 'collection-error', mode: 'answer' })
+    const pending = h.lifecycle.find((event) => event.phase === 'pending')
+    if (!pending || pending.phase !== 'pending') throw new Error('expected identity at Ask begin')
+    h.service.observeAsk({
+      type: 'event',
+      id: 'collection-error',
+      channel: IPC.streamDelta,
+      payload: { id: 'collection-error', text: 'Partial only.' }
+    })
+    h.service.observeAsk({
+      type: 'event',
+      id: 'collection-error',
+      channel: IPC.streamError,
+      payload: { id: 'collection-error', message: 'Synthetic failure.' }
+    })
+
+    expect(h.lifecycle.filter((event) => event.phase === 'settled')).toEqual([
+      { phase: 'settled', askId: pending.askId, generation: pending.generation, outcome: 'failed' }
+    ])
+    expect(h.fake.plays).toHaveLength(0)
+  })
+
+  it('settles a collecting Ask as cancelled immediately when its main ask id is cancelled', () => {
+    const h = harness()
+    h.service.observeAsk({ type: 'begin', id: 'collection-cancel', mode: 'vision' })
+    const pending = h.lifecycle.find((event) => event.phase === 'pending')
+    if (!pending || pending.phase !== 'pending') throw new Error('expected identity at Ask begin')
+    h.service.observeAsk({ type: 'cancel', id: 'collection-cancel' })
+
+    expect(h.lifecycle.filter((event) => event.phase === 'settled')).toEqual([
+      { phase: 'settled', askId: pending.askId, generation: pending.generation, outcome: 'cancelled' }
+    ])
+  })
+
+  it('settles a pending answer on Stop before enumeration resolves and ignores its late result', async () => {
+    const h = harness()
+    h.fake.holdVoiceList()
+    await answer(h.service, 'pending-stop', 'Must not play after Stop.')
+    const pending = h.lifecycle.find((event) => event.phase === 'pending')
+    if (!pending || pending.phase !== 'pending') throw new Error('expected pending lifecycle event')
+
+    h.service.stop()
+    h.fake.releaseVoiceList([SAMANTHA])
+    await flush()
+
+    expect(h.lifecycle.filter((event) => event.phase === 'settled')).toEqual([
+      { phase: 'settled', askId: pending.askId, generation: pending.generation, outcome: 'cancelled' }
+    ])
+    expect(h.fake.plays).toHaveLength(0)
+  })
+
+  it('settles a pending ask as superseded, then speaks only the newer ask from the shared voice load', async () => {
+    const h = harness()
+    h.fake.holdVoiceList()
+    await answer(h.service, 'older-pending', 'Older answer.')
+    const older = h.lifecycle.find((event) => event.phase === 'pending')
+    if (!older || older.phase !== 'pending') throw new Error('expected older pending lifecycle event')
+
+    h.service.observeAsk({ type: 'begin', id: 'newer-answer', mode: 'answer' })
+    h.service.observeAsk({
+      type: 'event',
+      id: 'newer-answer',
+      channel: IPC.streamDelta,
+      payload: { id: 'newer-answer', text: 'Newer answer.' }
+    })
+    h.service.observeAsk({
+      type: 'event',
+      id: 'newer-answer',
+      channel: IPC.streamDone,
+      payload: { id: 'newer-answer' }
+    })
+    const newer = h.lifecycle.find((event) => event.phase === 'pending' && event.askId === 'newer-answer')
+    if (!newer || newer.phase !== 'pending') throw new Error('expected newer pending lifecycle event')
+
+    expect(h.lifecycle).toContainEqual({
+      phase: 'settled',
+      askId: older.askId,
+      generation: older.generation,
+      outcome: 'superseded'
+    })
+    h.fake.releaseVoiceList([SAMANTHA])
+    await vi.waitFor(() => expect(h.fake.plays).toHaveLength(1))
+    expect(h.fake.plays[0].request.text).toBe('Newer answer.')
+    expect(h.lifecycle.some((event) => event.phase === 'started' && event.askId === 'older-pending')).toBe(false)
+    h.fake.plays[0].handlers.onEnded('finished')
+    expect(h.lifecycle.filter((event) => event.phase === 'settled' && event.askId === 'newer-answer')).toHaveLength(1)
+  })
+
+  it('settles superseded identities before the bounded pending map needs eviction', () => {
+    const h = harness()
+    for (let index = 0; index < 9; index += 1) {
+      h.service.observeAsk({ type: 'begin', id: `bounded-${index}`, mode: 'answer' })
+    }
+    expect(h.lifecycle.filter((event) => event.phase === 'pending')).toHaveLength(9)
+    for (let index = 0; index < 8; index += 1) {
+      expect(h.lifecycle.filter((event) => event.phase === 'settled' && event.askId === `bounded-${index}`)).toEqual([
+        expect.objectContaining({ phase: 'settled', outcome: 'superseded' })
+      ])
+    }
+    expect(h.lifecycle.filter((event) => event.phase === 'settled' && event.askId === 'bounded-8')).toHaveLength(0)
+  })
+
+  it('settles active playback on Stop and ignores late adapter callbacks', async () => {
+    const h = harness()
+    await answer(h.service, 'active-stop', 'A synthetic answer.')
+    h.fake.plays[0].handlers.onStarted()
+    h.service.stop()
+    h.fake.plays[0].handlers.onEnded('finished')
+    h.fake.plays[0].handlers.onFailed('spawn')
+
+    expect(h.fake.plays[0].cancelled).toBe(1)
+    expect(h.lifecycle.filter((event) => event.phase === 'settled')).toHaveLength(1)
+    expect(h.lifecycle.filter((event) => event.phase === 'settled')[0]).toMatchObject({
+      askId: 'active-stop',
+      generation: 1,
+      outcome: 'cancelled'
+    })
+  })
+
+  it('settles active Ask A as superseded when Ask B begins and ignores A callbacks afterward', async () => {
+    const h = harness()
+    await answer(h.service, 'active-older', 'Older synthetic answer.')
+    const older = h.lifecycle.find((event) => event.phase === 'pending')
+    if (!older || older.phase !== 'pending') throw new Error('expected older pending lifecycle event')
+    h.fake.plays[0].handlers.onStarted()
+
+    h.service.observeAsk({ type: 'begin', id: 'active-newer', mode: 'answer' })
+    h.fake.plays[0].handlers.onEnded('finished')
+    h.fake.plays[0].handlers.onFailed('spawn')
+
+    expect(h.fake.plays[0].cancelled).toBe(1)
+    expect(h.lifecycle.filter((event) => event.phase === 'settled' && event.askId === older.askId)).toEqual([
+      { phase: 'settled', askId: older.askId, generation: older.generation, outcome: 'superseded' }
+    ])
+    expect(h.service.snapshot().playback).toBe('idle')
+  })
+
+  it('cancels a synchronous onStarted callback when the observer stops before speak returns its handle', async () => {
+    let h!: ReturnType<typeof harness>
+    const fake = fakeAdapter()
+    const speak = fake.adapter.speak.bind(fake.adapter)
+    fake.adapter.speak = (request, handlers) => {
+      handlers.onStarted()
+      return speak(request, handlers)
+    }
+    h = harness(
+      {},
+      {
+        fake,
+        onReplyLifecycle(event) {
+          if (event.phase === 'started') h.service.stop()
+        }
+      }
+    )
+
+    await answer(h.service, 'sync-start-stop', 'Started before speak returns.')
+
+    expect(fake.plays).toHaveLength(1)
+    expect(fake.plays[0].cancelled).toBe(1)
+    expect(h.service.snapshot().playback).toBe('idle')
+    expect(h.lifecycle.filter((event) => event.phase === 'settled')).toEqual([
+      { phase: 'settled', askId: 'sync-start-stop', generation: 1, outcome: 'cancelled' }
+    ])
+  })
+
+  it('settles synchronous adapter failure once and handles a thrown speak without leaking an active reply', async () => {
+    const syncFailure = harness()
+    const failingPlay = syncFailure.fake.adapter.speak.bind(syncFailure.fake.adapter)
+    syncFailure.fake.adapter.speak = (request, handlers) => {
+      handlers.onFailed('spawn')
+      return failingPlay(request, handlers)
+    }
+    await answer(syncFailure.service, 'sync-failure', 'The adapter fails before returning.')
+    syncFailure.fake.plays[0].handlers.onEnded('finished')
+    expect(syncFailure.lifecycle.filter((event) => event.phase === 'settled')).toEqual([
+      { phase: 'settled', askId: 'sync-failure', generation: 1, outcome: 'failed' }
+    ])
+    expect(syncFailure.service.snapshot().playback).toBe('idle')
+
+    const thrown = harness()
+    thrown.fake.adapter.speak = () => {
+      throw new Error('synthetic adapter failure')
+    }
+    await expect(answer(thrown.service, 'thrown-speak', 'The adapter throws.')).resolves.toBeUndefined()
+    expect(thrown.lifecycle.filter((event) => event.phase === 'settled')).toEqual([
+      { phase: 'settled', askId: 'thrown-speak', generation: 1, outcome: 'failed' }
+    ])
+    expect(thrown.service.snapshot().playback).toBe('idle')
+  })
+
+  it('an Ask A terminal observer can start Ask B without A cleanup clobbering B', async () => {
+    let h!: ReturnType<typeof harness>
+    h = harness(
+      {},
+      {
+        onReplyLifecycle(event) {
+          if (event.phase === 'settled' && event.askId === 'settled-a' && event.outcome === 'finished') {
+            h.service.observeAsk({ type: 'begin', id: 'reentrant-b', mode: 'answer' })
+            h.service.observeAsk({
+              type: 'event',
+              id: 'reentrant-b',
+              channel: IPC.streamDelta,
+              payload: { id: 'reentrant-b', text: 'B remains current.' }
+            })
+            h.service.observeAsk({
+              type: 'event',
+              id: 'reentrant-b',
+              channel: IPC.streamDone,
+              payload: { id: 'reentrant-b' }
+            })
+          }
+        }
+      }
+    )
+    await answer(h.service, 'settled-a', 'A finishes.')
+    h.fake.plays[0].handlers.onStarted()
+    h.fake.plays[0].handlers.onEnded('finished')
+    await vi.waitFor(() => expect(h.fake.plays).toHaveLength(2))
+    h.fake.plays[1].handlers.onStarted()
+    h.service.observeAsk({ type: 'cancel', id: 'reentrant-b' })
+
+    expect(h.fake.plays[1].cancelled).toBe(1)
+    expect(h.lifecycle.filter((event) => event.phase === 'settled' && event.askId === 'reentrant-b')).toEqual([
+      { phase: 'settled', askId: 'reentrant-b', generation: 2, outcome: 'cancelled' }
+    ])
+  })
+
+  it('settles immediately on mute or hard-stop before and after voice enumeration resolves', async () => {
+    const muted = harness()
+    muted.fake.holdVoiceList()
+    await answer(muted.service, 'mute-before-list', 'Do not play muted speech.')
+    muted.set({ speakReplies: false })
+    muted.service.refresh()
+    expect(muted.lifecycle.filter((event) => event.phase === 'settled')).toEqual([
+      { phase: 'settled', askId: 'mute-before-list', generation: 1, outcome: 'off' }
+    ])
+    muted.fake.releaseVoiceList([SAMANTHA])
+    await flush()
+    expect(muted.lifecycle.filter((event) => event.phase === 'settled')).toHaveLength(1)
+    expect(muted.fake.plays).toHaveLength(0)
+
+    const beforeResolve = harness()
+    beforeResolve.fake.holdVoiceList()
+    await answer(beforeResolve.service, 'stop-before-list', 'Do not play after hard-stop.')
+    const beforePending = beforeResolve.lifecycle.find((event) => event.phase === 'pending')
+    if (!beforePending || beforePending.phase !== 'pending') throw new Error('expected Ask identity before hard-stop')
+    beforeResolve.service.bargeIn('hard-stop')
+    expect(beforeResolve.lifecycle.filter((event) => event.phase === 'settled')).toEqual([
+      { phase: 'settled', askId: beforePending.askId, generation: beforePending.generation, outcome: 'cancelled' }
+    ])
+    beforeResolve.fake.releaseVoiceList([SAMANTHA])
+    await flush()
+    expect(beforeResolve.lifecycle.filter((event) => event.phase === 'settled')).toHaveLength(1)
+    expect(beforeResolve.fake.plays).toHaveLength(0)
+
+    const afterResolve = harness()
+    afterResolve.fake.holdVoiceList()
+    await answer(afterResolve.service, 'stop-after-list', 'Do not play after hard-stop.')
+    const afterPending = afterResolve.lifecycle.find((event) => event.phase === 'pending')
+    if (!afterPending || afterPending.phase !== 'pending')
+      throw new Error('expected Ask identity before resolved hard-stop')
+    afterResolve.fake.releaseVoiceList([SAMANTHA])
+    afterResolve.service.bargeIn('hard-stop')
+    await flush()
+    expect(afterResolve.lifecycle.filter((event) => event.phase === 'settled')).toEqual([
+      { phase: 'settled', askId: afterPending.askId, generation: afterPending.generation, outcome: 'cancelled' }
+    ])
+    expect(afterResolve.fake.plays).toHaveLength(0)
+  })
+
+  it('maps an interrupted playback end to one cancellation terminal, never a finish', async () => {
+    const h = harness()
+    await answer(h.service, 'interrupted-answer', 'This reply was interrupted.')
+    h.fake.plays[0].handlers.onStarted()
+    h.fake.plays[0].handlers.onEnded('interrupted')
+    h.fake.plays[0].handlers.onEnded('finished')
+
+    expect(h.lifecycle.filter((event) => event.phase === 'settled')).toEqual([
+      { phase: 'settled', askId: 'interrupted-answer', generation: 1, outcome: 'cancelled' }
+    ])
+  })
+
+  it('allows a pending lifecycle observer to dispose reentrantly without speaking or double-settling', async () => {
+    let h!: ReturnType<typeof harness>
+    h = harness(
+      {},
+      {
+        onReplyLifecycle(event) {
+          if (event.phase === 'pending') h.service.dispose()
+        }
+      }
+    )
+    h.fake.holdVoiceList()
+    await answer(h.service, 'dispose-pending', 'Must not play after disposal.')
+    h.fake.releaseVoiceList([SAMANTHA])
+    await flush()
+
+    expect(h.lifecycle.filter((event) => event.phase === 'settled')).toHaveLength(1)
+    expect(h.lifecycle.filter((event) => event.phase === 'settled')[0]).toMatchObject({
+      askId: 'dispose-pending',
+      generation: 1,
+      outcome: 'cancelled'
+    })
+    expect(h.fake.plays).toHaveLength(0)
+  })
+
+  it('does not let a started observer reentrant Stop duplicate the cancellation terminal', async () => {
+    let h!: ReturnType<typeof harness>
+    h = harness(
+      {},
+      {
+        onReplyLifecycle(event) {
+          if (event.phase === 'started') h.service.stop()
+        }
+      }
+    )
+    await answer(h.service, 'stop-from-started', 'A synthetic answer.')
+    h.fake.plays[0].handlers.onStarted()
+    h.fake.plays[0].handlers.onEnded('finished')
+
+    expect(h.fake.plays[0].cancelled).toBe(1)
+    expect(h.lifecycle.filter((event) => event.phase === 'settled')).toEqual([
+      { phase: 'settled', askId: 'stop-from-started', generation: 1, outcome: 'cancelled' }
+    ])
+  })
+
+  it('never emits Ask playback lifecycle events for an explicit preview', async () => {
+    const h = harness()
+    await h.service.preview({ voiceId: AMELIE.id })
+    h.fake.plays[0].handlers.onStarted()
+    h.fake.plays[0].handlers.onEnded('finished')
+    expect(h.lifecycle).toEqual([])
+  })
+
+  it('does not let a settled reply observer stop reentrant mutation get adopted by the outer preview', async () => {
+    let h!: ReturnType<typeof harness>
+    h = harness(
+      {},
+      {
+        onReplyLifecycle(event) {
+          if (event.phase === 'settled' && event.askId === 'preview-stop-a') h.service.stop()
+        }
+      }
+    )
+    await answer(h.service, 'preview-stop-a', 'A synthetic answer.')
+    h.fake.plays[0].handlers.onStarted()
+
+    await expect(h.service.preview({ voiceId: AMELIE.id })).resolves.toEqual({ ok: false, reason: 'interrupted' })
+
+    expect(h.fake.plays).toHaveLength(1)
+    expect(h.service.snapshot().playback).toBe('idle')
+  })
+
+  it('does not let a settled reply observer start Ask B that the outer preview replaces', async () => {
+    let h!: ReturnType<typeof harness>
+    h = harness(
+      {},
+      {
+        onReplyLifecycle(event) {
+          if (event.phase !== 'settled' || event.askId !== 'preview-start-b') return
+          h.service.observeAsk({ type: 'begin', id: 'preview-reentrant-b', mode: 'answer' })
+          h.service.observeAsk({
+            type: 'event',
+            id: 'preview-reentrant-b',
+            channel: IPC.streamDelta,
+            payload: { id: 'preview-reentrant-b', text: 'B remains current.' }
+          })
+          h.service.observeAsk({
+            type: 'event',
+            id: 'preview-reentrant-b',
+            channel: IPC.streamDone,
+            payload: { id: 'preview-reentrant-b' }
+          })
+        }
+      }
+    )
+    await answer(h.service, 'preview-start-b', 'A synthetic answer.')
+    h.fake.plays[0].handlers.onStarted()
+
+    await expect(h.service.preview({ voiceId: AMELIE.id })).resolves.toEqual({ ok: false, reason: 'interrupted' })
+
+    expect(h.fake.plays).toHaveLength(2)
+    expect(h.fake.plays[1].request.text).toBe('B remains current.')
+    expect(h.service.snapshot().playback).toBe('reply')
+    expect(
+      h.lifecycle.filter((event) => event.phase === 'settled' && event.askId === 'preview-reentrant-b')
+    ).toHaveLength(0)
+  })
+
   it('every user input raises the generation: a new typed ask, a voice hold and a stop', () => {
     const h = harness()
     const g0 = h.service.snapshot().generation
@@ -231,6 +723,8 @@ describe('playback generation and barge-in (G27)', () => {
   it('a reply whose input was superseded is dropped, never spoken late', async () => {
     const h = harness()
     h.service.observeAsk({ type: 'begin', id: 'a1', mode: 'answer' })
+    const pending = h.lifecycle.find((event) => event.phase === 'pending')
+    if (!pending || pending.phase !== 'pending') throw new Error('expected captured Ask identity')
     h.service.observeAsk({
       type: 'event',
       id: 'a1',
@@ -238,10 +732,14 @@ describe('playback generation and barge-in (G27)', () => {
       payload: { id: 'a1', text: 'Old answer.' }
     })
     h.service.bargeIn('voice-hold')
+    expect(h.lifecycle.filter((event) => event.phase === 'settled')).toEqual([
+      { phase: 'settled', askId: pending.askId, generation: pending.generation, outcome: 'cancelled' }
+    ])
+    expect(h.audits.some((a) => a.phase === 'dropped' && a.reason === 'stale')).toBe(true)
     h.service.observeAsk({ type: 'event', id: 'a1', channel: IPC.streamDone, payload: { id: 'a1' } })
     await flush()
     expect(h.fake.plays).toHaveLength(0)
-    expect(h.audits.some((a) => a.phase === 'dropped' && a.reason === 'stale')).toBe(true)
+    expect(h.lifecycle.filter((event) => event.phase === 'settled')).toHaveLength(1)
   })
 
   it('a hold that starts mid-playback cancels the voice at once: idle immediately, the child killed, late events ignored', async () => {

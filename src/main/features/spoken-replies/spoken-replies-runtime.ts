@@ -11,7 +11,7 @@ import type { SpokenRepliesSettings } from '@shared/spoken-replies-settings'
 import { auditLog } from '../../logger'
 import { macSpeakSpawnSpec, macSpeakVoicesSpawnSpec } from '../../mac-helper'
 import { ttsProcessHost } from '../../infra/process/tts-process-host'
-import { createSpokenReplies, type SpokenReplies } from './spoken-replies-service'
+import { createSpokenReplies, type ReplyLifecycleEvent, type SpokenReplies } from './spoken-replies-service'
 import { createTtsAdapter, type TtsAdapter } from './tts-adapter'
 
 interface WindowLike {
@@ -28,6 +28,8 @@ export interface SpokenRepliesRuntimeDeps {
   platform?: NodeJS.Platform
   /** Tests may supply an engine; production binds the platform's own. */
   adapter?: TtsAdapter | null
+  /** Main-process-only Ask identity events; never included in renderer state or IPC. */
+  onReplyLifecycle?(event: ReplyLifecycleEvent): void
 }
 
 export function createSpokenRepliesRuntime(deps: SpokenRepliesRuntimeDeps): SpokenReplies {
@@ -44,6 +46,7 @@ export function createSpokenRepliesRuntime(deps: SpokenRepliesRuntimeDeps): Spok
     platform,
     getSettings: deps.getSettings,
     meetingLive: deps.meetingLive,
+    onReplyLifecycle: deps.onReplyLifecycle,
     onState(state) {
       const win = deps.window()
       if (!win || win.isDestroyed()) return
