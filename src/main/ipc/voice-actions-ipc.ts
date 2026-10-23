@@ -1,10 +1,12 @@
 import type { IpcMain, IpcMainInvokeEvent } from 'electron'
+import { registerWalkthroughIpc, type WalkthroughIpcSurface } from './walkthrough-ipc'
 import { VOICE_ACTIONS_IPC, type VoiceStateSnapshot } from '@shared/voice/voice-turn'
 
 interface VoiceActionsIpcRuntime {
   snapshot(): VoiceStateSnapshot
   report(raw: unknown): { ok: boolean }
   setChordRecorderActive(raw: unknown): { ok: boolean }
+  walkthrough?: WalkthroughIpcSurface | null
 }
 
 /**
@@ -29,4 +31,5 @@ export function registerVoiceActionsIpc(
     assertMainWindow(event)
     return runtime.setChordRecorderActive(raw)
   })
+  if (runtime.walkthrough) registerWalkthroughIpc(ipcMain, assertMainWindow, runtime.walkthrough)
 }

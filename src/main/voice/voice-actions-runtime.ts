@@ -30,6 +30,7 @@ import { auditLog } from '../logger'
 import type { ChordWatcherEvent } from './chord-watcher'
 import { createVoiceChordWiring, type VoiceChordWiring } from './chord-wiring'
 import { commandSpeechAvailability, createParakeetPresence } from './voice-availability'
+import type { WalkthroughIpcSurface } from '../ipc/walkthrough-ipc'
 import { VoiceSession, type VoiceAuditPhase, type VoiceTurnClaim } from './voice-session'
 
 interface WindowLike {
@@ -71,6 +72,8 @@ export interface VoiceActionsRuntimeDeps {
     handle(text: string, claim: VoiceTurnClaim): void
     /** G35: the pending clarifying question is gone (Stop, sign-out, owner switch, a meeting, a renderer reset). */
     dropClarification?(reason: ClarifyDropReason): void
+    /** G45: the walkthrough surface the renderer bridge reaches (view and the owner's four actions). */
+    walkthrough?: WalkthroughIpcSurface
   }
   /**
    * Dictation (G22) shares this runtime's hooks. `ports` is where the operating system binds the focused field and
@@ -108,6 +111,8 @@ export interface VoiceActionsRuntime {
   report(raw: unknown): { ok: boolean }
   /** The Settings chord recorder opened or closed (validated here). While open, a hold opens no turn. */
   setChordRecorderActive(raw: unknown): { ok: boolean }
+  /** G45: the walkthrough surface of the voice turns, for the renderer bridge. Null when none is bound. */
+  walkthrough: WalkthroughIpcSurface | null
   dispose(): void
 }
 
@@ -252,6 +257,7 @@ export function createVoiceActionsRuntime(deps: VoiceActionsRuntimeDeps): VoiceA
       dictation.refresh()
     },
     snapshot: () => session.snapshot(),
+    walkthrough: deps.turns?.walkthrough ?? null,
     onSignedIn() {
       chord.onSignedIn()
       dictation.onSignedIn()

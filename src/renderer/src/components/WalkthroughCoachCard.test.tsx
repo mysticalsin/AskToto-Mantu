@@ -36,3 +36,13 @@ describe('WalkthroughCoachCard (G45)', () => {
     ).toContain('aria-live="assertive"')
   })
 })
+
+describe('WalkthroughCoachHost mounting (G45)', () => {
+  it('is mounted in the sidecar directly above the task cards', async () => {
+    const { readFileSync } = await import('node:fs')
+    const { resolve } = await import('node:path')
+    const text = readFileSync(resolve(__dirname, 'RightEdgeSidecar.tsx'), 'utf8')
+    expect(text.indexOf('<WalkthroughCoachHost />')).toBeGreaterThan(0)
+    expect(text.indexOf('<WalkthroughCoachHost />')).toBeLessThan(text.indexOf('<TaskCardsHost />'))
+  })
+})

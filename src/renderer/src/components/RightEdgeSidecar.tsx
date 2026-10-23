@@ -20,6 +20,7 @@ import { RIGHT_EDGE_STRINGS, type RightEdgeStrings } from '../lib/right-edge/str
 import { ElapsedClock } from './Bar'
 import { MantuMark } from './MantuMark'
 import { TaskCardsHost } from './TaskCardsHost'
+import { WalkthroughCoachHost } from './WalkthroughCoachCard'
 
 export interface SidecarChatProps {
   /** Controlled by App so the dock uses the existing conversation state and submission route. */
@@ -582,6 +583,7 @@ export function RightEdgeSidecar({
               {intelligence.error}
             </p>
           ) : null}
+          <WalkthroughCoachHost />
           <TaskCardsHost />
           {commandState.proposalId && !commandState.preview ? (
             <section

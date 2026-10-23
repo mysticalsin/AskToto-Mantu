@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { DesktopActionRequest } from '@shared/desktop-actions'
 import { VOICE_ACTIONS_IPC } from '@shared/voice/voice-turn'
+import { WALKTHROUGH_IPC } from '@shared/walkthrough-view'
 import type { CommandImmediateRunGate } from '../command-confirmation'
 import { createMainVoiceTurns } from './voice-turns-main'
 import type { VoiceTurnClaim } from './voice-session'
@@ -41,7 +42,7 @@ function make(gate: () => CommandImmediateRunGate, meeting = false, walkthroughE
   const turns = createMainVoiceTurns({
     commandControl: { immediateRunGate: gate, proposeChecked: propose } as never,
     authority: { hasMeetingReservation: meeting },
-    window: () => ({ isDestroyed: () => false, webContents: { send } }),
+    window: () => ({ isDestroyed: () => false, webContents: { id: 7, send } }),
     platform: 'darwin',
     execute: execute as never,
     walkthroughEnabled,
@@ -151,6 +152,31 @@ describe('main voice turn composition', () => {
       h.turns.handle('walk me through saving a file', claim())
       await vi.waitFor(() => expect(h.outcomes).toHaveLength(1))
       expect(h.outcomes[0]).toMatchObject({ kind: 'walkthrough', status: 'meeting' })
+    })
+
+    it('pushes each walkthrough view to the live owner window and exposes the surface for the IPC', async () => {
+      const h = make(
+        () => OPEN,
+        false,
+        () => true
+      )
+      h.turns.handle('walk me through saving a file', claim())
+      await vi.waitFor(() => expect(h.outcomes).toHaveLength(1))
+      const pushed = h.send.mock.calls.filter(([channel]) => channel === WALKTHROUGH_IPC.view)
+      expect(pushed.length).toBeGreaterThan(0)
+      expect(pushed.at(-1)?.[1]).toMatchObject({ phase: 'abandoned', stopReason: 'no_plan' })
+      expect(h.turns.walkthrough?.view()).toMatchObject({ phase: 'abandoned' })
+    })
+
+    it('pushes nothing when the owner is not the window the turns use', async () => {
+      const h = make(
+        () => ({ ...OPEN, ownerWebContentsId: 99 }),
+        false,
+        () => true
+      )
+      h.turns.handle('walk me through saving a file', claim())
+      await vi.waitFor(() => expect(h.outcomes).toHaveLength(1))
+      expect(h.send.mock.calls.filter(([channel]) => channel === WALKTHROUGH_IPC.view)).toHaveLength(0)
     })
   })
 })

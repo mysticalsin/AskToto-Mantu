@@ -1,4 +1,5 @@
-import type { WalkthroughCardAction, WalkthroughView } from '@shared/walkthrough-view'
+import { useCallback, useEffect, useState } from 'react'
+import { IDLE_WALKTHROUGH_VIEW, type WalkthroughCardAction, type WalkthroughView } from '@shared/walkthrough-view'
 import { coachCopy, coachVisible } from '../lib/walkthrough-coach'
 
 /**
@@ -43,4 +44,36 @@ export function WalkthroughCoachCard({
       ) : null}
     </section>
   )
+}
+
+/**
+ * Subscribes the sidecar to main's walkthrough view (G45). Main owns every state; a button is a request main may
+ * refuse, and the next pushed view is the answer. With no bridge (or the feature off) the view stays idle: no card.
+ */
+export function WalkthroughCoachHost(): JSX.Element | null {
+  const [view, setView] = useState<WalkthroughView>(IDLE_WALKTHROUGH_VIEW)
+  useEffect(() => {
+    const api = window.toto?.walkthrough
+    if (!api) return
+    let live = true
+    let receivedPush = false
+    const unsubscribe = api.onView((next) => {
+      receivedPush = true
+      if (live) setView(next)
+    })
+    void api
+      .current()
+      .then((initial) => {
+        if (live && !receivedPush) setView(initial)
+      })
+      .catch(() => {})
+    return () => {
+      live = false
+      unsubscribe()
+    }
+  }, [])
+  const act = useCallback((action: WalkthroughCardAction) => {
+    void window.toto?.walkthrough?.act(action).catch(() => {})
+  }, [])
+  return <WalkthroughCoachCard view={view} onAction={act} />
 }

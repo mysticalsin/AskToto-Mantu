@@ -21,12 +21,13 @@ import type { VoiceActionsRuntimeDeps } from './voice-actions-runtime'
 import { randomUUID } from 'node:crypto'
 import type { ClarifyDropReason } from './clarify-protocol'
 import { createWalkthroughRuntime } from '../features/walkthrough'
+import { createWalkthroughOwnerPush } from '../ipc/walkthrough-ipc'
 import { QA_IDENTITY_BUILD } from '../qa-identity'
 import { createVoiceTurnPipeline, type VoiceTurnOutcome } from './voice-turn-handler'
 
 interface WindowLike {
   isDestroyed(): boolean
-  webContents: { send(channel: string, payload: unknown): void }
+  webContents: { id?: number; send(channel: string, payload: unknown): void }
 }
 
 export interface MainVoiceTurnsDeps {
@@ -68,7 +69,14 @@ export function createMainVoiceTurns(deps: MainVoiceTurnsDeps): NonNullable<Voic
     enabled: () => (deps.walkthroughEnabled ? deps.walkthroughEnabled() : QA_IDENTITY_BUILD),
     ownerKey,
     meetingActive: () => deps.authority.hasMeetingReservation,
-    // The renderer-safe view reaches the UI through the turn outcome (V04/V05 subscribe); G45 draws it.
+    // The renderer-safe view goes to the live owner window only; the coach card (G45) draws it.
+    onView: createWalkthroughOwnerPush({
+      window: () => deps.window(),
+      ownerWebContentsId: () => {
+        const id = live()?.ownerWebContentsId
+        return typeof id === 'number' ? id : null
+      }
+    }),
     audit: (_event, data) => auditLog('walkthrough.event', data)
   })
   const pipeline = createVoiceTurnPipeline({
@@ -124,6 +132,7 @@ export function createMainVoiceTurns(deps: MainVoiceTurnsDeps): NonNullable<Voic
     audit: (event, data) => auditLog(event, data)
   })
   return {
+    walkthrough,
     handle: (text, claim) => pipeline.handle(text, claim),
     dropClarification(reason: ClarifyDropReason) {
       pipeline.dropClarification(reason)
