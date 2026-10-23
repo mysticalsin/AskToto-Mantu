@@ -1,0 +1,102 @@
+import { mkdir, readFile } from 'node:fs/promises'
+import { join } from 'node:path'
+import type { IpcMain } from 'electron'
+import { createAssistantService, createAssistantStore, type AssistantService, type CustomMode } from '../features/assistants'
+import type { AssistantAuditPhase } from '../features/assistants'
+import { atomicSavedWrite } from '../infra/storage/atomic-saved-write'
+import { registerAssistantsIpc } from '../ipc/assistants-ipc'
+import type { AuthorizeSender } from '../ipc/sender-auth'
+import { memoryAccess, memoryPartitionsConfigured, onMemoryPartitionChange } from '../memory-partition/memory-access'
+
+export interface AssistantsWiringDeps {
+  ipcMain: Pick<IpcMain, 'handle'>
+  authorizeSender: AuthorizeSender
+  requireAuth(): boolean
+  ownerSession: {
+    currentOwnerKey(): string | null
+    currentTenantKey(): string | null
+    onRevoked(cb: () => void): () => void
+  }
+  userDataPath(): string
+  /** The app's own secret sealing (`encryptSecret` / `decryptSecret`). */
+  seal(plain: string): Buffer
+  open(sealed: Buffer): string
+  /** The person's custom modes, shown as read-only system assistants beside the built-in ones. */
+  customModes(): readonly CustomMode[]
+  /** The saved meetings (their own ids and modes). Read only. */
+  meetings(): Promise<ReadonlyArray<{ file: string; mode: string }>>
+  audit(record: { phase: AssistantAuditPhase; reason?: string; count?: number }): void
+  /** Defaults to G19's partition in force; a test seam. */
+  partition?(): string | null
+  /** Subscribes to a change of the partition in force; defaults to G19's. A test seam. */
+  onPartitionChange?(listener: () => void): () => void
+  now?(): number
+}
+
+/** G19's partition in force: its id, or null while none is open (signed out, unverified, a switch in flight). */
+function activePartition(): string | null {
+  if (!memoryPartitionsConfigured()) return null
+  const access = memoryAccess()
+  return access.status === 'ok' ? access.partitionId : null
+}
+
+/**
+ * Builds the assistant store and service (G48) under `<userData>/assistants/<partition>.bin` (sealed, one file per
+ * memory partition, so the file itself belongs to the verified tenant and user), registers its IPC behind the shared
+ * sender authorizer, and forgets pending proposals when the owner is revoked or the partition changes. Hangs off
+ * `createOwnerSessionWiring`, so index.ts gains no lines.
+ *
+ * Without a verified owner key, tenant key and an open partition there is no scope and every call is refused as signed
+ * out: assistants are not available to an installation that has no sign-in.
+ */
+export function bootstrapAssistants(deps: AssistantsWiringDeps): AssistantService {
+  const partition = deps.partition ?? activePartition
+  const scope = () => {
+    const partitionId = partition()
+    const ownerKey = deps.ownerSession.currentOwnerKey()
+    const tenantKey = deps.ownerSession.currentTenantKey()
+    return partitionId && ownerKey && tenantKey ? { partitionId, ownerKey, tenantKey } : null
+  }
+  const file = (partitionId: string): string => {
+    if (!/^(?:legacy|[0-9a-f]{24})$/.test(partitionId)) throw new Error('invalid memory partition')
+    return join(deps.userDataPath(), 'assistants', `${partitionId}.bin`)
+  }
+  const store = createAssistantStore({
+    io: {
+      async read(partitionId) {
+        try {
+          return await readFile(file(partitionId))
+        } catch (error) {
+          if ((error as { code?: unknown } | null)?.code === 'ENOENT') return null
+          throw error
+        }
+      },
+      async write(partitionId, data) {
+        const target = file(partitionId)
+        await mkdir(join(deps.userDataPath(), 'assistants'), { recursive: true, mode: 0o700 })
+        await atomicSavedWrite(target, data)
+      }
+    },
+    seal: deps.seal,
+    open: deps.open,
+    scope
+  })
+  const service = createAssistantService({
+    store,
+    scope,
+    now: deps.now ?? Date.now,
+    customModes: deps.customModes,
+    meetings: deps.meetings,
+    audit: (phase, detail) => deps.audit({ phase, ...detail })
+  })
+  registerAssistantsIpc({
+    ipcMain: deps.ipcMain,
+    authorizeSender: deps.authorizeSender,
+    requireAuth: deps.requireAuth,
+    service
+  })
+  // The disposers are discarded on purpose: these bindings live for the app lifetime.
+  deps.ownerSession.onRevoked(() => service.onOwnerChange())
+  ;(deps.onPartitionChange ?? onMemoryPartitionChange)(() => service.onOwnerChange())
+  return service
+}
