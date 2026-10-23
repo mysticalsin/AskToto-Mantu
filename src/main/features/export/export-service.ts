@@ -80,9 +80,7 @@ export function createExportService(deps: ExportServiceDeps): ExportService {
     totalBytes: number,
     isDirectory: boolean
   ): Promise<
-    | { plan: DestinationPlan; finalName: string; policy: ConflictPolicy }
-    | { cancelled: true }
-    | { error: string }
+    { plan: DestinationPlan; finalName: string; policy: ConflictPolicy } | { cancelled: true } | { error: string }
   > {
     const chosen = await deps.showSaveDialog(request.dialog)
     if (chosen.canceled || !chosen.filePath) return { cancelled: true }
@@ -160,7 +158,8 @@ export function createExportService(deps: ExportServiceDeps): ExportService {
   }
 
   function failure(error: unknown): ExportOutcome {
-    if (error instanceof ExportRefusal) return { ok: false, error: `Export refused: ${error.message} Nothing was written.` }
+    if (error instanceof ExportRefusal)
+      return { ok: false, error: `Export refused: ${error.message} Nothing was written.` }
     return { ok: false, error: NOTHING_WRITTEN }
   }
 
@@ -182,7 +181,10 @@ export function createExportService(deps: ExportServiceDeps): ExportService {
         const info = await stat(destination)
         const onDisk = info.size === request.bytes.byteLength ? sha256(await readFile(destination)) : ''
         if (onDisk !== digest) {
-          return { ok: false, error: 'Export finished but the saved file did not verify against its digest; please export again.' }
+          return {
+            ok: false,
+            error: 'Export finished but the saved file did not verify against its digest; please export again.'
+          }
         }
       } catch {
         return { ok: false, error: 'Export finished but the saved file could not be verified; please export again.' }

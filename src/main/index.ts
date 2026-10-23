@@ -7079,7 +7079,12 @@ function registerIpc(): void {
     receiptLogPath: exportReceiptLogPath,
     downloadsPath: () => app.getPath('downloads'),
     userDataPath: () => app.getPath('userData'),
-    appInfo: () => ({ version: app.getVersion(), platform: process.platform, arch: process.arch, packaged: app.isPackaged }),
+    appInfo: () => ({
+      version: app.getVersion(),
+      platform: process.platform,
+      arch: process.arch,
+      packaged: app.isPackaged
+    }),
     openPath: (path) => shell.openPath(path),
     showItemInFolder: (path) => shell.showItemInFolder(path),
     audit: auditLog
@@ -8840,7 +8845,9 @@ function registerIpc(): void {
       dialog: { defaultPath: `${safeName}.pdf`, filters: [{ name: 'PDF', extensions: ['pdf'] }] }
     })
     if (result.ok) return { ok: true as const, path: result.receipt.destination, receipt: result.receipt }
-    return 'cancelled' in result ? { ok: false as const, cancelled: true as const } : { ok: false as const, error: result.error }
+    return 'cancelled' in result
+      ? { ok: false as const, cancelled: true as const }
+      : { ok: false as const, error: result.error }
   })
 
   // --- Recall (meeting history): list/search/open ---

@@ -89,7 +89,8 @@ export async function planDestination(
 ): Promise<DestinationPlan | { refused: string }> {
   const platform = options.platform ?? process.platform
   const isDirectory = options.isDirectory === true
-  if (typeof chosenPath !== 'string' || !isAbsolute(chosenPath)) return { refused: 'The destination is not an absolute path.' }
+  if (typeof chosenPath !== 'string' || !isAbsolute(chosenPath))
+    return { refused: 'The destination is not an absolute path.' }
   const name = basename(chosenPath)
   const invalid = validateExportName(name, platform)
   if (invalid) return { refused: invalid }
@@ -112,7 +113,8 @@ export async function planDestination(
     const info = await lstat(join(directory, match)).catch(() => null)
     if (!info) return { refused: 'The existing file could not be inspected.' }
     if (info.isSymbolicLink()) return { refused: 'The destination is a symbolic link.' }
-    if (isDirectory !== info.isDirectory()) return { refused: 'The destination exists and is not the same kind of item.' }
+    if (isDirectory !== info.isDirectory())
+      return { refused: 'The destination exists and is not the same kind of item.' }
     existing = { name: match, dev: info.dev, ino: info.ino, size: info.size, mtimeMs: info.mtimeMs }
   }
   return { directory, name, destination: join(directory, name), existing, isDirectory }

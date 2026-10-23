@@ -21,7 +21,10 @@ export function SupportBundleSection(): JSX.Element {
     }
   }
   return (
-    <Section title="Diagnostics" desc="Export the app's logs for support. Never includes meetings, notes, or the knowledge graph.">
+    <Section
+      title="Diagnostics"
+      desc="Export the app's logs for support. Never includes meetings, notes, or the knowledge graph."
+    >
       <div className="flex flex-col items-center gap-2">
         <TextButton onClick={() => void exportBundle()} disabled={busy}>
           {busy ? 'Exporting…' : 'Export diagnostics bundle'}
@@ -105,10 +108,16 @@ export function UpdatesSection(): JSX.Element {
   }, [])
 
   return (
-    <Section title="Updates" desc="Métis installs a QA-approved Latest from Metis-Releases. Draft and prerelease builds are never offered." icon={RefreshCw}>
+    <Section
+      title="Updates"
+      desc="Métis installs a QA-approved Latest from Metis-Releases. Draft and prerelease builds are never offered."
+      icon={RefreshCw}
+    >
       <div className="flex flex-col items-center gap-2">
         {result?.current ? (
-          <span className="text-[12px] text-[color:var(--cl-muted-foreground)]">Installed version: {result.current}</span>
+          <span className="text-[12px] text-[color:var(--cl-muted-foreground)]">
+            Installed version: {result.current}
+          </span>
         ) : null}
 
         {result?.ok && result.available && phase === 'idle' && (
@@ -156,7 +165,9 @@ export function UpdatesSection(): JSX.Element {
         {downloadError && <span className="text-[11px] text-[var(--color-danger)]">{downloadError}</span>}
 
         {result?.ok && !result.available && phase === 'idle' && (
-          <span className="text-[12px] text-[color:var(--cl-muted-foreground)]">You&apos;re on the latest version.</span>
+          <span className="text-[12px] text-[color:var(--cl-muted-foreground)]">
+            You&apos;re on the latest version.
+          </span>
         )}
         {result && !result.ok && <span className="text-[12px] text-[var(--color-danger)]">{result.error}</span>}
         <TextButton onClick={check} disabled={checking}>

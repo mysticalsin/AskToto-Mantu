@@ -19,7 +19,10 @@ afterEach(async () => {
 const sha = (b: Buffer | string): string => createHash('sha256').update(b).digest('hex')
 
 function setup(opts: { chosen?: string; response?: number; platform?: NodeJS.Platform } = {}) {
-  const showSaveDialog = vi.fn(async () => ({ canceled: opts.chosen === '', filePath: opts.chosen ?? join(dir, 'out.md') }))
+  const showSaveDialog = vi.fn(async () => ({
+    canceled: opts.chosen === '',
+    filePath: opts.chosen ?? join(dir, 'out.md')
+  }))
   const showMessageBox = vi.fn(async (_o: unknown) => ({ response: opts.response ?? 0 }))
   const svc = createExportService({
     showSaveDialog,
@@ -173,7 +176,10 @@ describe('exportDirectory', () => {
   })
   it('removes the folder it created when an entry cannot be written', async () => {
     const { svc } = setup({ chosen: join(dir, 'bundle') })
-    const r = await svc.exportDirectory({ ...dreq, entries: [...dreq.entries, { name: '../escape.log', bytes: Buffer.from('x') }] })
+    const r = await svc.exportDirectory({
+      ...dreq,
+      entries: [...dreq.entries, { name: '../escape.log', bytes: Buffer.from('x') }]
+    })
     expect(r.ok).toBe(false)
     expect(await readdir(dir)).not.toContain('bundle')
   })
