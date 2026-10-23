@@ -12,7 +12,13 @@
  * With the user's setting OFF the window is capturable on purpose. Hidden worker windows are never composited.
  */
 
-export type NativeWindowId = 'overlay' | 'intelligence' | 'permission-helper' | 'import-decoder' | 'recap-pdf'
+export type NativeWindowId =
+  | 'overlay'
+  | 'intelligence'
+  | 'permission-helper'
+  | 'annotation'
+  | 'import-decoder'
+  | 'recap-pdf'
 
 /** `screen-saver` keeps the bar above full-screen apps; `floating` sits above System Settings, below system alerts. */
 export type AlwaysOnTopLevel = 'screen-saver' | 'floating' | null
@@ -23,8 +29,11 @@ export interface NativeWindowPolicy {
   site: { module: string; variable: string }
   /** True when the window is ever drawn on screen. False for hidden worker windows (`show: false`, never shown). */
   composited: boolean
-  /** `follows-setting`: setContentProtection(<the Hide from screen capture setting>). `none-never-shown`: no decision needed. */
-  contentProtection: 'follows-setting' | 'none-never-shown'
+  /**
+   * `follows-setting`: setContentProtection(<the Hide from screen capture setting>). `always`: setContentProtection(true)
+   * regardless of the setting (the annotation layer must never be in Métis's own captures, R038). `none-never-shown`: no decision needed.
+   */
+  contentProtection: 'follows-setting' | 'always' | 'none-never-shown'
   alwaysOnTop: AlwaysOnTopLevel
   /** With the setting ON can this window show in Métis's own captures or in a screen share or recording? */
   appearsInCaptureWhenProtected: false
@@ -59,6 +68,16 @@ export const NATIVE_WINDOW_MATRIX: readonly NativeWindowPolicy[] = [
     alwaysOnTop: 'floating',
     appearsInCaptureWhenProtected: false,
     appearsInCaptureWhenUnprotected: true
+  },
+  {
+    // G43: one transparent, click-through, non-focusable window per display that draws marks. Always excluded from capture.
+    id: 'annotation',
+    site: { module: 'windows/annotation-window', variable: 'win' },
+    composited: true,
+    contentProtection: 'always',
+    alwaysOnTop: 'screen-saver',
+    appearsInCaptureWhenProtected: false,
+    appearsInCaptureWhenUnprotected: false
   },
   {
     id: 'import-decoder',
@@ -96,8 +115,9 @@ export type UiSurfaceId =
 /**
  * Which native window draws each UI surface. Everything the user sees on the bar, the sidecar, the panels, the
  * confirm card, the task cards, the voice pill and screen marks is drawn inside the one overlay window, so it
- * inherits that window's protection and level. There is no separate native annotation window: a future one must
- * be added to NATIVE_WINDOW_MATRIX first, or the creation-site contract test fails.
+ * inherits that window's protection and level. Screen marks are the exception: they are drawn in the
+ * separate click-through annotation window (G43). A future window must be added to NATIVE_WINDOW_MATRIX first, or the
+ * creation-site contract test fails.
  */
 export const UI_SURFACE_HOST: Readonly<Record<UiSurfaceId, NativeWindowId>> = {
   'overlay-bar': 'overlay',
@@ -106,7 +126,7 @@ export const UI_SURFACE_HOST: Readonly<Record<UiSurfaceId, NativeWindowId>> = {
   'command-confirm-card': 'overlay',
   'task-cards': 'overlay',
   'voice-pill': 'overlay',
-  'screen-marks': 'overlay',
+  'screen-marks': 'annotation',
   'settings-and-onboarding': 'overlay',
   'review-and-history': 'overlay',
   'intelligence-dashboard': 'intelligence',
