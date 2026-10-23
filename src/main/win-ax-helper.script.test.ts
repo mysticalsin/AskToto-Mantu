@@ -11,12 +11,16 @@ const BASE = ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass']
 
 describe('metis-win-ax.ps1 under the real Windows PowerShell (G24)', () => {
   it.skipIf(!onWindows)('parses with no ParseError', () => {
+    // -Command would append trailing arguments to the command text, so the path travels in the environment and
+    // the command as -EncodedCommand (UTF-16LE base64), which no Windows argument quoting can alter.
     const command =
-      '$e=$null;$t=$null;[void][System.Management.Automation.Language.Parser]::ParseFile($args[0],[ref]$t,[ref]$e);' +
+      '$e=$null;$t=$null;[void][System.Management.Automation.Language.Parser]::ParseFile($env:METIS_PARSE_TARGET,[ref]$t,[ref]$e);' +
       "if($e.Count -gt 0){$e|ForEach-Object{[Console]::Error.WriteLine($_.Message+' @'+$_.Extent.StartLineNumber)};exit 1};exit 0"
-    const result = spawnSync(WINDOWS_POWERSHELL, [...BASE, '-Command', command, SCRIPT], {
+    const encoded = Buffer.from(command, 'utf16le').toString('base64')
+    const result = spawnSync(WINDOWS_POWERSHELL, [...BASE, '-EncodedCommand', encoded], {
       encoding: 'utf8',
-      timeout: 60_000
+      timeout: 60_000,
+      env: { ...process.env, METIS_PARSE_TARGET: SCRIPT }
     })
     expect(result.stderr).toBe('')
     expect(result.status).toBe(0)
