@@ -146,3 +146,35 @@ describe('setOperatorEntitlementsSnapshotForTests', () => {
     expect(mod.operatorGate('listen')).toEqual({ allowed: true })
   })
 })
+
+describe('G79 array entitlements, meters and plan snapshot', () => {
+  const meter = {
+    id: 'managed_tokens',
+    label: 'Managed AI tokens',
+    unit: 'tokens',
+    limit: 50_000,
+    used: 12_000,
+    resetAt: 4_000_000_000_000,
+    window: 'day'
+  }
+  it('a Worker heartbeat with array entitlements grants operator_keys', async () => {
+    const mod = await importFresh()
+    mod.recordOperatorHeartbeatResult(true, { tier: 'metis', entitlements: ['ask', 'operator_keys'], integrationsVersion: 0 })
+    expect(mod.operatorEntitled('operator_keys')).toBe(true)
+  })
+  it('records meters and clears them on a denial (json null)', async () => {
+    const mod = await importFresh()
+    mod.recordOperatorHeartbeatResult(true, { tier: 'metis', entitlements: ['ask'], meters: [meter] })
+    expect(mod.operatorLiveMeters().map((m) => m.id)).toEqual(['managed_tokens'])
+    mod.recordOperatorHeartbeatResult(true, null)
+    expect(mod.operatorLiveMeters()).toEqual([])
+  })
+  it('reset returns operatorPlanSnapshot to checking', async () => {
+    const mod = await importFresh()
+    expect(mod.operatorPlanSnapshot().state).toBe('checking')
+    mod.recordOperatorHeartbeatResult(true, { tier: 'metis', entitlements: ['ask'], meters: [meter] })
+    expect(mod.operatorPlanSnapshot().state).toBe('licensed')
+    mod.resetOperatorEntitlementsState()
+    expect(mod.operatorPlanSnapshot().state).toBe('checking')
+  })
+})

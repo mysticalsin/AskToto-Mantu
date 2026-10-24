@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi, beforeEach } from 'vitest'
 import { enqueueOperatorItem, loadQueueState } from './operator-queue'
+import { nextAskRoute } from '@shared/ask-routing'
 
 vi.mock('electron', () => ({ app: { getVersion: () => '1.8.2', getPath: () => '/tmp' } }))
 const durableMachineId = vi.hoisted(() => vi.fn((): string | null => 'machine-test'))
@@ -82,6 +83,36 @@ describe('heartbeat fundedProviders — IDs only, never secrets', () => {
     expect(beat.ok).toBe(false)
     expect(operatorFundedProviders()).toEqual([])
     expect(metadata.setSettings).toHaveBeenCalledWith(expect.objectContaining({ operatorTier: null }))
+  })
+
+  it('a licensed seat with no personal API key gets the managed provider from an array-shape heartbeat', async () => {
+    setOperatorFetchForTests(
+      async () =>
+        new Response(
+          JSON.stringify({
+            ok: true,
+            approved: true,
+            tier: 'metis',
+            entitlements: ['ask', 'operator_keys'],
+            fundedProviders: ['cloudflare']
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } }
+        )
+    )
+    // A configured licence seat is gated by the entitlements it was told about: the live settings must say so.
+    const live = metadata.settings as Record<string, unknown>
+    const before = { ...live }
+    Object.assign(live, { operatorUrl: 'https://operator.test', operatorLicenseToken: 'METIS-OP-1.test' })
+    try {
+      const beat = await operatorHeartbeat({ operatorUrl: 'https://operator.test', operatorLicenseToken: 'METIS-OP-1.test' })
+      expect(beat.ok).toBe(true)
+      const fundedProviders = operatorFundedProviders()
+      expect(fundedProviders).toEqual(['cloudflare'])
+      expect(nextAskRoute({ cliConnected: {}, fundedProviders })).toEqual({ provider: 'cloudflare', tier: 'operator' })
+    } finally {
+      for (const key of Object.keys(live)) delete live[key]
+      Object.assign(live, before)
+    }
   })
 
   it('stores heartbeat IDs in RAM only and never treats a secret as a provider id', async () => {

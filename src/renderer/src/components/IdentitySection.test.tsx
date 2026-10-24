@@ -20,7 +20,10 @@ describe('MQA-304 — one working licence activation surface', () => {
     ].join('\n')
     const profile = source.slice(source.indexOf("{tab === 'profile' && ("), source.indexOf("{tab === 'about' && ("))
     expect(profile).toContain('<OperatorLicenseCard refreshSettings={refreshSettings} showIdentity />')
-    expect(source).toContain('<IdentitySection managedTier={status?.tier ?? null} />')
+    // G79: while the plan is still being checked the last confirmed tier is shown, never a blank Free.
+    expect(source).toContain(
+      '<IdentitySection managedTier={checking ? (plan?.lastKnownTier ?? null) : (status?.tier ?? null)} />'
+    )
     expect(source).toContain("aria-label=\"Métis licence key\"")
     const identity = readFileSync(join(__dirname, 'IdentitySection.tsx'), 'utf8')
     expect(identity).not.toMatch(/memberLicenseActivate|memberLicenseImportFile/)

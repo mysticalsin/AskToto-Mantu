@@ -528,6 +528,20 @@ export function d1Store(db: D1DatabaseLike): OperatorStore {
       const r = await db.prepare('SELECT * FROM asks ORDER BY ts DESC LIMIT ?').bind(limit).all<AskRow>()
       return r.results
     },
+    async sumSeatManagedTokensSince(deviceId, since) {
+      try {
+        const row = await db
+          .prepare(
+            "SELECT SUM(COALESCE(input_tokens, 0) + COALESCE(output_tokens, 0)) AS used FROM asks WHERE device_id = ? AND ts >= ? AND path_tag IN ('portal-cf', 'portal-direct')"
+          )
+          .bind(deviceId, since)
+          .first<{ used: number | null }>()
+        return row?.used ?? 0
+      } catch {
+        // asks.path_tag not migrated on this D1: the usage is unknown, never zero.
+        return null
+      }
+    },
     async getAsk(id) {
       return (await db.prepare('SELECT * FROM asks WHERE id = ?').bind(id).first<AskRow>()) ?? null
     },

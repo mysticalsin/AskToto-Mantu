@@ -7,6 +7,7 @@
  * side of the same contract.
  */
 import { isConnectorKind, type ConnectorKind } from './operator-connectors'
+import { parseOperatorMeters, type OperatorMeter } from './operator-meters'
 
 // ── Heartbeat response additions ──────────────────────────────────────────────────────────────────
 
@@ -53,6 +54,13 @@ export function askOnlyOperatorEntitlements(): OperatorEntitlements {
 export function parseOperatorEntitlements(raw: unknown): OperatorEntitlements {
   const out = emptyOperatorEntitlements()
   if (!raw || typeof raw !== 'object') return out
+  // The Worker heartbeat sends a string array of granted keys; unknown or non-string members are dropped.
+  if (Array.isArray(raw)) {
+    for (const key of OPERATOR_ENTITLEMENT_KEYS) {
+      if (raw.includes(key)) out[key] = true
+    }
+    return out
+  }
   const obj = raw as Record<string, unknown>
   for (const key of OPERATOR_ENTITLEMENT_KEYS) {
     if (obj[key] === true) out[key] = true
@@ -70,6 +78,7 @@ export interface OperatorHeartbeatEntitlementFields {
   tier: OperatorTier | null
   entitlements: OperatorEntitlements
   integrationsVersion: number
+  meters: OperatorMeter[]
 }
 
 /** Parse the three PLAN.md-section-3 additions off a heartbeat response body. `approved` and
@@ -77,13 +86,14 @@ export interface OperatorHeartbeatEntitlementFields {
  *  the NEW fields only. */
 export function parseOperatorHeartbeatEntitlements(json: unknown): OperatorHeartbeatEntitlementFields {
   if (!json || typeof json !== 'object') {
-    return { tier: null, entitlements: emptyOperatorEntitlements(), integrationsVersion: 0 }
+    return { tier: null, entitlements: emptyOperatorEntitlements(), integrationsVersion: 0, meters: [] }
   }
   const obj = json as Record<string, unknown>
   return {
     tier: parseOperatorTier(obj.tier),
     entitlements: parseOperatorEntitlements(obj.entitlements),
-    integrationsVersion: parseOperatorIntegrationsVersion(obj.integrationsVersion)
+    integrationsVersion: parseOperatorIntegrationsVersion(obj.integrationsVersion),
+    meters: parseOperatorMeters(obj.meters)
   }
 }
 

@@ -234,3 +234,36 @@ describe('parseOperatorIntegrationsResponse', () => {
     expect(parsed?.integrations.map((i) => i.kind)).toEqual([...CONNECTOR_KINDS])
   })
 })
+
+describe('Worker array wire shape (G79)', () => {
+  it('parses the Worker array wire shape into the boolean map', () => {
+    expect(parseOperatorEntitlements(['ask', 'operator_keys'])).toEqual({
+      ...emptyOperatorEntitlements(),
+      ask: true,
+      operator_keys: true
+    })
+  })
+  it('drops unknown and non-string array members', () => {
+    expect(parseOperatorEntitlements(['ask', 'bogus', 7, null, { listen: true }, true])).toEqual({
+      ...emptyOperatorEntitlements(),
+      ask: true
+    })
+  })
+  it('still parses the legacy boolean object shape', () => {
+    expect(parseOperatorEntitlements({ listen: true, ask: 'true' })).toEqual({
+      ...emptyOperatorEntitlements(),
+      listen: true
+    })
+  })
+  it('parseOperatorHeartbeatEntitlements returns parsed meters', () => {
+    const parsed = parseOperatorHeartbeatEntitlements({
+      tier: 'metis',
+      entitlements: ['ask'],
+      meters: [
+        { id: 'managed_tokens', label: 'Managed AI tokens', unit: 'tokens', limit: 50, used: 5, resetAt: 9, window: 'day' },
+        { id: 'bad', label: 'x', unit: 'tokens', limit: -1, used: 0, resetAt: null, window: 'day' }
+      ]
+    })
+    expect(parsed.meters.map((m) => m.id)).toEqual(['managed_tokens'])
+  })
+})

@@ -43,6 +43,7 @@ import { pruneRetention } from './retention'
 import { d1SchemaStatus } from './routes/admin-core'
 import { looksLikeSecret } from './redact'
 import type { AskRow, OperatorStore, SeatRow } from './store'
+import { resolveSeatMeters } from './meters'
 import { resolveTierAndEntitlements } from './tiers'
 import { binaryAssetResponse, isBinaryAssetPath, isPublicAssetPath, publicAssetResponse } from './assets'
 import { handleAsk } from './ask'
@@ -623,6 +624,7 @@ async function heartbeat(
     tier,
     entitlements,
     integrationsVersion,
+    meters: await resolveSeatMeters(store, stored, deviceId, now),
     ...(typeof body.queued === 'number' ? { queued: body.queued } : {}),
     ...(typeof body.dropped === 'number' ? { dropped: body.dropped } : {})
   })
