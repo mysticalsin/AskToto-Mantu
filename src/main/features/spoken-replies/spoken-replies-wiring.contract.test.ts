@@ -34,8 +34,9 @@ describe('spoken replies wiring (G27)', () => {
 
   it('the ask turn registry is observed, so main hears the answer from its own stream and never from the renderer', () => {
     expect(index).toMatch(
-      /createAskTurns\(\{[^}]*observe: fanOutAskObservers\(spokenRepliesWiring\.runtime\.observeAsk[^}]*\}\)/
+      /createAskTurns\(\{[^}]*observe: conversation\.observeAsk\(spokenRepliesWiring\.runtime\.observeAsk\)[^}]*\}\)/
     )
+    expect(read('../../lifecycle/conversation-wiring')).toMatch(/fanOutAskObservers\(spoken,/)
     const turns = read('../session-context/ask-turn')
     expect(turns).toMatch(/deps\.observe\?\.\(event\)/)
   })

@@ -53,14 +53,10 @@ import { operatorVisionModel } from '@shared/operator-vision'
 import { createMainTranscriptSaveReceipts, type TranscriptSaveSideEffect } from './features/meetings/main-save-receipts'
 import { installInputMicPermissionHandlers } from './input-mic-permissions'
 import { MeetingMicCaptureAuthority } from './meeting-mic-capture-authority'
-import {
-  MEETING_START_ACTION,
-  MeetingStartActivationAuthority,
-  type MeetingStartActivationFrame
-} from './meeting-start-activation-authority'
+import { MEETING_START_ACTION, MeetingStartActivationAuthority } from './meeting-start-activation-authority'
 import { CommandMicActivationAuthority, commandMicOwner } from './command-mic-activation-authority'
 import { CommandSpeechCapture } from './command-speech-capture'
-import { InputSessionStopRequestSchema, isSpeechCapturePurpose } from '@shared/input-session'
+import { InputSessionStopRequestSchema } from '@shared/input-session'
 import {
   IPC,
   LiveMeetingStartedAtSchema,
@@ -735,7 +731,13 @@ import { registerWorkspaceIpc } from './ipc/workspace-ipc'
 import { registerImportAudioIpc } from './ipc/import-audio-ipc'
 import { RecoveredDraftCount } from './recovered-draft-count'
 import { registerInputCaptureIpc } from './ipc/input-capture-ipc'
-import { createConversationRuntime } from './features/conversation/conversation-runtime'
+import {
+  activationFrameFromEvent,
+  commandLeaseGuard,
+  commandSpeechOwnerResolver,
+  createConversationWiring,
+  mainActivationFrame
+} from './lifecycle/conversation-wiring'
 import {
   bindRendererResets,
   createOwnerSessionWiring,
@@ -837,8 +839,6 @@ import {
 } from './speech-pack-bootstrap'
 import { getPackageRuntimeContract } from './features/components/speech-pack/package-runtime-state'
 import { registerAsrAssetsIpc } from './ipc/asr-assets-ipc'
-import { registerConversationIpc } from './ipc/conversation-ipc'
-import { fanOutAskObservers } from './features/session-context/ask-observers'
 import { registerParakeetAssetsIpc } from './ipc/parakeet-assets-ipc'
 import {
   ensureImportAsrAssets,
@@ -1376,11 +1376,10 @@ let commandMicActivationLeaseId: string | null = null
 let commandSpeechCapture: CommandSpeechCapture | null = null
 let voiceActions: ReturnType<typeof createVoiceActionsRuntime> | null = null
 let revokeSpokenReplies: (() => void) | null = null
-let conversationRuntime: ReturnType<typeof createConversationRuntime> | null = null
-let conversationAskTurns: { cancel(id: string): void } | null = null
+const conversation = createConversationWiring()
 const { inputSessionAuthority, clearCommandMicLeaseTimer, armCommandMicLeaseTimeout } = createMainInputSessionWiring({
   voiceActions: () => voiceActions,
-  conversation: () => conversationRuntime,
+  conversation: () => conversation.runtime,
   revokeSpokenReplies: () => revokeSpokenReplies?.(),
   commandMicActivationLeaseId: () => commandMicActivationLeaseId,
   clearCommandMicActivationLeaseId: () => {
@@ -1404,29 +1403,8 @@ function currentInputSessionContext(): { authSessionGeneration: number; contextR
 const currentBrainContextOwner = createBrainContextOwner({ inputContext: currentInputSessionContext })
 const micGate = createCommandMicAvailability({ requireAuth, getSettings, modelReady: parakeetModelReady })
 const { availability: commandMicAvailability, refreshPresence } = micGate
-function commandLeaseCurrentAndAllowed(sessionId: string): boolean {
-  const availability = commandMicAvailability()
-  if (!availability.ok) {
-    const active = inputSessionAuthority.activeLease
-    if (isSpeechCapturePurpose(active?.purpose) && active?.sessionId === sessionId) {
-      inputSessionAuthority.hardStop(availability.reason === 'unauthorized' ? 'sign-out' : 'cancelled')
-    }
-    return false
-  }
-  const active = inputSessionAuthority.activeLease
-  return active?.sessionId === sessionId && isSpeechCapturePurpose(active.purpose)
-}
-function currentMainActivationFrame(): MeetingStartActivationFrame | null {
-  if (!win || win.isDestroyed()) return null
-  const frame = win.webContents.mainFrame
-  if (!frame) return null
-  return {
-    webContentsId: win.webContents.id,
-    frameId: `${frame.processId}:${frame.routingId}`,
-    isTopFrame: frame.parent === null,
-    url: frame.url
-  }
-}
+const commandLeaseCurrentAndAllowed = commandLeaseGuard(commandMicAvailability, inputSessionAuthority)
+const currentMainActivationFrame = mainActivationFrame(() => win)
 const meetingStartActivationAuthority = new MeetingStartActivationAuthority({
   state: () => {
     const frame = currentMainActivationFrame()
@@ -1455,25 +1433,13 @@ const commandMicActivationAuthority = new CommandMicActivationAuthority({
     }
   }
 })
-function commandSpeechOwnerFromEvent(event: Electron.IpcMainInvokeEvent): ReturnType<typeof commandMicOwner> {
-  inputSessionAuthority.reconcileContext(currentInputSessionContext())
-  if (!requireAuth()) {
-    inputSessionAuthority.hardStop('sign-out')
-    return null
-  }
-  const frame = activationFrameFromEvent(event)
-  const currentFrame = currentMainActivationFrame()
-  if (
-    !frame ||
-    !currentFrame ||
-    frame.webContentsId !== currentFrame.webContentsId ||
-    frame.frameId !== currentFrame.frameId ||
-    frame.url !== currentFrame.url ||
-    frame.url !== (win && !win.isDestroyed() ? win.webContents.getURL() : '')
-  )
-    return null
-  return commandMicOwner(frame, currentInputSessionContext())
-}
+const commandSpeechOwnerFromEvent = commandSpeechOwnerResolver({
+  authority: inputSessionAuthority,
+  currentContext: currentInputSessionContext,
+  requireAuth,
+  mainFrame: currentMainActivationFrame,
+  windowUrl: () => (win && !win.isDestroyed() ? win.webContents.getURL() : '')
+})
 commandSpeechCapture = new CommandSpeechCapture({
   isCurrent: (owner, sessionId) =>
     Boolean(
@@ -1505,10 +1471,10 @@ const spokenRepliesWiring = createSpokenRepliesWiring({
   getSettings,
   meetingLive: () => inputSessionAuthority.hasMeetingReservation || listeningActive,
   window: () => win,
-  onReplyLifecycle: (event) => conversationRuntime?.onReplyLifecycle(event)
+  onReplyLifecycle: conversation.onReplyLifecycle
 })
 revokeSpokenReplies = spokenRepliesWiring.onOwnerRevoked
-conversationRuntime = createConversationRuntime({
+conversation.init({
   frameFromEvent: activationFrameFromEvent,
   mainFrame: currentMainActivationFrame,
   currentContext: currentInputSessionContext,
@@ -1522,8 +1488,7 @@ conversationRuntime = createConversationRuntime({
   availability: commandMicAvailability,
   authority: inputSessionAuthority,
   ensureParakeet: ensureParakeetModel,
-  transcribe: parakeetTranscribe,
-  cancelAsk: (id) => conversationAskTurns?.cancel(id)
+  transcribe: parakeetTranscribe
 })
 voiceActions = createVoiceActionsRuntime({
   spokenReplies: spokenRepliesWiring.runtime,
@@ -1540,16 +1505,6 @@ voiceActions = createVoiceActionsRuntime({
   speechBusy: () => listeningActive || importJobs?.hasMemoryHeavyWork() === true,
   turns: createMainVoiceTurns({ commandControl, authority: inputSessionAuthority, window: () => win })
 })
-function activationFrameFromEvent(event: Electron.IpcMainInvokeEvent): MeetingStartActivationFrame | null {
-  const frame = event.senderFrame
-  if (!frame) return null
-  return {
-    webContentsId: event.sender.id,
-    frameId: `${frame.processId}:${frame.routingId}`,
-    isTopFrame: frame.parent === null,
-    url: frame.url
-  }
-}
 const meetingMicCaptureAuthority = new MeetingMicCaptureAuthority({
   currentState: () => ({
     mainWebContentsId: win && !win.isDestroyed() ? win.webContents.id : null,
@@ -5574,7 +5529,7 @@ function registerIpc(): void {
     }
     lastAppliedManagedSnapshot = managedSnap
     voiceActions?.refresh() // a managed or user change to voice actions applies on the next poll (idempotent)
-    conversationRuntime?.refresh()
+    conversation.refresh()
     // Close the managed-config gap described above — runs on every poll, not just on detected drift,
     // so it also catches encryption enabled at boot with a stale plaintext graph already on disk.
     purgeGraphIfEncryptedAndStale('encryption-active')
@@ -5966,7 +5921,7 @@ function registerIpc(): void {
     // or Local AI being enabled/disabled/provisioned) — takes effect immediately, no relaunch.
     refreshScreenPreprocess()
     voiceActions?.refresh()
-    conversationRuntime?.refresh()
+    conversation.refresh()
     // At-rest encryption just turned on → purge any previously-built CLEARTEXT knowledge graph so it
     // can't leak meeting topics/entities the encryption is meant to protect. (Builds are already
     // blocked while encryption is on, so no graph will be regenerated until it's turned back off.)
@@ -7429,10 +7384,10 @@ function registerIpc(): void {
     send: (channel, payload) => win?.webContents.send(channel, payload),
     streams,
     metrics: askMetrics,
-    observe: fanOutAskObservers(spokenRepliesWiring.runtime.observeAsk, (e) => conversationRuntime?.observeAsk(e)),
+    observe: conversation.observeAsk(spokenRepliesWiring.runtime.observeAsk),
     quietAction: quietActionForAsk
   })
-  conversationAskTurns = askTurns
+  conversation.bindAskTurns(askTurns)
   ipcMain.handle(IPC.askStart, async (e, raw) => {
     assertMainWindow(e)
     const id = raw && typeof raw === 'object' && 'id' in (raw as object) ? String((raw as { id: unknown }).id) : ''
@@ -7447,7 +7402,7 @@ function registerIpc(): void {
     try {
       const req = AskStartSchema.parse(raw)
       askTiming.start(req.id, req.mode)
-      if (!conversationRuntime?.authorizeAsk(e, req)) return askTurns.fail(req.id, 'Could not start the answer.')
+      if (!conversation.authorizeAsk(e, req)) return askTurns.fail(req.id, 'Could not start the answer.')
       // Brain context is main-only. Clear renderer input before any early return or mode gate so a
       // replay/fact-check/unavailable local store can never smuggle stale context into a provider prompt.
       req.brainContext = undefined
@@ -7468,7 +7423,7 @@ function registerIpc(): void {
       // this handler is the trust boundary. Keyed on the payload, not the mode: an image may ride any mode.
       if (req.image && privateViewOn()) {
         auditLog('capture.blocked', { reason: 'private_view', at: 'ask' })
-        conversationRuntime?.failAsk(req.id)
+        conversation.failAsk(req.id)
         win?.webContents.send(IPC.streamError, { id: req.id, message: PRIVATE_VIEW_BLOCKED_MESSAGE })
         return
       }
@@ -7478,7 +7433,7 @@ function registerIpc(): void {
         const verdict = screenObservation.checkSend(req.image)
         if (!verdict.ok) {
           auditLog('capture.dropped', { reason: 'stale_generation', at: 'ask' })
-          conversationRuntime?.failAsk(req.id)
+          conversation.failAsk(req.id)
           win?.webContents.send(IPC.streamError, { id: req.id, message: verdict.message })
           return
         }
@@ -7490,7 +7445,7 @@ function registerIpc(): void {
         const gate = operatorGate('recap')
         if (!gate.allowed) {
           auditLog('operator.gate.blocked', { feature: 'recap' })
-          conversationRuntime?.failAsk(req.id)
+          conversation.failAsk(req.id)
           win?.webContents.send(IPC.streamError, { id: req.id, message: gate.reason || 'Recap is not available.' })
           return
         }
@@ -7503,7 +7458,7 @@ function registerIpc(): void {
         if (caveman.changed) s = setSettings({ askCaveman: caveman.next })
         req.prompt = caveman.visiblePrompt
         if (caveman.changed && !req.prompt.trim() && !req.image && !req.wantsScreenContext) {
-          conversationRuntime?.failAsk(req.id)
+          conversation.failAsk(req.id)
           win?.webContents.send(IPC.streamDone, { id: req.id })
           return
         }
@@ -7533,7 +7488,7 @@ function registerIpc(): void {
         { registry: owners.meetingContexts, frame: e.senderFrame, redact: s.redactSensitive, manifest },
         contextGate
       )
-      if (contextRefusal) conversationRuntime?.failAsk(req.id)
+      if (contextRefusal) conversation.failAsk(req.id)
       if (contextRefusal) return void win?.webContents.send(IPC.streamError, { id: req.id, message: contextRefusal })
       // G14: a live-meeting ask takes its turn on the meeting's SessionQueue; `turn.send` drops stale output.
       const turn = await askTurns.begin({ id: req.id, mode: req.mode, handle: contextGate.handle(), ask: req })
@@ -8871,7 +8826,7 @@ function registerIpc(): void {
       commandMicActivationLeaseId = id
     },
     getCommandSpeechCapture: () => commandSpeechCapture,
-    conversationCapture: conversationRuntime ?? undefined,
+    conversationCapture: conversation.runtime ?? undefined,
     currentInputSessionContext,
     captureAuthSessionBoundary,
     commandMicAvailability,
@@ -8889,8 +8844,7 @@ function registerIpc(): void {
       commandSpeechCancel: CommandSpeechCancelSchema
     }
   })
-  if (conversationRuntime)
-    registerConversationIpc({ ipcMain, assertMainWindow, handlers: conversationRuntime.handlers })
+  conversation.registerIpc(ipcMain, assertMainWindow)
   if (voiceActions) registerVoiceActionsIpc(ipcMain, assertMainWindow, voiceActions)
   spokenRepliesWiring.registerIpc(ipcMain, assertMainWindow)
   registerCommandConfirmIpc(ipcMain, assertMainWindow, commandConfirm, () => win)

@@ -152,7 +152,7 @@ export function VoiceActionsSection({
           onChange={(enabled) =>
             void patch({ voiceActions: { ...voice, conversation: { ...voice.conversation, enabled } } })
           }
-          disabled={!on || managed || cloudOnly}
+          disabled={!on || settings.managedKeys.includes('voiceActions') || cloudOnly}
           managedChip={managed}
         />
         <button

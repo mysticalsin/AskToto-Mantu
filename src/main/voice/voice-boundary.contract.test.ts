@@ -64,8 +64,9 @@ describe('voice actions boundary: the activation is main-only and the meeting pi
     const index = readModuleSource(__dirname, '../index').text
     // G27 moved the authority hooks into the lifecycle wiring; index.ts hands it the live runtime getter.
     const wiring = readModuleSource(__dirname, '../lifecycle/input-session-wiring').text
-    expect(wiring).toMatch(/onHardStop: \(reason[^)]*\) => deps\.voiceActions\(\)\?\.onHardStop\(reason\)/)
-    expect(wiring).toMatch(/onMeetingReserved: \(\) => deps\.voiceActions\(\)\?\.onMeetingReserved\(\)/)
+    // G28 widened both hooks to block bodies that also reach the conversation runtime; the voice call stays first.
+    expect(wiring).toMatch(/onHardStop: \(reason[^)]*\) => \{\s*deps\.voiceActions\(\)\?\.onHardStop\(reason\)/)
+    expect(wiring).toMatch(/onMeetingReserved: \(\) => \{\s*deps\.voiceActions\(\)\?\.onMeetingReserved\(\)/)
     expect(index).toContain('voiceActions: () => voiceActions,')
     expect(index).toMatch(/onFinished: \(sessionId, result\) => voiceActions\?\.onSpeechFinished\(sessionId, result\)/)
     expect(index).toContain('registerVoiceActionsIpc(ipcMain, assertMainWindow, voiceActions)')
