@@ -16,6 +16,7 @@ import { createSpokenRepliesPreloadApi } from './spoken-replies'
 import { createArtifactsPreloadApi } from './artifacts'
 import { createAssistantsPreloadApi } from './assistants'
 import { createUserMemoryPreloadApi } from './user-memory'
+import { createMeetingRecordPreloadApi } from './meeting-record'
 import { createConnectorAccountsPreloadApi } from './connector-accounts'
 import { createQuietPreloadApi } from './quiet'
 
@@ -39,6 +40,7 @@ export function createFeaturePreloadApis(ipc: IpcRenderer) {
     ...createArtifactsPreloadApi(ipc),
     ...createAssistantsPreloadApi(ipc),
     ...createUserMemoryPreloadApi(ipc),
+    ...createMeetingRecordPreloadApi(ipc),
     ...createConnectorAccountsPreloadApi(ipc),
     ...createQuietPreloadApi(ipc)
   }

@@ -22,6 +22,7 @@ import type { RendererResetSource } from '../features/meetings/session-closure'
 import { bootstrapAssistants } from './assistants-wiring'
 import { bootstrapDictationMemory } from './dictation-memory-wiring'
 import { bootstrapUserMemory } from './user-memory-wiring'
+import { bootstrapMeetingRecord } from './meeting-record-wiring'
 import { bootstrapLiveMeetingJournal } from './live-meeting-journal-wiring'
 import { bindMeetingSpeechInvalidation, bootstrapMeetingSpeech } from './meeting-speech-persistence-wiring'
 import { bootMainMemoryPartitions } from './memory-partition-wiring'
@@ -172,6 +173,13 @@ export function createOwnerSessionWiring(deps: OwnerSessionWiringDeps): OwnerSes
     requireAuth: () => requireAuth(),
     userDataPath: () => app.getPath('userData'),
     audit: (record) => auditLog('user.memory', { ...record })
+  })
+  // G78 structured meeting record: decisions, questions and actions with transcript citations and the owner's edits.
+  bootstrapMeetingRecord({
+    ipcMain,
+    authorizeSender,
+    requireAuth: () => requireAuth(),
+    audit: (record) => auditLog('meeting.record', { ...record })
   })
   return {
     ownerSession,

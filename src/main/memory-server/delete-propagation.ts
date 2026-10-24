@@ -1,4 +1,6 @@
 import { editMeetingIndex, removeMeetingFile } from '../meeting-files'
+import { removeMeetingRecordEdits } from '../features/meeting-record'
+import { defaultRecordEditsDeps } from '../features/meeting-record/default-deps'
 import { deleteMemoryForLocalMeeting } from './meeting-deletion'
 
 /** Keep local deletion authoritative, then propagate a path-free source tombstone when the server is configured. */
@@ -15,6 +17,7 @@ export async function deleteMeetingWithMemoryPropagation(
   }
 
   await propagateMeetingMemoryDeletion(safeName)
+  await removeMeetingRecordEdits(defaultRecordEditsDeps, folder, safeName)
   try {
     const escaped = safeName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
     await editMeetingIndex(folder, (raw) =>
