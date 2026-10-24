@@ -84,6 +84,12 @@ export interface ConnectorExecutorDeps {
   handlers: ConnectorHandlers
   grants: ConnectorGrantSeam
   accounts: AccountResolver
+  /**
+   * The accounts the handlers will actually act as right now (built-in Graph handlers use the
+   * signed-in session). A call resolved to any other account is refused: a choice never has a different effect than
+   * the one shown. Absent means every resolved account is executable (tests, handlers that take `ctx.accountRef`).
+   */
+  executableAccounts?: (kind: ConnectorKind) => Promise<readonly AccountRef[]>
   writeGate: ConnectorWriteGate
   /** Metadata only: opId, revision, outcome. Never input or output content. */
   audit?: (event: string, metadata: Record<string, string | number | boolean>) => void
@@ -156,9 +162,18 @@ export function createConnectorExecutor(deps: ConnectorExecutorDeps): ConnectorE
       if (!parsed.success) return refuse('input_invalid')
 
       const candidates = deps.accounts.candidates(op.kind)
+      let executable: ReadonlySet<AccountRef> | undefined
+      if (deps.executableAccounts) {
+        try {
+          executable = new Set(await deps.executableAccounts(op.kind))
+        } catch {
+          executable = new Set()
+        }
+      }
       const resolution = resolveAccount({
         candidates,
         effect: op.effect,
+        ...(executable ? { executable } : {}),
         signals: {
           ...(call.accountRef ? { ownerChoice: call.accountRef } : {}),
           ...(call.sourceAccountRef ? { sourceAccount: call.sourceAccountRef } : {})
@@ -176,7 +191,10 @@ export function createConnectorExecutor(deps: ConnectorExecutorDeps): ConnectorE
                     label: candidate.label,
                     ...(candidate.maskedHint ? { maskedHint: candidate.maskedHint } : {}),
                     health: candidate.health,
-                    selectable: isAccountSelectable(candidate.health, op.effect)
+                    selectable:
+                      isAccountSelectable(candidate.health, op.effect) &&
+                      (!executable || executable.has(candidate.accountRef)),
+                    ...(executable && !executable.has(candidate.accountRef) ? { reason: 'sign_in' as const } : {})
                   }
                 ]
               : []
@@ -199,6 +217,8 @@ export function createConnectorExecutor(deps: ConnectorExecutorDeps): ConnectorE
         opId: op.opId,
         revision: snapshot.revision
       }
+      // The signed-in session is what the handler acts as. A different account would silently write elsewhere.
+      if (executable && !executable.has(accountRef)) return refuse('account_unavailable', provenance)
 
       let grant: 'granted' | 'stale' | 'transient'
       try {

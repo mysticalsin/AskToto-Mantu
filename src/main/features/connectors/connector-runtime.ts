@@ -8,6 +8,8 @@ import {
 } from '@shared/connector-catalog'
 import { getGraphTokenOutcome } from '../../auth'
 import { auditLog } from '../../logger'
+import { estimateMcpPushMinutes } from '@shared/time-saved-events'
+import { appendTimeSavedEvent } from '../../time-saved-log'
 import { OUTLOOK_DRAFT_CONSENT_COPY, OUTLOOK_EVENT_CONSENT_COPY, type OutlookWriteResult } from '../../outlook-write'
 import type { AccountResolver } from './account-ref'
 import type { ConnectorAccountRegistry } from './account-registry'
@@ -79,14 +81,36 @@ export function connectorExecutor(): ConnectorExecutor {
     handlers: createBuiltinHandlers(),
     grants: graphScopeGrants,
     accounts: registeredAccounts,
+    executableAccounts: async (kind) => {
+      const ref = await ensureCurrentConnectorAccount(kind)
+      return ref ? [ref] : []
+    },
     writeGate: createActionGuardWriteGate(),
     audit: (event, metadata) => auditLog(event as never, metadata as never)
   })
   return executor
 }
 
+/** The one success side effect of a catalog write, shared by the direct path and a write resumed from the card. */
+function recordWriteSuccess(id: string): void {
+  try {
+    appendTimeSavedEvent({
+      kind: 'mcp-push',
+      estimatedMinutes: estimateMcpPushMinutes(),
+      connector: 'outlook',
+      ids: { draft: id }
+    })
+  } catch {
+    /* the time-saved log is best effort */
+  }
+}
+
 function toLegacy(opId: string, result: ConnectorResult): OutlookWriteResult & { result: ConnectorResult } {
-  if (result.ok) return { ok: true, id: (result.output as { id: string }).id, result }
+  if (result.ok) {
+    const id = (result.output as { id: string }).id
+    if (result.receipt) recordWriteSuccess(id)
+    return { ok: true, id, result }
+  }
   const consent = result.needsConsent ? OUTLOOK_CONSENT_COPY[opId] : undefined
   return {
     ok: false,

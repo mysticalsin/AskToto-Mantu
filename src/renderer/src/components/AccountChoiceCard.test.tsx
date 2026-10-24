@@ -46,6 +46,7 @@ describe('AccountChoiceCard (G62)', () => {
     expect(accountOptionNote('healthy', true)).toBeNull()
     expect(accountOptionNote('degraded', false)).toBe('Having trouble connecting right now')
     expect(accountOptionNote('disconnected', false)).toBe('Not available')
+    expect(accountOptionNote('healthy', false, 'sign_in')).toBe('Sign in with this account to use it')
     expect(accountOptionLabel(card.options[1])).toBe('Use Personal')
   })
 })

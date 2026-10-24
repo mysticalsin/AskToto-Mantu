@@ -32,6 +32,8 @@ export function resolveAccount(input: {
   candidates: readonly AccountCandidate[]
   effect: ConnectorEffect
   signals?: AccountSignals
+  /** Accounts the connector can really run as right now (the signed-in identity). Absent means every account can. */
+  executable?: ReadonlySet<AccountRef>
 }): AccountResolution {
   const live = input.candidates.filter((candidate) => candidate.health !== 'disconnected')
   const named = (ref: AccountRef, rule: AccountResolutionRule): AccountResolution =>
@@ -42,12 +44,14 @@ export function resolveAccount(input: {
   if (signals.ownerChoice) return named(signals.ownerChoice, 'explicit_owner_choice')
   if (signals.sourceAccount) return named(signals.sourceAccount, 'source_item_account')
 
-  if (live.length === 0) return { ok: false, reason: 'no_account' }
+  const pool = input.executable ? live.filter((c) => input.executable?.has(c.accountRef)) : live
+  if (live.length === 0 || pool.length === 0) return { ok: false, reason: 'no_account' }
   if (live.length === 1) return { ok: true, accountRef: live[0].accountRef, rule: 'only_account' }
-  const ready = live.filter((candidate) => isConnectorAccountReady(candidate.health, input.effect))
+  if (pool.length === 1) return { ok: true, accountRef: pool[0].accountRef, rule: 'only_executable_account' }
+  const ready = pool.filter((candidate) => isConnectorAccountReady(candidate.health, input.effect))
   if (ready.length === 1) return { ok: true, accountRef: ready[0].accountRef, rule: 'single_healthy_account' }
   // Nothing proven healthy: accounts still connecting can be verified on use, so the owner may pick among them.
-  if (ready.length === 0 && !live.some((candidate) => candidate.health === 'connecting')) {
+  if (ready.length === 0 && !pool.some((candidate) => candidate.health === 'connecting')) {
     return { ok: false, reason: 'not_ready' }
   }
   return { ok: false, reason: 'ambiguous', options: [...live] }
