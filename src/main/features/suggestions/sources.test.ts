@@ -10,7 +10,8 @@ const provenance = {
   connectorKind: 'outlook',
   accountRef: ACCOUNT,
   opId: 'outlook.calendar.today',
-  revision: 1
+  revision: 1,
+  accountRule: 'only_account'
 } as const
 const ctx = { signal: new AbortController().signal, now: NOW }
 

@@ -5,7 +5,7 @@ import { createReadOnlyConnectorPort, ResearchWriteRefused } from './read-only-p
 const okResult = (opId: string): ConnectorResult => ({
   ok: true,
   output: { events: [] },
-  provenance: { connectorKind: 'outlook', accountRef: 'acct_x' as never, opId, revision: 3 }
+  provenance: { connectorKind: 'outlook', accountRef: 'acct_x' as never, opId, revision: 3, accountRule: 'only_account' }
 })
 
 function setup() {
