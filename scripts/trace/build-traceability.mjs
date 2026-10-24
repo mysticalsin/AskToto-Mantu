@@ -14,7 +14,7 @@ const SOURCE_REFERENCE_EXPECTATIONS = Object.freeze([
     // Re-pinned after Q05 (2.12): alias-map cache, unmerge guard and accept re-check added; the journal-first
     // order and the strict write gate the M2-0018 evidence below cites are unchanged (Opus review of d292ed59).
     // Re-pinned after G19 (2.12): the corruption-lock path follows the memory partition (one line, same line numbers).
-    reference_commit: '37e1cf4ca76d8eeb8e9a16c1daa55f870749a51b',
+    reference_commit: '5afcf673fab5c6fd12161b9223e13b7e200904d8',
     reference_path: 'src/main/brain/corrections.ts',
     // Re-pinned after G82 (2.12): a conflict copy's pre-erasure entries are dropped (same line numbers).
     expected_sha256: '5b47495ea1122d6580eda678ba94bf54e87be01efead81a4ac9d432ffba52116',
