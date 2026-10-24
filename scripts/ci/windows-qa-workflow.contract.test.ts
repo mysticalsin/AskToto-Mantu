@@ -35,6 +35,7 @@ function inputBlock(name: string): string {
 
 const capabilities = jobBlock('capabilities')
 const hkW = jobBlock('hk-w')
+const scenarios = jobBlock('scenarios')
 
 const probeKeys = [
   'runner.name',
@@ -63,9 +64,10 @@ const probeKeys = [
 ]
 
 describe('Windows QA workflow', () => {
-  it('offers the hk-w and capabilities suites and documents both dispatch commands', () => {
+  it('offers the hk-w, capabilities and scenarios suites and documents the dispatch commands', () => {
     const suite = inputBlock('suite')
-    expect(suite).toMatch(/options:\n\s+- hk-w\n\s+- capabilities\n?$/)
+    expect(suite).toMatch(/options:\n\s+- hk-w\n\s+- capabilities\n\s+- scenarios\n?$/)
+    expect(workflow).toContain('-f suite=scenarios')
     expect(workflow).toContain('-f suite=hk-w -f candidate_run=<run id> -f sha256=<Setup sha256>')
     expect(workflow).toContain('-f suite=capabilities')
   })
@@ -137,5 +139,24 @@ describe('Windows QA workflow', () => {
     expect(guardAt).toBeLessThan(steps.indexOf('actions/checkout'))
     expect(guardAt).toBeLessThan(steps.indexOf('npm ci'))
     expect(guardAt).toBeLessThan(steps.indexOf('gh run download'))
+  })
+
+  it('guards the scenarios job to main dispatch with contents: read, no secrets and no checkout credentials', () => {
+    expect(scenarios).toContain(
+      "if: github.event_name == 'workflow_dispatch' && inputs.suite == 'scenarios' && github.repository == 'mysticalsin/AskToto-Mantu' && github.ref == 'refs/heads/main'"
+    )
+    expect(scenarios).toContain('runs-on: windows-latest')
+    expect(scenarios).toMatch(/permissions:\n {6}contents: read\n/)
+    expect(scenarios).toContain('persist-credentials: false')
+    expect(scenarios).not.toMatch(/secrets\./i)
+    expect(scenarios).not.toContain('GH_TOKEN')
+    expect(scenarios).not.toContain('github.token')
+  })
+
+  it('uploads windows-qa-scenarios with if: always()', () => {
+    expect(scenarios).toMatch(/upload-artifact@[0-9a-f]{40}[^\n]*\n\s+if: always\(\)/)
+    expect(scenarios).toContain('name: windows-qa-scenarios')
+    expect(scenarios).toContain('retention-days: 14')
+    expect(scenarios).toContain('if-no-files-found: error')
   })
 })

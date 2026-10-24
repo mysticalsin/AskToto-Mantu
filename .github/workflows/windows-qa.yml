@@ -10,6 +10,8 @@ name: Windows QA
 # audio endpoint, dxdiag, OneDrive env). It has no checkout, runs no repository code and uses no credentials.
 #   gh workflow run windows-qa.yml --ref main -f suite=hk-w -f candidate_run=<run id> -f sha256=<Setup sha256>
 #   gh workflow run windows-qa.yml --ref main -f suite=capabilities
+#   gh workflow run windows-qa.yml --ref main -f suite=scenarios
+# The scenarios suite runs the headless vitest files listed in scripts/qa/windows-qa-scenarios.json (G89) on windows-latest.
 # The pull_request trigger on this file's own path only registers the workflow with GitHub (M2-0501): the
 # run it creates skips every job, uses no runner minutes and reaches no secret.
 run-name: ${{ github.event_name == 'pull_request' && 'Windows QA (registration)' || format('Windows QA {0}', inputs.suite) }}
@@ -28,6 +30,7 @@ on:
         options:
           - hk-w
           - capabilities
+          - scenarios
       candidate_run:
         description: qa-candidate.yml run id whose candidate-win artifact is measured (suite hk-w only)
         required: false
@@ -249,5 +252,39 @@ jobs:
         with:
           name: windows-qa-capabilities
           path: ${{ runner.temp }}/windows-qa-capabilities/
+          if-no-files-found: error
+          retention-days: 14
+
+  scenarios:
+    name: Headless scenarios (Windows)
+    if: github.event_name == 'workflow_dispatch' && inputs.suite == 'scenarios' && github.repository == 'mysticalsin/AskToto-Mantu' && github.ref == 'refs/heads/main'
+    runs-on: windows-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22.22.3
+          cache: npm
+      - run: npm ci
+      - name: Run the listed scenarios
+        run: |
+          $out = Join-Path $env:RUNNER_TEMP 'windows-qa-scenarios'
+          New-Item -ItemType Directory -Force -Path $out | Out-Null
+          $files = (Get-Content scripts/qa/windows-qa-scenarios.json -Raw | ConvertFrom-Json).files
+          npx vitest run @files --reporter=default --reporter=json --outputFile="$out/vitest.json"
+          if ($LASTEXITCODE -ne 0) { throw "windows-qa scenarios failed ($LASTEXITCODE)" }
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: windows-qa-scenarios
+          path: ${{ runner.temp }}/windows-qa-scenarios/
           if-no-files-found: error
           retention-days: 14

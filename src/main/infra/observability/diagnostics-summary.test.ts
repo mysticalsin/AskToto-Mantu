@@ -19,25 +19,29 @@ function line(event: string, detail: Record<string, unknown> = {}, ts = '2026-01
 
 describe('diagnostics summary', () => {
   it('aggregates boots, stalls, crashes, reveals and event counts', () => {
-    const summary = summarizeAuditTrail([
-      line('app.started', { prevShutdown: 'clean' }, '2026-01-01T00:00:01.000Z'),
-      line('app.started', { prevShutdown: 'unclean' }, '2026-01-01T00:00:02.000Z'),
-      line('app.started', { prevShutdown: 'unknown' }, '2026-01-01T00:00:03.000Z'),
-      line('app.stall', { durationMs: 1999 }),
-      line('app.stall', { durationMs: 2000 }),
-      line('app.stall', { durationMs: 4999 }),
-      line('app.stall', { durationMs: 5000 }),
-      line('app.stall', { durationMs: 29999 }),
-      line('app.stall', { durationMs: 30000 }),
-      line('app.crash', { fatal: true }),
-      line('app.crash', { fatal: false }),
-      line('app.crash', {}),
-      line('reveal', { outcome: 'created' }),
-      line('reveal', { outcome: 'shown' }),
-      line('reveal', { outcome: 'already-visible' }),
-      line('reveal', { outcome: 'failed' }),
-      line('brain.index.quarantined', { cause: 'invalid' })
-    ], identity, generatedAt)
+    const summary = summarizeAuditTrail(
+      [
+        line('app.started', { prevShutdown: 'clean' }, '2026-01-01T00:00:01.000Z'),
+        line('app.started', { prevShutdown: 'unclean' }, '2026-01-01T00:00:02.000Z'),
+        line('app.started', { prevShutdown: 'unknown' }, '2026-01-01T00:00:03.000Z'),
+        line('app.stall', { durationMs: 1999 }),
+        line('app.stall', { durationMs: 2000 }),
+        line('app.stall', { durationMs: 4999 }),
+        line('app.stall', { durationMs: 5000 }),
+        line('app.stall', { durationMs: 29999 }),
+        line('app.stall', { durationMs: 30000 }),
+        line('app.crash', { fatal: true }),
+        line('app.crash', { fatal: false }),
+        line('app.crash', {}),
+        line('reveal', { outcome: 'created' }),
+        line('reveal', { outcome: 'shown' }),
+        line('reveal', { outcome: 'already-visible' }),
+        line('reveal', { outcome: 'failed' }),
+        line('brain.index.quarantined', { cause: 'invalid' })
+      ],
+      identity,
+      generatedAt
+    )
 
     expect(summary).toMatchObject({
       kind: 'metis-diagnostics-summary',
@@ -54,12 +58,11 @@ describe('diagnostics summary', () => {
   })
 
   it('skips malformed lines and bad event names', () => {
-    const summary = summarizeAuditTrail([
-      '{',
-      line('Bad.Event'),
-      line('app.started'),
-      line('app.' + 'x'.repeat(70))
-    ], identity, generatedAt)
+    const summary = summarizeAuditTrail(
+      ['{', line('Bad.Event'), line('app.started'), line('app.' + 'x'.repeat(70))],
+      identity,
+      generatedAt
+    )
 
     expect(summary.window.records).toBe(1)
     expect(summary.events).toEqual({ 'app.started': 1 })
@@ -79,15 +82,19 @@ describe('diagnostics summary', () => {
   })
 
   it('copies no actor, title, path, request id, boot id or message content into JSON', () => {
-    const summary = summarizeAuditTrail([
-      line('app.crash', {
-        actor: 'jane.doe@acme.example',
-        message: 'Board budget failed at /var/tmp/metis/Meetings/Board.md',
-        bootId: '123e4567-e89b-12d3-a456-426614174000',
-        requestId: '123e4567-e89b-12d3-a456-426614174001'
-      }),
-      line('brain.index.quarantined', { title: 'Board budget', account: 'Acme' })
-    ], identity, generatedAt)
+    const summary = summarizeAuditTrail(
+      [
+        line('app.crash', {
+          actor: 'jane.doe@acme.example',
+          message: 'Board budget failed at /var/tmp/metis/Meetings/Board.md',
+          bootId: '123e4567-e89b-12d3-a456-426614174000',
+          requestId: '123e4567-e89b-12d3-a456-426614174001'
+        }),
+        line('brain.index.quarantined', { title: 'Board budget', account: 'Acme' })
+      ],
+      identity,
+      generatedAt
+    )
     const json = JSON.stringify(summary)
 
     for (const marker of ['jane', '@', 'Board', 'budget', 'Meetings', '/var/tmp', '123e4567']) {
@@ -136,14 +143,16 @@ describe('diagnostics summary', () => {
   })
 
   it('copyDiagnosticsSummary resolves when writeText throws', async () => {
-    await expect(copyDiagnosticsSummary({
-      auditTrailPath: join(tmpdir(), 'does-not-exist', 'audit.log'),
-      identity,
-      now: () => generatedAt,
-      writeText: () => {
-        throw new Error('clipboard unavailable')
-      }
-    })).resolves.toBeUndefined()
+    await expect(
+      copyDiagnosticsSummary({
+        auditTrailPath: join(tmpdir(), 'does-not-exist', 'audit.log'),
+        identity,
+        now: () => generatedAt,
+        writeText: () => {
+          throw new Error('clipboard unavailable')
+        }
+      })
+    ).resolves.toBeUndefined()
   })
 })
 
@@ -162,66 +171,75 @@ const started = (version: string, prevShutdown: string, ts: string): string =>
 
 describe('diagnostics summary schema 2', () => {
   it('reads rotated generations oldest first, then the live file, and skips a torn last line', async () => {
-    await withTrail({
-      // 999 sorts after 1000 as text: only a numeric stamp order puts this generation first.
-      'audit-999.log': [
-        started('2.0.15', 'clean', '2026-01-01T08:00:00.000Z'),
-        line('app.stall', { durationMs: 6000 }, '2026-01-01T09:00:00.000Z')
-      ].join('\n') + '\n',
-      'audit-1000.log': [
-        line('app.stall', { durationMs: 7000 }, '2026-01-01T10:00:00.000Z'),
-        line('reveal', { outcome: 'failed' }, '2026-01-02T09:00:00.000Z')
-      ].join('\n') + '\n',
-      'audit.log': [
-        started('2.0.15', 'unclean', '2026-01-02T10:00:00.000Z'),
-        line('brain.index.quarantined', { kept: 1, cap: 3 }, '2026-01-02T11:00:00.000Z'),
-        '{"ts":"2026-01-02T12:00:00.000Z","event":"app.st'
-      ].join('\n'),
-      'main.log': 'not an audit generation\n'
-    }, async (auditTrailPath) => {
-      const summary = await summarizeAuditGenerations(auditTrailPath, identity, generatedAt)
+    await withTrail(
+      {
+        // 999 sorts after 1000 as text: only a numeric stamp order puts this generation first.
+        'audit-999.log':
+          [
+            started('2.0.15', 'clean', '2026-01-01T08:00:00.000Z'),
+            line('app.stall', { durationMs: 6000 }, '2026-01-01T09:00:00.000Z')
+          ].join('\n') + '\n',
+        'audit-1000.log':
+          [
+            line('app.stall', { durationMs: 7000 }, '2026-01-01T10:00:00.000Z'),
+            line('reveal', { outcome: 'failed' }, '2026-01-02T09:00:00.000Z')
+          ].join('\n') + '\n',
+        'audit.log': [
+          started('2.0.15', 'unclean', '2026-01-02T10:00:00.000Z'),
+          line('brain.index.quarantined', { kept: 1, cap: 3 }, '2026-01-02T11:00:00.000Z'),
+          '{"ts":"2026-01-02T12:00:00.000Z","event":"app.st'
+        ].join('\n'),
+        'main.log': 'not an audit generation\n'
+      },
+      async (auditTrailPath) => {
+        const summary = await summarizeAuditGenerations(auditTrailPath, identity, generatedAt)
 
-      expect(summary.window).toEqual({
-        from: '2026-01-01T08:00:00.000Z',
-        to: '2026-01-02T11:00:00.000Z',
-        records: 6,
-        generations: 3,
-        truncated: false
-      })
-      expect(summary.scope).toMatchObject({
-        version: '2.0.15',
-        from: '2026-01-01T08:00:00.000Z',
-        to: '2026-01-02T11:00:00.000Z',
-        records: 6,
-        boots: { started: 2, prevShutdown: { clean: 1, unclean: 1, unknown: 0 } },
-        soak: {
-          stallsOver5s: 2,
+        expect(summary.window).toEqual({
+          from: '2026-01-01T08:00:00.000Z',
+          to: '2026-01-02T11:00:00.000Z',
+          records: 6,
+          generations: 3,
+          truncated: false
+        })
+        expect(summary.scope).toMatchObject({
+          version: '2.0.15',
+          from: '2026-01-01T08:00:00.000Z',
+          to: '2026-01-02T11:00:00.000Z',
+          records: 6,
+          boots: { started: 2, prevShutdown: { clean: 1, unclean: 1, unknown: 0 } },
+          soak: {
+            stallsOver5s: 2,
+            uncleanShutdowns: 1,
+            orphanReaps: { registry: 0, 'legacy-orphan': 0, afterUncleanExit: 0 },
+            revealNoOps: 1,
+            brainIndexQuarantined: 1
+          }
+        })
+        expect(summary.scope.days['2026-01-01']).toMatchObject({ records: 3, boots: 1, stallsOver5s: 2 })
+        expect(summary.scope.days['2026-01-02']).toMatchObject({
+          records: 3,
+          boots: 1,
           uncleanShutdowns: 1,
-          orphanReaps: { registry: 0, 'legacy-orphan': 0, afterUncleanExit: 0 },
           revealNoOps: 1,
           brainIndexQuarantined: 1
-        }
-      })
-      expect(summary.scope.days['2026-01-01']).toMatchObject({ records: 3, boots: 1, stallsOver5s: 2 })
-      expect(summary.scope.days['2026-01-02']).toMatchObject({
-        records: 3,
-        boots: 1,
-        uncleanShutdowns: 1,
-        revealNoOps: 1,
-        brainIndexQuarantined: 1
-      })
-    })
+        })
+      }
+    )
   })
 
   it('starts a new scope at the first app.started of the running version after a version change', () => {
-    const summary = summarizeAuditTrail([
-      started('2.0.14', 'clean', '2026-01-01T00:00:00.000Z'),
-      line('app.stall', { durationMs: 9000 }, '2026-01-01T01:00:00.000Z'),
-      started('2.0.15', 'clean', '2026-01-02T00:00:00.000Z'),
-      line('app.stall', { durationMs: 6000 }, '2026-01-02T01:00:00.000Z'),
-      started('2.0.15', 'unclean', '2026-01-03T00:00:00.000Z'),
-      line('app.stall', { durationMs: 1000 }, '2026-01-03T01:00:00.000Z')
-    ], identity, generatedAt)
+    const summary = summarizeAuditTrail(
+      [
+        started('2.0.14', 'clean', '2026-01-01T00:00:00.000Z'),
+        line('app.stall', { durationMs: 9000 }, '2026-01-01T01:00:00.000Z'),
+        started('2.0.15', 'clean', '2026-01-02T00:00:00.000Z'),
+        line('app.stall', { durationMs: 6000 }, '2026-01-02T01:00:00.000Z'),
+        started('2.0.15', 'unclean', '2026-01-03T00:00:00.000Z'),
+        line('app.stall', { durationMs: 1000 }, '2026-01-03T01:00:00.000Z')
+      ],
+      identity,
+      generatedAt
+    )
 
     expect(summary.boots.started).toBe(3)
     expect(summary.stalls['5to30s']).toBe(2)
@@ -237,23 +255,31 @@ describe('diagnostics summary schema 2', () => {
   })
 
   it('restarts the scope when the trail leaves the running version and comes back', () => {
-    const summary = summarizeAuditTrail([
-      started('2.0.15', 'clean', '2026-01-01T00:00:00.000Z'),
-      line('app.stall', { durationMs: 6000 }, '2026-01-01T01:00:00.000Z'),
-      started('2.0.14', 'clean', '2026-01-02T00:00:00.000Z'),
-      line('app.stall', { durationMs: 6000 }, '2026-01-02T01:00:00.000Z'),
-      started('2.0.15', 'clean', '2026-01-03T00:00:00.000Z'),
-      line('app.stall', { durationMs: 1000 }, '2026-01-03T01:00:00.000Z')
-    ], identity, generatedAt)
+    const summary = summarizeAuditTrail(
+      [
+        started('2.0.15', 'clean', '2026-01-01T00:00:00.000Z'),
+        line('app.stall', { durationMs: 6000 }, '2026-01-01T01:00:00.000Z'),
+        started('2.0.14', 'clean', '2026-01-02T00:00:00.000Z'),
+        line('app.stall', { durationMs: 6000 }, '2026-01-02T01:00:00.000Z'),
+        started('2.0.15', 'clean', '2026-01-03T00:00:00.000Z'),
+        line('app.stall', { durationMs: 1000 }, '2026-01-03T01:00:00.000Z')
+      ],
+      identity,
+      generatedAt
+    )
 
     expect(summary.scope).toMatchObject({ from: '2026-01-03T00:00:00.000Z', records: 2, soak: { stallsOver5s: 0 } })
   })
 
   it('has an empty scope when the running version never started in the trail', () => {
-    const summary = summarizeAuditTrail([
-      started('2.0.14', 'unclean', '2026-01-01T00:00:00.000Z'),
-      line('app.stall', { durationMs: 6000 }, '2026-01-01T01:00:00.000Z')
-    ], identity, generatedAt)
+    const summary = summarizeAuditTrail(
+      [
+        started('2.0.14', 'unclean', '2026-01-01T00:00:00.000Z'),
+        line('app.stall', { durationMs: 6000 }, '2026-01-01T01:00:00.000Z')
+      ],
+      identity,
+      generatedAt
+    )
 
     expect(summary.window.records).toBe(2)
     expect(summary.scope).toMatchObject({
@@ -268,12 +294,16 @@ describe('diagnostics summary schema 2', () => {
   })
 
   it('buckets activity per UTC day and reports a day with no records as idle', () => {
-    const summary = summarizeAuditTrail([
-      started('2.0.15', 'clean', '2026-01-01T23:59:59.000Z'),
-      line('app.stall', { durationMs: 5000 }, '2026-01-01T23:59:59.500Z'),
-      line('reveal', { outcome: 'already-visible' }, '2026-01-03T00:00:00.000Z'),
-      line('app.stall', { durationMs: 31000 }, '2026-01-03T12:00:00.000Z')
-    ], identity, generatedAt)
+    const summary = summarizeAuditTrail(
+      [
+        started('2.0.15', 'clean', '2026-01-01T23:59:59.000Z'),
+        line('app.stall', { durationMs: 5000 }, '2026-01-01T23:59:59.500Z'),
+        line('reveal', { outcome: 'already-visible' }, '2026-01-03T00:00:00.000Z'),
+        line('app.stall', { durationMs: 31000 }, '2026-01-03T12:00:00.000Z')
+      ],
+      identity,
+      generatedAt
+    )
 
     expect(Object.keys(summary.scope.days)).toEqual(['2026-01-01', '2026-01-03'])
     expect(summary.scope.daySpan).toBe(3)
@@ -300,16 +330,20 @@ describe('diagnostics summary schema 2', () => {
   })
 
   it('attributes reaps written before a boot to that boot, split by reason and by an unclean prior exit', () => {
-    const summary = summarizeAuditTrail([
-      line('sidecar.reaped', { name: 'llama-server', pid: 11, reason: 'registry' }, '2025-12-31T00:00:00.000Z'),
-      started('2.0.14', 'unclean', '2025-12-31T00:00:01.000Z'),
-      line('sidecar.reaped', { name: 'fm-serve', pid: 12, reason: 'registry' }, '2026-01-01T00:00:00.000Z'),
-      started('2.0.15', 'clean', '2026-01-01T00:00:01.000Z'),
-      line('sidecar.reaped', { name: 'llama-server', pid: 13, reason: 'registry' }, '2026-01-02T00:00:00.000Z'),
-      line('sidecar.reaped', { name: 'llama-server', pid: 14, reason: 'legacy-orphan' }, '2026-01-02T00:00:00.500Z'),
-      line('sidecar.reaped', { name: 'llama-server', pid: 15, reason: 'unknown-reason' }, '2026-01-02T00:00:00.600Z'),
-      started('2.0.15', 'unclean', '2026-01-02T00:00:01.000Z')
-    ], identity, generatedAt)
+    const summary = summarizeAuditTrail(
+      [
+        line('sidecar.reaped', { name: 'llama-server', pid: 11, reason: 'registry' }, '2025-12-31T00:00:00.000Z'),
+        started('2.0.14', 'unclean', '2025-12-31T00:00:01.000Z'),
+        line('sidecar.reaped', { name: 'fm-serve', pid: 12, reason: 'registry' }, '2026-01-01T00:00:00.000Z'),
+        started('2.0.15', 'clean', '2026-01-01T00:00:01.000Z'),
+        line('sidecar.reaped', { name: 'llama-server', pid: 13, reason: 'registry' }, '2026-01-02T00:00:00.000Z'),
+        line('sidecar.reaped', { name: 'llama-server', pid: 14, reason: 'legacy-orphan' }, '2026-01-02T00:00:00.500Z'),
+        line('sidecar.reaped', { name: 'llama-server', pid: 15, reason: 'unknown-reason' }, '2026-01-02T00:00:00.600Z'),
+        started('2.0.15', 'unclean', '2026-01-02T00:00:01.000Z')
+      ],
+      identity,
+      generatedAt
+    )
 
     expect(summary.scope.soak).toMatchObject({
       uncleanShutdowns: 1,
@@ -324,29 +358,41 @@ describe('diagnostics summary schema 2', () => {
     expect(Object.keys(REVEAL_IS_NO_OP).sort()).toEqual([...REVEAL_OUTCOMES].sort())
     expect(REVEAL_IS_NO_OP).toEqual({ created: false, shown: false, 'already-visible': true, failed: true })
 
-    const summary = summarizeAuditTrail([
-      started('2.0.15', 'clean', '2026-01-01T00:00:00.000Z'),
-      ...REVEAL_OUTCOMES.map((outcome) => line('reveal', { reason: 'tray', outcome }, '2026-01-01T00:00:01.000Z')),
-      line('reveal', { reason: 'tray', outcome: 'unknown' }, '2026-01-01T00:00:02.000Z')
-    ], identity, generatedAt)
+    const summary = summarizeAuditTrail(
+      [
+        started('2.0.15', 'clean', '2026-01-01T00:00:00.000Z'),
+        ...REVEAL_OUTCOMES.map((outcome) => line('reveal', { reason: 'tray', outcome }, '2026-01-01T00:00:01.000Z')),
+        line('reveal', { reason: 'tray', outcome: 'unknown' }, '2026-01-01T00:00:02.000Z')
+      ],
+      identity,
+      generatedAt
+    )
 
     expect(summary.scope.soak.revealNoOps).toBe(2)
     expect(summary.scope.days['2026-01-01'].revealNoOps).toBe(2)
   })
 
   it('emits only allowlisted fields and no user text', () => {
-    const summary = summarizeAuditTrail([
-      line('sidecar.reaped', { name: 'llama-server', pid: 7, reason: 'registry' }, '2026-01-01T00:00:00.000Z'),
-      line('app.started', {
-        version: '2.0.15',
-        prevShutdown: 'unclean',
-        actor: 'jane.doe@acme.example'
-      }, '2026-01-01T00:00:01.000Z'),
-      line('app.crash', { fatal: false, message: 'Board budget failed at /var/tmp/metis/Meetings/Board.md' }),
-      line('reveal', { outcome: 'failed', title: 'Board budget' }, '2026-01-01T00:00:02.000Z'),
-      line('app.stall', { durationMs: 6000, phase: 'Board budget' }, '2026-01-01T00:00:03.000Z'),
-      line('brain.index.quarantined', { file: 'Board.md', account: 'Acme' }, '2026-01-01T00:00:04.000Z')
-    ], identity, generatedAt)
+    const summary = summarizeAuditTrail(
+      [
+        line('sidecar.reaped', { name: 'llama-server', pid: 7, reason: 'registry' }, '2026-01-01T00:00:00.000Z'),
+        line(
+          'app.started',
+          {
+            version: '2.0.15',
+            prevShutdown: 'unclean',
+            actor: 'jane.doe@acme.example'
+          },
+          '2026-01-01T00:00:01.000Z'
+        ),
+        line('app.crash', { fatal: false, message: 'Board budget failed at /var/tmp/metis/Meetings/Board.md' }),
+        line('reveal', { outcome: 'failed', title: 'Board budget' }, '2026-01-01T00:00:02.000Z'),
+        line('app.stall', { durationMs: 6000, phase: 'Board budget' }, '2026-01-01T00:00:03.000Z'),
+        line('brain.index.quarantined', { file: 'Board.md', account: 'Acme' }, '2026-01-01T00:00:04.000Z')
+      ],
+      identity,
+      generatedAt
+    )
     const json = JSON.parse(JSON.stringify(summary)) as unknown
 
     const paths = new Set<string>()
@@ -366,28 +412,68 @@ describe('diagnostics summary schema 2', () => {
     }
     walk(json, '')
 
-    const counts = (prefix: string): string[] => [
-      'boots.started', 'boots.prevShutdown.clean', 'boots.prevShutdown.unclean', 'boots.prevShutdown.unknown',
-      'stalls.under2s', 'stalls.2to5s', 'stalls.5to30s', 'stalls.30sPlus',
-      'crashes.fatal', 'crashes.nonFatal', 'crashes.unclassified',
-      'reveals.created', 'reveals.shown', 'reveals.already-visible', 'reveals.failed',
-      'events.*'
-    ].map((p) => prefix + p)
+    const counts = (prefix: string): string[] =>
+      [
+        'boots.started',
+        'boots.prevShutdown.clean',
+        'boots.prevShutdown.unclean',
+        'boots.prevShutdown.unknown',
+        'stalls.under2s',
+        'stalls.2to5s',
+        'stalls.5to30s',
+        'stalls.30sPlus',
+        'crashes.fatal',
+        'crashes.nonFatal',
+        'crashes.unclassified',
+        'reveals.created',
+        'reveals.shown',
+        'reveals.already-visible',
+        'reveals.failed',
+        'events.*'
+      ].map((p) => prefix + p)
     const allowlist = [
-      'kind', 'schema', 'generatedAt', 'app.version', 'app.platform', 'app.arch',
-      'window.from', 'window.to', 'window.records', 'window.generations', 'window.truncated',
+      'kind',
+      'schema',
+      'generatedAt',
+      'app.version',
+      'app.platform',
+      'app.arch',
+      'capabilities.ocr',
+      'window.from',
+      'window.to',
+      'window.records',
+      'window.generations',
+      'window.truncated',
       ...counts(''),
-      'scope.version', 'scope.from', 'scope.to', 'scope.records', 'scope.daySpan', 'scope.idleDays',
+      'scope.version',
+      'scope.from',
+      'scope.to',
+      'scope.records',
+      'scope.daySpan',
+      'scope.idleDays',
       ...counts('scope.'),
-      ...['records', 'boots', 'uncleanShutdowns', 'stallsOver5s', 'orphanReaps', 'revealNoOps', 'brainIndexQuarantined']
-        .map((f) => `scope.days.*.${f}`),
-      'scope.soak.stallsOver5s', 'scope.soak.uncleanShutdowns', 'scope.soak.orphanReaps.registry',
-      'scope.soak.orphanReaps.legacy-orphan', 'scope.soak.orphanReaps.afterUncleanExit',
-      'scope.soak.revealNoOps', 'scope.soak.brainIndexQuarantined'
+      ...[
+        'records',
+        'boots',
+        'uncleanShutdowns',
+        'stallsOver5s',
+        'orphanReaps',
+        'revealNoOps',
+        'brainIndexQuarantined'
+      ].map((f) => `scope.days.*.${f}`),
+      'scope.soak.stallsOver5s',
+      'scope.soak.uncleanShutdowns',
+      'scope.soak.orphanReaps.registry',
+      'scope.soak.orphanReaps.legacy-orphan',
+      'scope.soak.orphanReaps.afterUncleanExit',
+      'scope.soak.revealNoOps',
+      'scope.soak.brainIndexQuarantined'
     ]
     expect([...paths].sort()).toEqual([...allowlist].sort())
     for (const value of strings) {
-      const allowed = value === 'metis-diagnostics-summary' || Object.values(identity).includes(value) ||
+      const allowed =
+        value === 'metis-diagnostics-summary' ||
+        Object.values(identity).includes(value) ||
         /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z$/.test(value)
       expect(allowed, value).toBe(true)
     }
@@ -410,25 +496,43 @@ describe('diagnostics summary schema 2', () => {
   })
 
   it('copyDiagnosticsSummary includes rotated generations', async () => {
-    await withTrail({
-      'audit-1.log': `${started('2.0.15', 'unclean', '2026-01-01T00:00:00.000Z')}\n`,
-      'audit.log': `${line('app.stall', { durationMs: 6000 }, '2026-01-01T00:00:01.000Z')}\n`
-    }, async (auditTrailPath) => {
-      let copied = ''
-      await copyDiagnosticsSummary({
-        auditTrailPath,
-        identity,
-        now: () => generatedAt,
-        writeText: (text) => {
-          copied = text
-        }
-      })
+    await withTrail(
+      {
+        'audit-1.log': `${started('2.0.15', 'unclean', '2026-01-01T00:00:00.000Z')}\n`,
+        'audit.log': `${line('app.stall', { durationMs: 6000 }, '2026-01-01T00:00:01.000Z')}\n`
+      },
+      async (auditTrailPath) => {
+        let copied = ''
+        await copyDiagnosticsSummary({
+          auditTrailPath,
+          identity,
+          now: () => generatedAt,
+          writeText: (text) => {
+            copied = text
+          }
+        })
 
-      expect(JSON.parse(copied)).toMatchObject({
-        schema: 2,
-        window: { records: 2, generations: 2 },
-        scope: { soak: { stallsOver5s: 1, uncleanShutdowns: 1 } }
-      })
-    })
+        expect(JSON.parse(copied)).toMatchObject({
+          schema: 2,
+          window: { records: 2, generations: 2 },
+          scope: { soak: { stallsOver5s: 1, uncleanShutdowns: 1 } }
+        })
+      }
+    )
+  })
+
+  it('emits capabilities.ocr from the identity and keeps app to version/platform/arch', () => {
+    const ocr = { state: 'unavailable', reason: 'platform-unsupported' } as const
+    const summary = summarizeAuditTrail([], { ...identity, platform: 'win32', ocr }, generatedAt) as unknown as {
+      app: unknown
+      capabilities: unknown
+    }
+    expect(summary.capabilities).toEqual({ ocr })
+    expect(summary.app).toEqual({ version: '2.0.15', platform: 'win32', arch: 'arm64' })
+  })
+
+  it('emits capabilities.ocr null when the identity has none', () => {
+    const summary = summarizeAuditTrail([], identity, generatedAt) as unknown as { capabilities: unknown }
+    expect(summary.capabilities).toEqual({ ocr: null })
   })
 })

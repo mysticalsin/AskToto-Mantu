@@ -2,11 +2,14 @@ import { open, readdir, stat } from 'node:fs/promises'
 import { basename, dirname, join } from 'node:path'
 import type { RevealOutcome } from './reveal-trace'
 import { REVEAL_OUTCOMES, SIDECAR_REAP_REASONS } from './projection'
+import type { OcrAvailability } from '../../../shared/ocr-availability'
 
 export interface DiagnosticsIdentity {
   version: string
   platform: string
   arch: string
+  /** Content-free capability state (enum only); reported under `capabilities`, not `app`. */
+  ocr?: OcrAvailability
 }
 
 type SidecarReapReason = (typeof SIDECAR_REAP_REASONS)[number]
@@ -48,7 +51,9 @@ export interface DiagnosticsSummary {
   kind: 'metis-diagnostics-summary'
   schema: 2
   generatedAt: string
-  app: DiagnosticsIdentity
+  app: Pick<DiagnosticsIdentity, 'version' | 'platform' | 'arch'>
+  /** Additive in schema 2: content-free capability states; `ocr` is null when the caller reported none. */
+  capabilities: { ocr: OcrAvailability | null }
   /** Everything read, across every audit generation; the counts beside it keep their schema 1 meaning. */
   window: { from: string | null; to: string | null; records: number; generations: number; truncated: boolean }
   boots: Counts['boots']
@@ -127,7 +132,10 @@ export async function summarizeAuditGenerations(
   let truncated = files.length < archives.length + 1
   const tails: Array<{ path: string; bytes: number }> = []
   for (const path of [...files].reverse()) {
-    const size = await stat(path).then((s) => s.size, () => null)
+    const size = await stat(path).then(
+      (s) => s.size,
+      () => null
+    )
     if (size === null) continue
     if (remaining <= 0) {
       truncated = true
@@ -295,7 +303,8 @@ function createSummarizer(identity: DiagnosticsIdentity, generatedAt: Date) {
         kind: 'metis-diagnostics-summary',
         schema: 2,
         generatedAt: generatedAt.toISOString(),
-        app: identity,
+        app: { version: identity.version, platform: identity.platform, arch: identity.arch },
+        capabilities: { ocr: identity.ocr ?? null },
         window: { from: window.from, to: window.to, records: whole.records, generations, truncated },
         boots: whole.boots,
         stalls: whole.stalls,

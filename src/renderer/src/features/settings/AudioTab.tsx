@@ -5,6 +5,7 @@ import { LANGUAGE_OPTIONS } from '@shared/lang-id'
 import { isCloudOnlyProfile, resolveEnterpriseLiveProfile } from '@shared/enterprise-live-profile'
 import { effectiveCloudSttProvider, type CloudSttProviderId } from '@shared/cloud-stt-provider'
 import { MODEL_POLICY_CAPABILITY_LABELS } from '@shared/model-policy'
+import { ocrUnavailableCopy } from '@shared/ocr-availability'
 import { isWindows } from '../../lib/keys'
 import { FieldHint, TextButton } from '../../components/ui'
 import { LazyInput } from '../../ui/LazyText'
@@ -756,7 +757,9 @@ export function AudioTab({
                     // what raises the system prompt (MQA-209). The renderer can't tell the two
                     // apart, so name the actionable one first rather than guess wrong.
                     'Not running on this machine. Check Screen Recording under Permissions below (a new grant needs a restart). Screen asks capture live instead.'
-                : 'Enable Local AI (below) to use this. The background reader never leaves your device.'
+                : isWindows
+                  ? `${ocrUnavailableCopy('platform-unsupported')} Enable Local AI (below) to use this. The background reader never leaves your device.`
+                  : 'Enable Local AI (below) to use this. The background reader never leaves your device.'
           }
           on={settings.backgroundScreenContext}
           onChange={(v) => patch({ backgroundScreenContext: v })}

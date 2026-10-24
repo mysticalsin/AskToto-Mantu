@@ -191,7 +191,8 @@ import { localModelAllowedByPolicy } from '@shared/model-policy'
 import { ensureLocalRuntimeStarted, prewarmLocal } from './llm/local'
 import { registerWriteupIpc } from './ipc/writeup'
 import * as fmRuntime from './llm/fm-runtime'
-import { extractScreenText, macStallWatchCommand } from './mac-helper'
+import { macStallWatchCommand } from './mac-helper'
+import { diagnosticsIdentity, screenOcr } from './features/screen-ocr/host'
 import * as screenPerm from './capture-permissions/screen-permission-runtime'
 import { isOrphanScreenSourcesRejection } from './capture-permissions/loopback-grant'
 import { registerScreenPermissionIpc } from './ipc/screen-permission-ipc'
@@ -4813,10 +4814,8 @@ const screenPreprocess: ScreenPreprocess = createScreenPreprocess({
     startForegroundWatcher(onChange, {
       onError: (message) => mainLog.warn(`[screen-preprocess] watcher: ${message}`)
     }),
-  // macOS: Vision-framework OCR via the bundled metis-mac-helper — tried before the VLM caption.
-  // Windows keeps the VLM-only path (extractScreenText returns null without a helper anyway, but gating
-  // here keeps the win32 wiring visibly identical to before).
-  extractScreenText: process.platform === 'darwin' ? extractScreenText : undefined,
+  // macOS Vision OCR is tried before the VLM caption; undefined on Windows (no OCR engine, VLM-only).
+  extractScreenText: screenOcr.read,
   // macOS: never let this background loop be the thing that asks for Screen Recording at boot.
   // Undefined off darwin: Windows has no queryable screen grant and its capture prompts nothing.
   screenCaptureGranted:
@@ -5268,7 +5267,7 @@ function buildTrayMenu(): Menu {
       click: () =>
         void copyDiagnosticsSummary({
           auditTrailPath: auditLogPath(),
-          identity: { version: app.getVersion(), platform: process.platform, arch: process.arch },
+          identity: diagnosticsIdentity(),
           writeText: (text) => clipboard.writeText(text)
         })
     },
@@ -5517,7 +5516,7 @@ function registerIpc(): void {
     assertMainWindow,
     requireAuth,
     screenObservation,
-    readText: process.platform === 'darwin' ? extractScreenText : undefined,
+    readText: screenOcr.read,
     foreground: () => screenPreprocess.foreground(),
     sessionId: () => String(activeLiveSpeakerStartedAt ?? 'idle')
   })

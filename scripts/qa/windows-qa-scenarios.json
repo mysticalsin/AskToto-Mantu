@@ -1,0 +1,9 @@
+{
+  "files": [
+    "src/main/features/context-grants/observe.test.ts",
+    "src/main/features/screen-ocr/engine.win32.test.ts",
+    "src/main/infra/observability/diagnostics-summary.test.ts",
+    "src/shared/ocr-availability.test.ts",
+    "src/shared/platform-support.test.ts"
+  ]
+}
