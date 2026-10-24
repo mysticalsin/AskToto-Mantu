@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { CONTEXT_IPC } from '@shared/context-manifest'
 import { createContextGrants } from './wiring'
 import { testOpen, testSeal } from './__fixtures__/context-grants-fixtures'
-import { mkdtemp, readdir, rm } from 'node:fs/promises'
+import { mkdtemp, readdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -57,6 +57,42 @@ describe('context grants wiring', () => {
       expect(again.ok).toBe(true)
       await ctx.revokeAll('stop')
       expect(await readdir(root)).toEqual([])
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('registers the attachment channels and revokeAll empties held attachments (G54)', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'metis-g54-wire-'))
+    try {
+      const handlers = new Map<string, (e: unknown, raw?: unknown) => unknown>()
+      const ctx = createContextGrants({
+        ipcMain: { handle: (c, fn) => void handlers.set(c, fn as never) },
+        assertMainWindow: () => undefined,
+        requireAuth: () => true,
+        root,
+        owner: () => 'p-a',
+        generation: () => 0,
+        sessionId: () => 's',
+        seal: testSeal,
+        open: testOpen,
+        observe: async () => {
+          throw new Error('no capture')
+        },
+        onOwnerChange: () => () => undefined,
+        attachmentSources: { pickFiles: async () => [join(root, 'p.txt')], readClipboard: async () => null }
+      })
+      expect([...handlers.keys()]).toEqual(
+        expect.arrayContaining(['attachments:add', 'attachments:remove', 'attachments:list'])
+      )
+      await writeFile(join(root, 'p.txt'), 'picked')
+      const r = (await handlers.get('attachments:add')?.({}, { source: 'picker', conversationKey: 'c' })) as {
+        attachments: unknown[]
+      }
+      expect(r.attachments).toHaveLength(1)
+      expect(ctx.attachments.list('c')).toHaveLength(1)
+      await ctx.revokeAll('stop')
+      expect(ctx.attachments.list('c')).toHaveLength(0)
     } finally {
       await rm(root, { recursive: true, force: true })
     }

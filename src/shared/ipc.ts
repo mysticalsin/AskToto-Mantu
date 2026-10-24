@@ -1,6 +1,7 @@
 import { z } from 'zod'
 export { MetisCommandCancellationSchema, MetisCommandConfirmationSchema } from './metis-command-contract'
 export type { MetisCommandCancellation, MetisCommandConfirmation, MetisCommandState } from './metis-command-contract'
+import { AttachmentSendFieldsSchema } from './attachments'
 import { McpConnectionSchema } from './mcp-connections'
 import { TranscriptLineSchema, type TranscriptLine } from './transcript-line'
 import { CloudSpeechSettingsSchema, DEFAULT_CLOUD_SPEECH_SETTINGS } from './broker-speech-settings'
@@ -845,23 +846,15 @@ const AskStartBaseSchema = z.object({
   screenContext: z.string().max(8000).optional(),
   // Bounded (defense-in-depth, mirrors brainContext's cap above) — an unbounded array let a hostile/buggy
   // renderer hand main an ever-growing history to serialize/forward per ask.
-  history: z.array(ChatTurnSchema).max(50).default([])
+  history: z.array(ChatTurnSchema).max(50).default([]),
+  // Composer attachments (G54): ids main issued and the conversation shown. Never contents; main refuses a mismatch.
+  ...AttachmentSendFieldsSchema
 })
 export const AskStartSchema = AskStartBaseSchema.superRefine((value, context) => {
-  if (value.visionEvidence && value.mode !== 'vision') {
-    context.addIssue({
-      code: z.ZodIssueCode.custom,
-      message: 'visionEvidence is allowed only in vision mode.',
-      path: ['visionEvidence']
-    })
-  }
-  if (value.visionEvidence && value.image !== undefined) {
-    context.addIssue({
-      code: z.ZodIssueCode.custom,
-      message: 'visionEvidence and image are mutually exclusive.',
-      path: ['visionEvidence']
-    })
-  }
+  const issue = (message: string): void =>
+    context.addIssue({ code: z.ZodIssueCode.custom, message, path: ['visionEvidence'] })
+  if (value.visionEvidence && value.mode !== 'vision') issue('visionEvidence is allowed only in vision mode.')
+  if (value.visionEvidence && value.image !== undefined) issue('visionEvidence and image are mutually exclusive.')
 })
 export type AskStart = z.infer<typeof AskStartSchema>
 

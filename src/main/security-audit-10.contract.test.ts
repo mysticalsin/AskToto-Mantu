@@ -273,7 +273,9 @@ describe('AUDIT-10 — askStart never forwards Error.message to the overlay', ()
     expect(catchBlock.slice(0, 400)).toMatch(/isModeSkillIntegrityError\(err\)/)
     expect(catchBlock.slice(0, 400)).toMatch(/'Could not start the answer\.'/)
     expect(catchBlock.slice(0, 400)).not.toMatch(/e\.message/)
-    expect(catchBlock.slice(0, 400)).toMatch(/\? \(err instanceof Error \? err\.message/)
+    // G54: a refused composer attachment (AttachmentSendError) carries owner-safe copy and is the only other named failure.
+    expect(catchBlock.slice(0, 400)).toMatch(/AttachmentSendError/)
+    expect(catchBlock.slice(0, 400)).toMatch(/\?\s*err instanceof Error\s*\?\s*err\.message/)
   })
 })
 
