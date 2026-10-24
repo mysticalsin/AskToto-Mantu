@@ -411,6 +411,8 @@ export type AuditEvent =
   | 'assistant.store'
   // G56: the onboarding role interview and setup meter (saved, proposed, completed, discarded, setup-ended, refused). Phase, enum reason and counts only; never an answer, a name or instructions.
   | 'onboarding.interview'
+  // G66: the routine engine (phase, enum reason and counts only; never a title, a phrase, an assistant name or id, or meeting content).
+  | 'routine.engine'
   // G57: the user memory (a correction or delete of a remembered preference or project context). Action and outcome only; never text.
   | 'user.memory'
   | 'meeting.record'

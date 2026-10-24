@@ -1,4 +1,4 @@
-import { app, webContents, webFrameMain, type IpcMain, type IpcMainInvokeEvent } from 'electron'
+import { app, net, powerMonitor, webContents, webFrameMain, type IpcMain, type IpcMainInvokeEvent } from 'electron'
 import { createMainTranscriptRevision } from '../features/meetings/main-transcript-revision'
 import { bindLiveTranslation } from '../features/translation/wiring'
 import type { TranslationCallDeps } from '../features/translation/translation-call'
@@ -21,7 +21,9 @@ import { listMeetings } from '../history-read'
 import { decryptSecret, encryptSecret } from '../secrets'
 import type { SpeechDesktopHooks } from '../speech-desktop-boundary'
 import type { RendererResetSource } from '../features/meetings/session-closure'
+import { readQuietPolicy, showQuietNotification } from '../quiet-output'
 import { bootstrapAssistants } from './assistants-wiring'
+import { bootstrapRoutines } from './routines-wiring'
 import { bootstrapDictationMemory } from './dictation-memory-wiring'
 import { bootstrapUserMemory } from './user-memory-wiring'
 import { bootstrapMeetingRecord } from './meeting-record-wiring'
@@ -175,7 +177,7 @@ export function createOwnerSessionWiring(deps: OwnerSessionWiringDeps): OwnerSes
   // G53: real files a turn produced, by artifactId; the registry is the seam producers (export, tools) register into.
   const artifacts = composeArtifacts({ ipcMain, assertMainWindow, requireAuth: () => requireAuth() })
   // G48 assistants: the sealed, owner- and tenant-scoped assistant store; built-in modes are its read-only system assistants.
-  bootstrapAssistants({
+  const assistants = bootstrapAssistants({
     ipcMain,
     authorizeSender,
     requireAuth: () => requireAuth(),
@@ -187,6 +189,23 @@ export function createOwnerSessionWiring(deps: OwnerSessionWiringDeps): OwnerSes
     meetings: async () => (await listMeetings()).map((row) => ({ file: row.file, mode: row.mode })),
     audit: (record) => auditLog('assistant.store', { ...record }),
     onboardingAudit: (record) => auditLog('onboarding.interview', { ...record })
+  })
+  // G66 routines: the sealed, owner-scoped routine engine. Runs only while Métis is open; output goes through the quiet gate.
+  bootstrapRoutines({
+    ipcMain,
+    authorizeSender,
+    requireAuth: () => requireAuth(),
+    ownerSession,
+    userDataPath: () => app.getPath('userData'),
+    seal: encryptSecret,
+    open: decryptSecret,
+    assistants,
+    powerMonitor,
+    isOnline: () => net.isOnline(),
+    quietAction: () => readQuietPolicy().toast,
+    notify: showQuietNotification,
+    audit: (record) => auditLog('routine.engine', { ...record }),
+    onWillQuit: (listener) => app.once('will-quit', listener)
   })
   // G57 user memory: durable preferences and expiring project context, owner-scoped and sealed.
   bootstrapUserMemory({
