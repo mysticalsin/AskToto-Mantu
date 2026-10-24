@@ -1,36 +1,7 @@
 /**
- * Métis onboarding as an EXPERIENCE — six-act narrative per docs/ONBOARDING-EXPERIENCE.md, now that
- * Act 6 (Ready, MQA-283) closes it out: hero → staged problem story → reveal → live environment-scan
- * magic moment → personalization/vibe → [license, optional] → appearance → Ready → finish (anatomy extracted from
- * the Vibe Island reference Example supplied: welcome → demo → config → vibe → license → ready).
- *
- * Deliberate constraints:
- * - No animation libraries — CSS transitions + staged `animation-delay` only, like the rest of the app.
- *   The exception is Act 2's synthetic cursor (OnboardingDemoScene), which needs a per-frame
- *   projection CSS cannot express — a small rAF loop over lib/synthetic-cursor.ts, not a dependency.
- *   Act 1's Métis wordmark is static. No scramble.
- * - Scene 4's checks are REAL (permissions, package-scoped speech readiness, and local model status) — a row only
- *   ever shows "ready" when it is actually true. Legacy/full profiles keep their existing ASR setup flow; verified
- *   lean profiles report the approved cloud route and never start optional model provisioning here.
- * - Act 2 (reveal) is the one deliberate exception to "never fake" — it drives Métis's REAL Bar/
- *   Copilot/Answer/QuickActions components with a scripted fake meeting (MQA-277), guarded so fake data
- *   can never persist and the demo can never see real data (MQA-278, @shared/demo-guard).
- * - Act 6 (Ready, MQA-283) is the terminal act: it finishes onboarding itself (marks `onboardingDone`)
- *   instead of handing off to the legacy provider/API-key step the way this component used to. That
- *   hop is gone from the narrative path entirely — the embedded-Cloudflare-default install
- *   (main/embedded-cloudflare-key.ts, MQA-273) already makes a fresh install `providerReady` with zero
- *   user action, so a mandatory config screen for something already configured was the dishonest part.
- *   Adding a personal provider key stays reachable as an OPTIONAL link from Ready, never a gate — see
- *   `ActReady` below and `onboarding-flow.ts` for the (independently tested) scene-transition rules.
- * - Act 3 (setup/Config, MQA-279) is "scan first, then present a completed configuration" — the
- *   Vibe-Island-teardown Config act's shape ("Everything's configured. No action needed."), kept honest
- *   by extending the SAME never-fake rule the other rows already follow to a new AI-readiness row
- *   (`aiRowStatus`, below): it reads `providerReady`/`provider` straight off the settings snapshot
- *   `publicSettings()` derives in main/index.ts, so it can never claim "Ready" while a real ask would
- *   still fail. The opt-out toggle on the screen row is the same rule in the other direction — it only
- *   ever appears because `screenAsk` is a real, always-on-by-default setting (ipc.ts), never invented.
- * - Self-contained: mounts in place of the legacy tour via App's onboarding gate; everything the host
- *   needs comes back through onDone.
+ * Métis onboarding as an EXPERIENCE: the exclusive narrative tour from hero to Ready. Its deliberate
+ * constraints (real checks, the guarded Act 2 demo, Ready as the only finish, the skip control after the
+ * permissions step) are recorded in docs/design/ONBOARDING-FLOW.md ("Component notes").
  */
 import { useCallback, useEffect, useRef, useState, Suspense, useLayoutEffect } from 'react'
 import {
@@ -67,6 +38,9 @@ import { PERMISSIONS_POLL_MS } from '../state'
 import { InlineOrb } from './AgentStatus'
 import { MetisMark } from './MetisMark'
 import { ActLicense } from './OnboardingLicenseScene'
+import { OnboardingInterviewScene, useInterviewAvailability } from './OnboardingInterviewScene'
+import { OnboardingSkip } from './OnboardingSkip'
+import { createOnboardingSkip, type OnboardingSkipOutcome } from '../lib/onboarding-skip'
 export { licenseErrorMessage } from './OnboardingLicenseScene'
 import { HeroWelcome, OnboardingHeroVideo, prefersReducedMotion } from './OnboardingWelcomeScene'
 import { prefetchOnboardingDemoChunks } from '../lib/onboarding-demo-prefetch'
@@ -81,7 +55,9 @@ import { onAppActive } from '../lib/permission-ask'
 import { ONBOARDING_PERSONAS, type OnboardingPersonaId } from '../lib/persona-vibe'
 import {
   canMarkOnboardingDone,
+  canSkipOnboarding,
   sceneAfterAppearance,
+  sceneAfterInterview,
   sceneAfterLicense,
   sceneAfterPersonalize,
   sceneAfterReveal,
@@ -228,7 +204,7 @@ const PROBLEM_STORY: string[] = [
 type Scene = OnboardingScene
 
 // Hero and Ready are the bookends. Dots track the guided acts in between.
-const GUIDED_SCENES: Scene[] = ['problem', 'reveal', 'appearance', 'setup', 'personalize']
+const GUIDED_SCENES: Scene[] = ['problem', 'reveal', 'appearance', 'setup', 'personalize', 'interview']
 
 // Lives in its own reserved-height row above the scene content (see the render below) rather than an
 // absolute overlay — an overlay collided with scene headings that sit close to the top on taller scenes
@@ -362,12 +338,7 @@ export function setupAsrBlocksContinue(
   return true
 }
 
-/** Fixed spark positions for the Ready ceremony (Act 6, MQA-283) — a handful of one-shot CSS motes
- *  around the mark, not a particle system. Positions are spread by hand (plain `left`/`top` offsets)
- *  rather than computed, so this is six literal, readable values instead of a runtime trig call for
- *  six static dots. Reduced motion is handled entirely by the blanket `prefers-reduced-motion` rule in
- *  styles.css: `.ready-spark`'s keyframes only ever animate opacity/transform (no `@property`-typed
- *  value), so the rule's 0ms duration reliably lands on the invisible end state. */
+/** Fixed spark positions for the Ready ceremony (see ONBOARDING-FLOW.md "Component notes"). */
 const READY_SPARKS: ReadonlyArray<{ x: number; y: number; delay: number }> = [
   { x: 34, y: -10, delay: 60 },
   { x: -30, y: -22, delay: 140 },
@@ -377,18 +348,7 @@ const READY_SPARKS: ReadonlyArray<{ x: number; y: number; delay: number }> = [
   { x: -8, y: 36, delay: 160 }
 ]
 
-/**
- * Act 6 — Ready (MQA-283). The narrative's terminal act: a tasteful, Apple-grade celebratory beat (the
- * Métis mark gets one gleam sweep + a handful of one-shot spark motes — see READY_SPARKS/styles.css —
- * deliberately NOT VI's heavier confetti-cannon + collectible edition card; own copy, own restraint),
- * then the Métis equivalent of the teardown's honest "restart your sessions" last line: onboarding
- * finishes ONLY when this screen's own button is pressed, and even then Métis does not start listening
- * until Listen is pressed and the room has been told — the empty state is the truth, not a formality.
- *
- * `onOpenAiSettings` is OPTIONAL and never a gate: adding a personal provider key is reachable from
- * here (the embedded-Cloudflare-default install is already `providerReady` with nothing to add), and
- * pressing it still finishes onboarding first so the user lands in Settings, not back in onboarding.
- */
+/** Act 6, Ready (MQA-283): the terminal act. `onOpenAiSettings` is optional, never a gate. */
 function ActReady({
   mode,
   onFinish,
@@ -813,6 +773,9 @@ export function OnboardingExperience({
   const placementLocked = placementManaged
   // Recording-consent gate (CMO-QA #1). Finish is blocked until this checkbox is checked on Ready.
   const [consent, setConsent] = useState(false)
+  // G56 role interview: offered after personalize only when main can open the owner's sealed interview doc.
+  const interview = useInterviewAvailability()
+  const [assistantsCreated, setAssistantsCreated] = useState(0)
   const [asrStatus, setAsrStatus] = useState<AsrAssetsStatus>(IDLE_ASR_STATUS)
   const [productPackageMode, setProductPackageMode] = useState<OnboardingPackageMode>('pending')
   /** Once true, Continue stays unlocked even if ASR poll returns loading. */
@@ -1134,6 +1097,32 @@ export function OnboardingExperience({
   // Act 6 (Ready, MQA-283): this is now the narrative's actual finish — invoked from the Ready scene's
   // CTA, not personalize's Start (which now only advances to license/appearance, see sceneAfterPersonalize).
   // Returns a promise so ActReady can keep the durable save and window replacement in one retry-safe flow.
+  const silenceOnboarding = (): void => {
+    lockOnboardingAudio()
+    haltAllOnboardingAudio()
+    music.stop()
+    disposePortalAudio()
+  }
+  // D-27/G56 skip: the same audio teardown and durable save as finish, after its own cleanup.
+  const skipRef = useRef<ReturnType<typeof createOnboardingSkip> | null>(null)
+  if (!skipRef.current) skipRef.current = createOnboardingSkip()
+  const skip = async (): Promise<OnboardingSkipOutcome> => {
+    if (doneRef.current) return 'busy'
+    doneRef.current = true
+    const outcome = await skipRef.current!.run({
+      scene,
+      consent,
+      abortMic: () => manualMicRequestRef.current?.abort(),
+      discardInterview: () => window.toto.onboardingInterview.discard(),
+      silenceAudio: silenceOnboarding,
+      complete: async () => {
+        await onDone({ mode: modeTouchedRef.current ? mode : undefined, recordingConsent: true, destination: 'answer' })
+      }
+    })
+    if (outcome !== 'skipped') doneRef.current = false
+    return outcome
+  }
+
   const finish = async (destination: 'answer' | 'settings'): Promise<boolean> => {
     if (doneRef.current || !canMarkOnboardingDone({ scene, asrReady, consent })) return false
     doneRef.current = true
@@ -1189,6 +1178,7 @@ export function OnboardingExperience({
         >
           {music.muted ? <VolumeX size={18} /> : <Volume2 size={18} />}
         </button>
+        {canSkipOnboarding({ scene, consent }) && <OnboardingSkip onConfirm={skip} />}
         <div className="onboard-tour-chrome flex h-9 shrink-0 items-center justify-center pt-3">
           <ActProgress scene={scene} />
         </div>
@@ -1482,14 +1472,7 @@ export function OnboardingExperience({
                 </p>
               </div>
               <div className="onboard-persona-row">
-                {/* The onboarding personality beat (Act 4, Vibe-Island-teardown "the ONE emotional choice
-                after the heavy config step") — three refined cards over the plain three-button picker
-                this replaced, each naming the mode's real behavior change (`persona-vibe.ts`, honest and
-                unit-tested against the actual `DEFAULT_MODE_PROMPTS`) rather than inventing personality
-                settings that don't exist. Selection delight is a single one-shot ring (`.persona-select-
-                ring` below), keyed by `mode` so it retriggers fresh on every pick — same remount trick as
-                `.scene-enter`'s `key={scene}` — and folds into the global prefers-reduced-motion rule for
-                free (0ms duration = jumps straight to its end state, i.e. invisible). */}
+                {/* Act 4 persona cards: see ONBOARDING-FLOW.md "Component notes". */}
                 {ONBOARDING_PERSONAS.map((p) => {
                   const Icon = PERSONA_ICONS[p.id]
                   const selected = mode === p.id
@@ -1519,7 +1502,7 @@ export function OnboardingExperience({
                   // Advances to license (only if enabled) or Ready. See onboarding-flow.ts.
                   onClick={() => {
                     playHero()
-                    setScene(sceneAfterPersonalize(settings?.licenseGateEnabled))
+                    setScene(sceneAfterPersonalize(settings?.licenseGateEnabled, interview.available))
                   }}
                   disabled={!consent}
                   className={'onboard-cta no-drag focus-ring' + (consent ? '' : ' onboard-cta--muted')}
@@ -1534,6 +1517,17 @@ export function OnboardingExperience({
           settings.licenseGateEnabled is false (the default): personalize's Continue button above only
           ever routes here when that setting is already true, so a normal user (licensing off) never
           sees this scene render, not even for a frame. */}
+          {scene === 'interview' && interview.view && (
+            <OnboardingInterviewScene
+              initial={interview.view}
+              onContinue={(created) => {
+                playHero()
+                setAssistantsCreated(created)
+                setScene(sceneAfterInterview(settings?.licenseGateEnabled))
+              }}
+            />
+          )}
+
           {scene === 'license' && (
             <ActLicense
               settings={settings}
@@ -1581,6 +1575,9 @@ export function OnboardingExperience({
               authReady={authReady}
             />
           )}
+          {scene === 'ready' && assistantsCreated > 0 && (
+            <p className="onboard-setup-note">Setting up your assistants doesn’t count toward your usage.</p>
+          )}
         </div>
       </div>
     </>
@@ -1623,6 +1620,8 @@ export function OnboardingV2({
           patch,
           onCompleted: onDone
         })
+        // G56: the first finish or skip starts normal allowance; main sets it once and a replay never moves it.
+        void window.toto.onboardingInterview?.setupEnded().catch(() => undefined)
         // This is deliberately after the awaited invoke above. `onboardingExit` rebuilds the window,
         // so issuing it before the response is received recreates the exact Act 6 Saving freeze.
         window.toto.onboardingExit(destination)

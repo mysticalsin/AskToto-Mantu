@@ -4,6 +4,7 @@ import { CloudSpeechSegmentEventSchema } from '@shared/cloud-speech'
 import { OWNER_SESSION_IPC } from '@shared/contracts/owner-session'
 import { CONNECTOR_ACCOUNTS_IPC } from '@shared/connector-accounts'
 import { ASSISTANT_IPC } from '@shared/assistants'
+import { ONBOARDING_INTERVIEW_IPC } from '@shared/onboarding-interview'
 import { DICTATION_MEMORY_IPC } from '@shared/dictation-memory'
 import { USER_MEMORY_IPC } from '@shared/user-memory'
 import { IPC } from '@shared/ipc'
@@ -82,6 +83,7 @@ describe('owner session wiring', () => {
       ARTIFACT_IPC.reveal,
       ARTIFACT_IPC.arm,
       ...Object.values(ASSISTANT_IPC),
+      ...Object.values(ONBOARDING_INTERVIEW_IPC),
       ...Object.values(USER_MEMORY_IPC)
     ])
     expect(ipcMain.on.mock.calls.map((call) => call[0])).toEqual([ARTIFACT_IPC.dragStart])
@@ -129,6 +131,7 @@ describe('owner session wiring', () => {
             Object.values(DICTATION_MEMORY_IPC).length +
             4 +
             Object.values(ASSISTANT_IPC).length +
+            Object.values(ONBOARDING_INTERVIEW_IPC).length +
             Object.values(USER_MEMORY_IPC).length
         },
         () => true

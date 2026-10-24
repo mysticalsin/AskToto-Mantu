@@ -58,7 +58,9 @@ describe('MQA-283 — the narrative experience now ends at Ready, not a legacy p
   })
 
   it('personalize routes to license (if enabled) or straight to ready — never finishes there directly', () => {
-    expect(experienceSrc).toMatch(/setScene\(sceneAfterPersonalize\(settings\?\.licenseGateEnabled\)\)/)
+    expect(experienceSrc).toMatch(
+      /setScene\(sceneAfterPersonalize\(settings\?\.licenseGateEnabled, interview\.available\)\)/
+    )
   })
 
   it('license continues into ready, never back into personalize', () => {

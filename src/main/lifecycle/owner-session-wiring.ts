@@ -163,7 +163,8 @@ export function createOwnerSessionWiring(deps: OwnerSessionWiringDeps): OwnerSes
     open: decryptSecret,
     customModes: () => getPublishedSettingsObservation()?.settings.customModes ?? [],
     meetings: async () => (await listMeetings()).map((row) => ({ file: row.file, mode: row.mode })),
-    audit: (record) => auditLog('assistant.store', { ...record })
+    audit: (record) => auditLog('assistant.store', { ...record }),
+    onboardingAudit: (record) => auditLog('onboarding.interview', { ...record })
   })
   // G57 user memory: durable preferences and expiring project context, owner-scoped and sealed.
   bootstrapUserMemory({

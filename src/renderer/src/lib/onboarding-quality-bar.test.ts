@@ -5,6 +5,7 @@ import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import { HeroWelcome } from '../components/OnboardingWelcomeScene'
+import { readModuleSource } from '../../../test-helpers/module-source'
 import {
   ONBOARDING_BAR_LAND_GAIN,
   ONBOARDING_PORTAL_CLOSE_GAIN,
@@ -107,5 +108,31 @@ describe('Apple-grade quality bar — PR 66 re-pass', () => {
     expect(css).toMatch(/\.onboard-starfield canvas \{[\s\S]*?opacity:\s*0/)
     expect(css).toMatch(/\.onboard-cta \{[\s\S]*?opacity:\s*1/)
     expect(css).toMatch(/\.onboard-cta \{[\s\S]*?pointer-events:\s*auto/)
+  })
+})
+
+describe('G56 interview and skip quality bar', () => {
+  const sources = [
+    '../components/OnboardingInterviewScene',
+    '../components/OnboardingSkip',
+    '../../../shared/onboarding-interview'
+  ]
+  const texts = sources.map((specifier) => readModuleSource(__dirname, specifier).text)
+
+  it('collapses interview and skip motion under prefers-reduced-motion', () => {
+    expect(css).toMatch(
+      /@media \(prefers-reduced-motion: reduce\) \{\s*\.onboard-interview \*,\s*\.onboard-skip-backdrop,\s*\.onboard-skip-sheet \{\s*animation: none;\s*transition: none;/
+    )
+  })
+
+  it('animates the new scenes with transform and opacity only', () => {
+    const start = css.indexOf('/* G56 role interview')
+    const block = css.slice(start, css.indexOf('@media (prefers-reduced-motion: reduce)', start))
+    expect(block.length).toBeGreaterThan(100)
+    expect(block).not.toMatch(/filter:|blur\(|scale\(|infinite/)
+  })
+
+  it('has no em dash in the new copy', () => {
+    for (const text of texts) expect(text).not.toContain('—')
   })
 })

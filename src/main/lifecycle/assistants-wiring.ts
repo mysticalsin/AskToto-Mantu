@@ -8,10 +8,12 @@ import {
   type CustomMode
 } from '../features/assistants'
 import type { AssistantAuditPhase } from '../features/assistants'
+import type { InterviewAuditPhase } from '../features/onboarding'
 import { atomicSavedWrite } from '../infra/storage/atomic-saved-write'
 import { registerAssistantsIpc } from '../ipc/assistants-ipc'
 import type { AuthorizeSender } from '../ipc/sender-auth'
 import { memoryAccess, memoryPartitionsConfigured, onMemoryPartitionChange } from '../memory-partition/memory-access'
+import { bootstrapOnboardingInterview } from './onboarding-interview-wiring'
 
 export interface AssistantsWiringDeps {
   ipcMain: Pick<IpcMain, 'handle'>
@@ -31,6 +33,8 @@ export interface AssistantsWiringDeps {
   /** The saved meetings (their own ids and modes). Read only. */
   meetings(): Promise<ReadonlyArray<{ file: string; mode: string }>>
   audit(record: { phase: AssistantAuditPhase; reason?: string; count?: number }): void
+  /** The G56 onboarding interview's audit: phase tokens and counts only. */
+  onboardingAudit?(record: { phase: InterviewAuditPhase; reason?: string; count?: number }): void
   /** Defaults to G19's partition in force; a test seam. */
   partition?(): string | null
   /** Subscribes to a change of the partition in force; defaults to G19's. A test seam. */
@@ -103,5 +107,18 @@ export function bootstrapAssistants(deps: AssistantsWiringDeps): AssistantServic
   // The disposers are discarded on purpose: these bindings live for the app lifetime.
   deps.ownerSession.onRevoked(() => service.onOwnerChange())
   ;(deps.onPartitionChange ?? onMemoryPartitionChange)(() => service.onOwnerChange())
+  // G56: the onboarding role interview creates its assistants through this service, under the same scope.
+  bootstrapOnboardingInterview({
+    ipcMain: deps.ipcMain,
+    authorizeSender: deps.authorizeSender,
+    requireAuth: deps.requireAuth,
+    userDataPath: deps.userDataPath,
+    seal: deps.seal,
+    open: deps.open,
+    scope,
+    assistants: service,
+    audit: (record) => deps.onboardingAudit?.(record),
+    now: deps.now ?? Date.now
+  })
   return service
 }

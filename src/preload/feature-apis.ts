@@ -15,6 +15,7 @@ import { createWalkthroughPreloadApi } from './walkthrough'
 import { createSpokenRepliesPreloadApi } from './spoken-replies'
 import { createArtifactsPreloadApi } from './artifacts'
 import { createAssistantsPreloadApi } from './assistants'
+import { createOnboardingInterviewPreloadApi } from './onboarding-interview'
 import { createUserMemoryPreloadApi } from './user-memory'
 import { createConnectorAccountsPreloadApi } from './connector-accounts'
 import { createQuietPreloadApi } from './quiet'
@@ -38,6 +39,7 @@ export function createFeaturePreloadApis(ipc: IpcRenderer) {
     ...createSpokenRepliesPreloadApi(ipc),
     ...createArtifactsPreloadApi(ipc),
     ...createAssistantsPreloadApi(ipc),
+    ...createOnboardingInterviewPreloadApi(ipc),
     ...createUserMemoryPreloadApi(ipc),
     ...createConnectorAccountsPreloadApi(ipc),
     ...createQuietPreloadApi(ipc)
