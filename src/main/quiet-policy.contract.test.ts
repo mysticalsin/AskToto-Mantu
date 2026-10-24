@@ -17,6 +17,10 @@ describe('G68 unsolicited output wiring', () => {
     // One producer: src/main/quiet-output.ts builds every native Notification, behind submitQuietOutput.
     expect(notification).toMatch(/submitQuietOutput\(\s*'toast'/)
     expect(notification.match(/new\s+Notification\s*\(/g)).toHaveLength(1)
+    // MQA-275: the sanctioned notification module is a system toast only and never takes window focus.
+    expect(notification).toContain('notification.show()')
+    expect(notification).not.toMatch(/\b(?:win|w|window|mainWindow)\??\.(?:show|focus|showInactive)\(\)/)
+    expect(notification).not.toMatch(/BrowserWindow/)
     for (const sourceText of [mainIndex, updater]) {
       expect(sourceText).not.toMatch(/new\s+Notification\s*\(/)
       expect(sourceText).toMatch(/(showQuietNotification|notifyImportComplete)\(/)

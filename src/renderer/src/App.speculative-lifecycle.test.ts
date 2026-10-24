@@ -153,7 +153,11 @@ function actualCopilotMemo(context: vm.Context): { render: () => ReactElement | 
 
 // The renderer sends no transcript: a speculative suggestion declares the conversation context main derives from
 // its own ledger (G13), so the request is the mode and that declaration, nothing else.
-const SPECULATIVE_REQUEST = { mode: 'suggest', context: { kind: 'conversation', field: true, tailChars: 6000 } }
+const SPECULATIVE_REQUEST = {
+  mode: 'suggest',
+  outputIntent: 'ambient',
+  context: { kind: 'conversation', field: true, tailChars: 6000 }
+}
 
 function makeHarness() {
   const deferredStateUpdates: Array<() => void> = []

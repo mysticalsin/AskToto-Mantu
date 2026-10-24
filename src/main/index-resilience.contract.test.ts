@@ -49,7 +49,11 @@ describe('index.ts Q12 wiring', () => {
     const fn = body('function startMeetingNotifier(): void {', 'function buildTrayMenu')
     expect(fn).toContain('createMeetingAlert(')
     expect(fn).toMatch(/denyIfLimited\('graph-calendar'\)/)
-    expect(fn).toMatch(/\.on\('click', \(\) => reveal\('notification-click', \{ focus: false \}\)\)/)
+    // G68: the notification itself is created in quiet-output.ts (the quiet gate); index.ts still owns the click.
+    expect(fn).toMatch(
+      /showQuietNotification\(\{[^}]*onClick: \(\) => reveal\('notification-click', \{ focus: false \}\)/
+    )
+    expect(fn).not.toMatch(/new Notification\(/)
     expect(fn).not.toMatch(/starts in 1 minute/)
     expect(fn).not.toMatch(/sendHotkey\('toggle-listen'\)|meetingStartActivationAuthority/)
   })
