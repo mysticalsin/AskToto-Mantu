@@ -112,7 +112,7 @@ function badRequest(res, parseResult) {
   return res.status(400).json({
     ok: false,
     error: 'invalid_request',
-    details: parseResult.error.flatten(),
+    details: z.flattenError(parseResult.error),
   });
 }
 
@@ -818,7 +818,7 @@ export function createApp(store, auditLog, options = {}) {
     os: z.string().trim().min(1).max(32),
   });
   const v1RegisterSchema = z.object({
-    installId: z.string().uuid(),
+    installId: z.guid(),
     appVersion: z.string().trim().min(1).max(64),
     os: z.string().trim().min(1).max(32),
   });

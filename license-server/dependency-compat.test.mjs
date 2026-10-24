@@ -67,7 +67,7 @@ describe('license-server dependency compatibility', () => {
     const bodyParserRequire = createRequire(requireFromHere.resolve('body-parser/lib/read.js'));
 
     assert.equal(packageVersion(requireFromHere, 'express'), '4.22.2');
-    assert.equal(packageVersion(expressRequire, 'body-parser'), '1.20.8');
+    assert.equal(packageVersion(expressRequire, 'body-parser'), '1.20.9');
     assert.equal(packageVersion(expressRequire, 'qs'), '6.16.0');
     assert.equal(packageVersion(bodyParserRequire, 'qs'), '6.16.0');
   });
