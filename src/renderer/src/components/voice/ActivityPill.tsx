@@ -7,6 +7,7 @@ import {
   type DictationStatusInput,
   type SpokenReplyStatusInput
 } from './activity-pill-model'
+import { createSnapshotOrder } from './snapshot-order'
 
 /**
  * The top-edge activity pill (G30): dictation, a continuous conversation and a spoken reply, in the V05 pill's place
@@ -43,13 +44,15 @@ function useBridgeState<T>(bridge: StateBridge<T> | undefined): T | null {
   useEffect(() => {
     if (!bridge) return
     let live = true
+    // A late getState reply must not overwrite a newer push (Codex G30 review P1).
+    const order = createSnapshotOrder()
     const off = bridge.onState((next) => {
-      if (live) setState(next)
+      if (live && order.push(next)) setState(next)
     })
     void bridge
       .getState()
       .then((next) => {
-        if (live && next) setState(next)
+        if (live && order.pull(next)) setState(next)
       })
       .catch(() => {})
     return () => {
