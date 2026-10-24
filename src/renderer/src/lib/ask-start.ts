@@ -21,6 +21,7 @@ export function buildAskStart(id: string, req: AskRequest): AskStart {
     agentOverride: req.agentOverride,
     providerOverride: req.providerOverride,
     wantsScreenContext: req.wantsScreenContext,
-    history: req.history ?? []
+    history: req.history ?? [],
+    conversationReply: req.conversationReply
   }
 }

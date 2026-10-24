@@ -46,7 +46,8 @@ window.toto = new Proxy({
     getState: () => { calls.push({ name: 'voiceActions.getState', args: [] }); return Promise.resolve(snapshot) },
     onState: () => () => {},
     setChordRecorderActive: (active) => { calls.push({ name: 'voiceActions.setChordRecorderActive', args: [active] }); return Promise.resolve({ ok: true }) }
-  }
+  },
+  conversation: { start: () => { calls.push({ name: 'conversation.start', args: [] }); return Promise.resolve({ ok: true }) } }
 }, {
   get: (target, key) => {
     if (typeof key !== 'string') return undefined
@@ -171,6 +172,8 @@ describe('Settings › Speech › Voice actions (V06)', () => {
   }
   const inspect = (): Promise<Inspect> => page.evaluate(() => window.__voice.inspect())
   const toggle = () => page.getByRole('switch', { name: 'Use voice actions', exact: true })
+  const conversationToggle = () => page.getByRole('switch', { name: 'Enable continuous conversation', exact: true })
+  const conversationStart = () => page.getByRole('button', { name: 'Start conversation', exact: true })
   const change = () => page.getByRole('button', { name: /^Change hold to talk shortcut/ })
   const recorder = () => page.getByRole('textbox', { name: 'Hold to talk shortcut' })
   const hold = async (key: string, ms: number): Promise<void> => {
@@ -220,6 +223,25 @@ describe('Settings › Speech › Voice actions (V06)', () => {
     })
     await toggle().waitFor()
     expect(await page.locator('[data-permission-row]').count()).toBe(0)
+  })
+
+  it('requires voice actions and explicit conversation opt-in before the user can start', async () => {
+    await mount({ settings: { voiceActions: { enabled: true, conversation: { enabled: false } } } })
+    await conversationToggle().waitFor()
+    expect(await conversationToggle().getAttribute('aria-checked')).toBe('false')
+    expect(await conversationStart().isDisabled()).toBe(true)
+    await conversationToggle().click()
+    await expect.poll(() => conversationToggle().getAttribute('aria-checked')).toBe('true')
+    expect(await conversationStart().isDisabled()).toBe(false)
+    expect((await inspect()).callArgs.some((call) => call.name === 'conversation.start')).toBe(false)
+    await conversationStart().click()
+    await expect.poll(async () => (await inspect()).callArgs.some((call) => call.name === 'conversation.start')).toBe(true)
+    expect(await page.locator('[data-metis-conversation-start]').count()).toBe(1)
+    await page.close()
+    page = await browser.newPage()
+    await mount({ settings: { voiceActions: { enabled: true, conversation: { enabled: true } }, enterpriseLive: { managed: true, inferenceMode: 'cloud-only', summaryOnly: false } } })
+    await conversationToggle().waitFor()
+    expect(await conversationStart().isDisabled()).toBe(true)
   })
 
   it('a release build that follows the build default shows the Preview badge, off, and turning it on applies at once with no Save', async () => {

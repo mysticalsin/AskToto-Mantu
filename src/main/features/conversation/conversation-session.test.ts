@@ -224,6 +224,41 @@ describe('ConversationSession utterances', () => {
     expect(h.session.snapshot().state).toBe('listening')
   })
 
+  it('keeps capture closed while the exact recognized turn is pending in Ask', () => {
+    const h = harness()
+    h.session.start()
+    h.end({ kind: 'recognized' })
+    const token = h.session.currentReplyToken()
+    expect(token).not.toBeNull()
+    expect(h.session.isCurrentReply(owner, token!)).toBe(true)
+    expect(h.session.replyPending(owner, token!)).toBe(true)
+    expect(h.session.snapshot()).toMatchObject({ state: 'thinking', replyGeneration: token!.generation })
+    vi.advanceTimersByTime(500)
+    expect(h.begin).toHaveBeenCalledOnce()
+    expect(h.session.isCurrentReply(owner, token!)).toBe(true)
+
+    h.session.replyStarted(token!)
+    expect(h.session.snapshot().state).toBe('replying')
+    h.session.replyFinished(token!)
+    expect(h.session.currentReplyToken()).toBeNull()
+    vi.advanceTimersByTime(400)
+    expect(h.begin).toHaveBeenCalledTimes(2)
+    expect(h.session.snapshot().state).toBe('listening')
+  })
+
+  it('rejects a pending reply for a replaced owner or stale generation', () => {
+    const h = harness()
+    h.session.start()
+    h.end({ kind: 'recognized' })
+    const token = h.session.currentReplyToken()!
+    expect(h.session.replyPending(owner, { ...token, generation: token.generation + 1 })).toBe(false)
+    h.setOwner({ ...owner, contextRevision: owner.contextRevision + 1 })
+    expect(h.session.replyPending(owner, token)).toBe(false)
+    expect(h.session.snapshot().state).toBe('ended')
+    vi.advanceTimersByTime(500)
+    expect(h.begin).toHaveBeenCalledOnce()
+  })
+
   it('a silent window does not count as activity and listening continues', () => {
     const h = harness()
     h.session.start()

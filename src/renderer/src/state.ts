@@ -213,6 +213,7 @@ export type { AnswerState, AskRequest } from './lib/ask-types'
 export function useAsk(): {
   answer: AnswerState | null
   run: (req: AskRequest) => string
+  currentId: () => string | null
   fail: (error: string, label?: string) => string
   retry: () => string
   deeper: () => string
@@ -512,12 +513,14 @@ export function useAsk(): {
     })
   }, [run])
 
+  const currentId = useCallback((): string | null => idRef.current || null, [])
+
   // Memoized so consumers (App.tsx passes this whole object around as a dependency) only see a new
   // identity when the answer itself actually changes — run/fail/retry/deeper/cancel/clear are already
   // useCallback-stable, so without this the returned object was a fresh literal on every render.
   return useMemo(
-    () => ({ answer, run, fail, retry, deeper, cancel, clear }),
-    [answer, run, fail, retry, deeper, cancel, clear]
+    () => ({ answer, run, currentId, fail, retry, deeper, cancel, clear }),
+    [answer, run, currentId, fail, retry, deeper, cancel, clear]
   )
 }
 

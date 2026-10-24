@@ -44,6 +44,8 @@ export interface AnswerState {
 export interface AskRequest {
   mode: AskMode
   outputIntent?: 'direct' | 'ambient'
+  /** G28: binds a conversation reply to its session and reply generation so main can route the spoken answer. */
+  conversationReply?: { sessionId: string; replyGeneration: number }
   prompt?: string
   inputOrigin?: 'user-typed' | 'user-spoken-by-owner'
   label?: string

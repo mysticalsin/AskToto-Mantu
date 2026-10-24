@@ -231,7 +231,7 @@ export class InputSessionAuthority {
   isEstablishedLease(
     owner: TrustedInputOwner,
     sessionId: string,
-    purpose: 'command' | 'dictation' | 'speech'
+    purpose: 'command' | 'dictation' | 'conversation' | 'speech'
   ): boolean {
     const current = this.#active
     return (

@@ -735,6 +735,7 @@ import { registerWorkspaceIpc } from './ipc/workspace-ipc'
 import { registerImportAudioIpc } from './ipc/import-audio-ipc'
 import { RecoveredDraftCount } from './recovered-draft-count'
 import { registerInputCaptureIpc } from './ipc/input-capture-ipc'
+import { createConversationRuntime } from './features/conversation/conversation-runtime'
 import {
   bindRendererResets,
   createOwnerSessionWiring,
@@ -1373,8 +1374,11 @@ let commandMicActivationLeaseId: string | null = null
 let commandSpeechCapture: CommandSpeechCapture | null = null
 let voiceActions: ReturnType<typeof createVoiceActionsRuntime> | null = null
 let revokeSpokenReplies: (() => void) | null = null
+let conversationRuntime: ReturnType<typeof createConversationRuntime> | null = null
+let conversationAskTurns: { cancel(id: string): void } | null = null
 const { inputSessionAuthority, clearCommandMicLeaseTimer, armCommandMicLeaseTimeout } = createMainInputSessionWiring({
   voiceActions: () => voiceActions,
+  conversation: () => conversationRuntime,
   revokeSpokenReplies: () => revokeSpokenReplies?.(),
   commandMicActivationLeaseId: () => commandMicActivationLeaseId,
   clearCommandMicActivationLeaseId: () => {
@@ -1498,9 +1502,29 @@ commandSpeechCapture = new CommandSpeechCapture({
 const spokenRepliesWiring = createSpokenRepliesWiring({
   getSettings,
   meetingLive: () => inputSessionAuthority.hasMeetingReservation || listeningActive,
-  window: () => win
+  window: () => win,
+  onReplyLifecycle: (event) => conversationRuntime?.onReplyLifecycle(event)
 })
 revokeSpokenReplies = spokenRepliesWiring.onOwnerRevoked
+conversationRuntime = createConversationRuntime({
+  ipcMain,
+  assertMainWindow,
+  frameFromEvent: activationFrameFromEvent,
+  mainFrame: currentMainActivationFrame,
+  currentContext: currentInputSessionContext,
+  getSettings,
+  qaIdentity: QA_IDENTITY_BUILD,
+  requireAuth,
+  isClosing: () => inputSessionAuthority.isClosing,
+  meetingReserved: () => inputSessionAuthority.hasMeetingReservation || listeningActive,
+  onboardingActive: onboardingExclusiveLive,
+  window: () => win,
+  availability: commandMicAvailability,
+  authority: inputSessionAuthority,
+  ensureParakeet: ensureParakeetModel,
+  transcribe: parakeetTranscribe,
+  cancelAsk: (id) => conversationAskTurns?.cancel(id)
+})
 voiceActions = createVoiceActionsRuntime({
   spokenReplies: spokenRepliesWiring.runtime,
   qaIdentity: QA_IDENTITY_BUILD,
@@ -5550,6 +5574,7 @@ function registerIpc(): void {
     }
     lastAppliedManagedSnapshot = managedSnap
     voiceActions?.refresh() // a managed or user change to voice actions applies on the next poll (idempotent)
+    conversationRuntime?.refresh()
     // Close the managed-config gap described above — runs on every poll, not just on detected drift,
     // so it also catches encryption enabled at boot with a stale plaintext graph already on disk.
     purgeGraphIfEncryptedAndStale('encryption-active')
@@ -5941,6 +5966,7 @@ function registerIpc(): void {
     // or Local AI being enabled/disabled/provisioned) — takes effect immediately, no relaunch.
     refreshScreenPreprocess()
     voiceActions?.refresh()
+    conversationRuntime?.refresh()
     // At-rest encryption just turned on → purge any previously-built CLEARTEXT knowledge graph so it
     // can't leak meeting topics/entities the encryption is meant to protect. (Builds are already
     // blocked while encryption is on, so no graph will be regenerated until it's turned back off.)
@@ -7403,9 +7429,21 @@ function registerIpc(): void {
     send: (channel, payload) => win?.webContents.send(channel, payload),
     streams,
     metrics: askMetrics,
-    observe: spokenRepliesWiring.runtime.observeAsk,
+    observe: (event) => {
+      try {
+        spokenRepliesWiring.runtime.observeAsk(event)
+      } catch {
+        /* one observer cannot block the other */
+      }
+      try {
+        conversationRuntime?.observeAsk(event)
+      } catch {
+        /* lifecycle observation is best effort */
+      }
+    },
     quietAction: quietActionForAsk
   })
+  conversationAskTurns = askTurns
   ipcMain.handle(IPC.askStart, async (e, raw) => {
     assertMainWindow(e)
     const id = raw && typeof raw === 'object' && 'id' in (raw as object) ? String((raw as { id: unknown }).id) : ''
@@ -7416,9 +7454,17 @@ function registerIpc(): void {
       })
       return
     }
-    const failAskStart = (err: unknown): void => askTurns.fail(id, askStartFailureMessage(err))
+    const failAskStart = (err: unknown): void => {
+      askTurns.fail(id, askStartFailureMessage(err))
+      conversationRuntime?.failAsk(id)
+    }
     try {
       const req = AskStartSchema.parse(raw)
+      if (!conversationRuntime?.authorizeAsk(e, req)) {
+        askTurns.fail(req.id, 'Could not start the answer.')
+        conversationRuntime?.failAsk(req.id)
+        return
+      }
       askTiming.start(req.id, req.mode)
       // Brain context is main-only. Clear renderer input before any early return or mode gate so a
       // replay/fact-check/unavailable local store can never smuggle stale context into a provider prompt.
@@ -7431,7 +7477,7 @@ function registerIpc(): void {
         streams,
         onError: failAskStart,
         gate: contextGate,
-        onRefused: (message) => askTurns.fail(req.id, message),
+        onRefused: (message) => failAskStart(message),
         onApplied: (text, sources) => contextGrants?.manifests.setMemory(req.id, text, sources)
       })
       // MQA-182: Private View means Métis does not look at OR SEND your screen, and an already-captured frame is
@@ -7440,7 +7486,7 @@ function registerIpc(): void {
       // this handler is the trust boundary. Keyed on the payload, not the mode: an image may ride any mode.
       if (req.image && privateViewOn()) {
         auditLog('capture.blocked', { reason: 'private_view', at: 'ask' })
-        win?.webContents.send(IPC.streamError, { id: req.id, message: PRIVATE_VIEW_BLOCKED_MESSAGE })
+        failAskStart(new Error(PRIVATE_VIEW_BLOCKED_MESSAGE))
         return
       }
       // G16: a frame captured before access to the screen was withdrawn (sign-out, lock, a revoked grant, the
@@ -7449,7 +7495,7 @@ function registerIpc(): void {
         const verdict = screenObservation.checkSend(req.image)
         if (!verdict.ok) {
           auditLog('capture.dropped', { reason: 'stale_generation', at: 'ask' })
-          win?.webContents.send(IPC.streamError, { id: req.id, message: verdict.message })
+          failAskStart(new Error(verdict.message))
           return
         }
       }
@@ -7460,7 +7506,7 @@ function registerIpc(): void {
         const gate = operatorGate('recap')
         if (!gate.allowed) {
           auditLog('operator.gate.blocked', { feature: 'recap' })
-          win?.webContents.send(IPC.streamError, { id: req.id, message: gate.reason || 'Recap is not available.' })
+          failAskStart(new Error(gate.reason || 'Recap is not available.'))
           return
         }
       }
@@ -7472,6 +7518,7 @@ function registerIpc(): void {
         if (caveman.changed) s = setSettings({ askCaveman: caveman.next })
         req.prompt = caveman.visiblePrompt
         if (caveman.changed && !req.prompt.trim() && !req.image && !req.wantsScreenContext) {
+          conversationRuntime?.failAsk(req.id)
           win?.webContents.send(IPC.streamDone, { id: req.id })
           return
         }
@@ -7501,7 +7548,7 @@ function registerIpc(): void {
         { registry: owners.meetingContexts, frame: e.senderFrame, redact: s.redactSensitive, manifest },
         contextGate
       )
-      if (contextRefusal) return void win?.webContents.send(IPC.streamError, { id: req.id, message: contextRefusal })
+      if (contextRefusal) return void failAskStart(new Error(contextRefusal))
       // G14: a live-meeting ask takes its turn on the meeting's SessionQueue; `turn.send` drops stale output.
       const turn = await askTurns.begin({ id: req.id, mode: req.mode, handle: contextGate.handle(), ask: req })
       if (!turn) return
@@ -7566,7 +7613,7 @@ function registerIpc(): void {
       // refuses (with copy) what nothing may serve. Hedge, failover order and Private View read its result unchanged.
       const orgAllowed = getAllowedProviders()
       const route = planAsk({ req, settings: s, allowed, orgAllowed, policy: getActiveModelPolicy(s) })
-      if (route.unavailable) return askTurns.fail(req.id, route.unavailable)
+      if (route.unavailable) return failAskStart(new Error(route.unavailable))
 
       // Screen-vision capability. Static per provider, EXCEPT Dust: its ability to read a screenshot depends
       // on the selected agent's underlying model (it uploads the shot as a content fragment), so consult the
@@ -8838,6 +8885,7 @@ function registerIpc(): void {
       commandMicActivationLeaseId = id
     },
     getCommandSpeechCapture: () => commandSpeechCapture,
+    conversationCapture: conversationRuntime ?? undefined,
     currentInputSessionContext,
     captureAuthSessionBoundary,
     commandMicAvailability,
@@ -8855,6 +8903,7 @@ function registerIpc(): void {
       commandSpeechCancel: CommandSpeechCancelSchema
     }
   })
+  conversationRuntime?.registerIpc()
   if (voiceActions) registerVoiceActionsIpc(ipcMain, assertMainWindow, voiceActions)
   spokenRepliesWiring.registerIpc(ipcMain, assertMainWindow)
   registerCommandConfirmIpc(ipcMain, assertMainWindow, commandConfirm, () => win)

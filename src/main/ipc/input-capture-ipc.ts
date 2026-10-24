@@ -1,6 +1,12 @@
 import type { IpcMain, IpcMainInvokeEvent } from 'electron'
 import { IPC } from '@shared/ipc'
-import { isSpeechCapturePurpose, type InputSessionContext, type TrustedInputOwner } from '@shared/input-session'
+import {
+  InputSessionStartRequestSchema,
+  isSpeechCapturePurpose,
+  type InputSessionContext,
+  type InputSessionLease,
+  type TrustedInputOwner
+} from '@shared/input-session'
 import type { OwnerSessionRef } from '@shared/contracts/owner-session'
 import type { InputSessionAuthority } from '../input-session-authority'
 import type { OwnerSessionAuthority } from '../lifecycle/owner-session-authority'
@@ -42,6 +48,11 @@ interface InputCaptureIpcDependencies<Frame, Samples> {
   assertMainWindow: (event: IpcMainInvokeEvent) => void
   requireAuth: () => boolean
   inputSessionAuthority: InputSessionAuthority
+  conversationCapture?: {
+    authorizeInputStart(event: IpcMainInvokeEvent, owner: TrustedInputOwner, captureToken: string): boolean
+    bindInputLease(owner: TrustedInputOwner, captureToken: string, lease: InputSessionLease): boolean
+    stopInputLease?(sessionId: string): void
+  }
   /** Absent on installs without an owner: admission is then unchanged. */
   ownerSession?: Pick<OwnerSessionAuthority, 'mint' | 'validate'>
   /** When present, the input-session handlers gate through it (audited refusals). */
@@ -109,7 +120,9 @@ export function registerInputCaptureIpc<Frame, Samples>(deps: InputCaptureIpcDep
         deps.commandMicOwner(frame, deps.currentInputSessionContext()) !== null &&
         deps.commandMicActivationAuthority.consume(frame, kind)
       )
-    }
+    },
+    authorizeConversationStart: (event, owner, captureToken) =>
+      deps.conversationCapture?.authorizeInputStart(event, owner, captureToken) === true
   })
   deps.ipcMain.handle(IPC.inputSessionContext, (event) => inputSessionHandlers.context(event))
   deps.ipcMain.handle(IPC.inputSessionStart, (event, request: unknown) => {
@@ -145,6 +158,20 @@ export function registerInputCaptureIpc<Frame, Samples>(deps: InputCaptureIpcDep
         }
       }
       if (ref) ownerRefs.set(result.lease.sessionId, ref)
+      const parsed = InputSessionStartRequestSchema.safeParse(request)
+      const captureToken = parsed.success ? parsed.data.conversationCaptureToken : undefined
+      if (captureToken !== undefined) {
+        const bound = rollbackOwner
+          ? deps.conversationCapture?.bindInputLease(rollbackOwner, captureToken, result.lease) === true
+          : false
+        if (!bound) {
+          ownerRefs.delete(result.lease.sessionId)
+          if (rollbackOwner && deps.inputSessionAuthority.activeLease === result.lease) {
+            deps.inputSessionAuthority.stop(rollbackOwner, { sessionId: result.lease.sessionId })
+          }
+          return { ok: false, reason: 'stale_session' }
+        }
+      }
     }
     if (result.ok && isSpeechCapturePurpose(result.lease.purpose)) {
       deps.setCommandMicActivationLeaseId(result.lease.sessionId)
@@ -155,6 +182,7 @@ export function registerInputCaptureIpc<Frame, Samples>(deps: InputCaptureIpcDep
   deps.ipcMain.handle(IPC.inputSessionStop, (event, request: unknown) => {
     const result = inputSessionHandlers.stop(event, request)
     const parsed = deps.schemas.inputSessionStop.safeParse(request)
+    if (result.ok && parsed.success) deps.conversationCapture?.stopInputLease?.(parsed.data.sessionId)
     if (result.ok && parsed.success) ownerRefs.delete(parsed.data.sessionId)
     if (result.ok && parsed.success && deps.getCommandMicActivationLeaseId() === parsed.data.sessionId) {
       deps.clearCommandMicLeaseTimer(parsed.data.sessionId)

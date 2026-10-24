@@ -1,5 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { InputSessionContext, InputSessionLease, InputSessionRevoked } from '@shared/ipc'
+import type { ConversationAsk, ConversationCaptureBegin, ConversationCaptureBinding, ConversationSnapshot } from '@shared/conversation/conversation-session'
+import { AskStartSchema } from '@shared/ipc'
+import type { ConversationMicResult } from './use-command-mic'
 
 type SpeechResult =
   | { ok: true }
@@ -22,7 +25,7 @@ type TrackFixture = MediaStreamTrack & {
   stop: ReturnType<typeof vi.fn>
 }
 type TestController = {
-  start(options?: { source?: 'push-to-talk' | 'deliberate-talk'; purpose?: 'command' | 'dictation' }): Promise<void>
+  start(options?: { source?: 'push-to-talk' | 'deliberate-talk'; purpose?: 'command' | 'dictation'; conversation?: ConversationCaptureBegin }): Promise<void>
   finish(expectedGeneration?: number): Promise<void>
   cancel(): Promise<void>
   dispose(): void
@@ -79,7 +82,7 @@ function deferred<T>(fallback: T): Deferred<T> {
 
 function start(
   controller: TestController,
-  options?: { source?: 'push-to-talk' | 'deliberate-talk'; purpose?: 'command' | 'dictation' }
+  options?: { source?: 'push-to-talk' | 'deliberate-talk'; purpose?: 'command' | 'dictation'; conversation?: ConversationCaptureBegin }
 ): Promise<void> {
   return controller.start(options)
 }
@@ -111,6 +114,8 @@ function createHarness(options: HarnessOptions = {}) {
   }
   let activationReady = true
   let finishResult: SpeechResult = { ok: true }
+  let conversationFinishResult: unknown = { ok: true }
+  let conversationLeaseValid = true
   let nextInputSession = 0
   let audioContextNumber = 0
   let sealFrames: Float32Array[] = []
@@ -236,6 +241,37 @@ function createHarness(options: HarnessOptions = {}) {
         })()
       )
   )
+  const conversation = {
+    startCapture: vi.fn((token: string, owner: InputSessionContext) =>
+      trackBoundaryTask((async () => {
+        order.push(`conversation.lease:${token}`)
+        if (!conversationLeaseValid) return { ok: false as const, reason: 'stale_session' as const }
+        const sessionId = (++nextInputSession).toString(16).padStart(48, '0')
+        ids.push(sessionId)
+        const lease: InputSessionLease = {
+          sessionId, source: 'push-to-talk', purpose: 'conversation', activation: 'explicit',
+          authSessionGeneration: owner.authSessionGeneration, contextRevision: owner.contextRevision,
+          revision: 1, startedAt: 1234, actionAuthority: false
+        }
+        return { ok: true as const, lease }
+      })())
+    ),
+    captureStart: vi.fn((begin: ConversationCaptureBegin) =>
+      trackBoundaryTask((async () => { order.push(`conversation.start:${begin.captureToken}`); return { ok: true } })())
+    ),
+    captureFrame: vi.fn((binding: ConversationCaptureBinding, sequence: number, _samples: Float32Array) =>
+      trackBoundaryTask((async () => { order.push(`conversation.frame:${binding.captureToken}:${sequence}`); return { ok: true } })())
+    ),
+    captureFinish: vi.fn((binding: ConversationCaptureBinding, frameCount: number) =>
+      trackBoundaryTask((async () => { order.push(`conversation.finish:${binding.captureToken}:${frameCount}`); return conversationFinishResult })())
+    ),
+    captureCancel: vi.fn((binding: ConversationCaptureBinding) =>
+      trackBoundaryTask((async () => { order.push(`conversation.cancel:${binding.captureToken}`); return { ok: true } })())
+    ),
+    reportCaptureFailure: vi.fn((_failure: ConversationCaptureBinding & { reason: string }) =>
+      trackBoundaryTask((async () => ({ ok: true }))())
+    )
+  }
   const confirmInputSession = vi.fn((_sessionId: string, _owner: InputSessionContext) =>
     trackBoundaryTask((async () => true)())
   )
@@ -358,7 +394,8 @@ function createHarness(options: HarnessOptions = {}) {
       commandSpeechStart,
       commandSpeechFrame,
       commandSpeechFinish,
-      commandSpeechCancel
+      commandSpeechCancel,
+      conversation
     }
   })
   vi.stubGlobal('AudioContext', FakeAudioContext)
@@ -383,6 +420,7 @@ function createHarness(options: HarnessOptions = {}) {
     commandSpeechFrame,
     commandSpeechFinish,
     commandSpeechCancel,
+    conversation,
     commandMicAvailability,
     get availability() {
       return availability
@@ -401,6 +439,12 @@ function createHarness(options: HarnessOptions = {}) {
     },
     set finishResult(value: SpeechResult) {
       finishResult = value
+    },
+    set conversationFinishResult(value: unknown) {
+      conversationFinishResult = value
+    },
+    set conversationLeaseValid(value: boolean) {
+      conversationLeaseValid = value
     },
     set sealFrames(value: Float32Array[]) {
       sealFrames = value
@@ -456,7 +500,7 @@ function createHarness(options: HarnessOptions = {}) {
         else listener.handleEvent(new Event('devicechange'))
       }
     },
-    async createController(maxDurationMs = 8_000, extra: { onDeviceLostWithAudio?: () => Promise<unknown> } = {}) {
+    async createController(maxDurationMs = 8_000, extra: { onDeviceLostWithAudio?: () => Promise<unknown>; onConversationResult?: (binding: ConversationCaptureBinding, result: ConversationMicResult) => void } = {}) {
       vi.resetModules()
       const { CommandMicController } = await import('./use-command-mic')
       const controller = new CommandMicController({ maxDurationMs, ...extra }) as TestController
@@ -1097,5 +1141,141 @@ describe('accepted speech survives a device change (G18)', () => {
 
     expect(env.commandSpeechFinish).not.toHaveBeenCalled()
     expect(env.commandSpeechCancel).toHaveBeenCalledOnce()
+  })
+
+  describe('token-bound conversation capture', () => {
+    const begin: ConversationCaptureBegin = { sessionId: 'conversation-1', captureToken: 'main-token-1', maxMs: 10_000 }
+
+    it('rejects malformed begin and never opens a generic microphone', async () => {
+      const env = createHarness()
+      const controller = await env.createController()
+      await start(controller, { conversation: { ...begin, captureToken: '' } })
+      expect(env.conversation.startCapture).not.toHaveBeenCalled()
+      expect(env.startInputSession).not.toHaveBeenCalled()
+      expect(env.getUserMedia).not.toHaveBeenCalled()
+    })
+
+    it('a stale main token cannot open media or fall back to a generic lease', async () => {
+      const env = createHarness()
+      env.conversationLeaseValid = false
+      const controller = await env.createController()
+      await start(controller, { conversation: begin })
+      expect(env.conversation.startCapture).toHaveBeenCalledExactlyOnceWith(begin.captureToken, context)
+      expect(env.startInputSession).not.toHaveBeenCalled()
+      expect(env.getUserMedia).not.toHaveBeenCalled()
+      expect(env.commandSpeechStart).not.toHaveBeenCalled()
+    })
+
+    it('uses the exact token and conversation frame path, then returns only capture completion', async () => {
+      const env = createHarness()
+      const received: Array<{ binding: ConversationCaptureBinding; result: ConversationMicResult }> = []
+      const controller = await env.createController(8_000, {
+        onConversationResult: (binding, result) => received.push({ binding, result })
+      })
+      await start(controller, { conversation: begin })
+      expect(env.conversation.startCapture).toHaveBeenCalledExactlyOnceWith(begin.captureToken, context)
+      expect(env.startInputSession).not.toHaveBeenCalled()
+      expect(env.commandSpeechStart).not.toHaveBeenCalled()
+      expect(env.conversation.captureStart).toHaveBeenCalledExactlyOnceWith(begin)
+      env.nodes[0].emit(frame(0))
+      await vi.advanceTimersByTimeAsync(9_999)
+      expect(env.conversation.captureFinish).not.toHaveBeenCalled()
+      await vi.advanceTimersByTimeAsync(1)
+      expect(env.conversation.captureFrame).toHaveBeenCalledExactlyOnceWith(
+        { sessionId: begin.sessionId, captureToken: begin.captureToken }, 0, expect.any(Float32Array)
+      )
+      expect(env.conversation.captureFinish).toHaveBeenCalledExactlyOnceWith(
+        { sessionId: begin.sessionId, captureToken: begin.captureToken }, 1
+      )
+      expect(received).toEqual([{ binding: { sessionId: begin.sessionId, captureToken: begin.captureToken }, result: { ok: true } }])
+      expect(env.commandSpeechFinish).not.toHaveBeenCalled()
+    })
+
+    it('cancels only the bound conversation on explicit cancellation or disposal', async () => {
+      const env = createHarness()
+      const received = vi.fn()
+      const controller = await env.createController(8_000, { onConversationResult: received })
+      await start(controller, { conversation: begin })
+      await controller.cancel()
+      expect(env.conversation.captureCancel).toHaveBeenCalledExactlyOnceWith({ sessionId: begin.sessionId, captureToken: begin.captureToken })
+      expect(env.commandSpeechCancel).not.toHaveBeenCalled()
+      expect(received).not.toHaveBeenCalled()
+      await start(controller, { conversation: { ...begin, captureToken: 'main-token-2' } })
+      controller.dispose()
+      expect(env.conversation.captureCancel).toHaveBeenCalledTimes(2)
+      expect(received).not.toHaveBeenCalled()
+    })
+
+    it('passes a typed capture failure without command insertion or transcript text', async () => {
+      const env = createHarness()
+      env.conversationFinishResult = { ok: false, reason: 'no_speech' }
+      const received = vi.fn()
+      const controller = await env.createController(8_000, { onConversationResult: received })
+      await start(controller, { conversation: begin })
+      await controller.finish()
+      expect(received).toHaveBeenCalledExactlyOnceWith(
+        { sessionId: begin.sessionId, captureToken: begin.captureToken },
+        { ok: false, reason: 'no_speech' }
+      )
+      expect(env.conversation.reportCaptureFailure).toHaveBeenCalledExactlyOnceWith({
+        sessionId: begin.sessionId, captureToken: begin.captureToken, reason: 'no_speech'
+      })
+      expect(env.commandSpeechFinish).not.toHaveBeenCalled()
+    })
+
+    it('revocation tears down the exact conversation lease and reports the failure', async () => {
+      const env = createHarness()
+      const controller = await env.createController()
+      await start(controller, { conversation: begin })
+      env.revokeInput()
+      await vi.waitFor(() => expect(controller.getSnapshot()).toEqual({ status: 'error', reason: 'microphone_unavailable' }))
+      expect(env.conversation.captureCancel).toHaveBeenCalledExactlyOnceWith({ sessionId: begin.sessionId, captureToken: begin.captureToken })
+      expect(env.conversation.reportCaptureFailure).toHaveBeenCalledExactlyOnceWith({ sessionId: begin.sessionId, captureToken: begin.captureToken, reason: 'microphone_unavailable' })
+      expect(env.commandSpeechCancel).not.toHaveBeenCalled()
+    })
+
+    it('ignores a finish result that arrives after cancellation', async () => {
+      const env = createHarness()
+      const received = vi.fn()
+      const controller = await env.createController(8_000, { onConversationResult: received })
+      let resolveFinish!: (result: unknown) => void
+      const pendingFinish = new Promise<unknown>((resolve) => { resolveFinish = resolve })
+      env.conversation.captureFinish.mockImplementationOnce(() => trackBoundaryTask(pendingFinish))
+      await start(controller, { conversation: begin })
+      const finishing = controller.finish()
+      await vi.waitFor(() => expect(env.conversation.captureFinish).toHaveBeenCalledOnce())
+      await controller.cancel()
+      resolveFinish({ ok: true })
+      await finishing
+      expect(received).not.toHaveBeenCalled()
+      expect(env.conversation.captureCancel).toHaveBeenCalledExactlyOnceWith({ sessionId: begin.sessionId, captureToken: begin.captureToken })
+    })
+  })
+
+  it('only a live matching conversation generation may start a main-originated ask', async () => {
+    const { conversationAskMatchesSnapshot } = await import('./use-command-mic')
+    const message: ConversationAsk = { sessionId: 'conversation-1', replyGeneration: 2, text: 'Exact speech' }
+    const snapshot = { active: true, sessionId: 'conversation-1', replyGeneration: 2 } as ConversationSnapshot
+    expect(conversationAskMatchesSnapshot(message, snapshot)).toBe(true)
+    expect(conversationAskMatchesSnapshot(message, { ...snapshot, sessionId: 'other' })).toBe(false)
+    expect(conversationAskMatchesSnapshot(message, { ...snapshot, replyGeneration: 3 })).toBe(false)
+    expect(conversationAskMatchesSnapshot(message, { ...snapshot, active: false })).toBe(false)
+    expect(conversationAskMatchesSnapshot(message, null)).toBe(false)
+  })
+
+  it('a cancel binding must match both the capture token and conversation session', async () => {
+    const { conversationCaptureMatches } = await import('./use-command-mic')
+    const begin: ConversationCaptureBegin = { sessionId: 'conversation-1', captureToken: 'main-token-1', maxMs: 10_000 }
+    expect(conversationCaptureMatches(begin, { sessionId: 'conversation-1', captureToken: 'main-token-1' })).toBe(true)
+    expect(conversationCaptureMatches(begin, { sessionId: 'conversation-1', captureToken: 'old-token' })).toBe(false)
+    expect(conversationCaptureMatches(begin, { sessionId: 'other', captureToken: 'main-token-1' })).toBe(false)
+  })
+
+  it('accepts only a strict bounded conversation reply correlation on asks', () => {
+    const base = { id: 'ask-1', mode: 'answer', prompt: 'Exact speech', inputOrigin: 'user-spoken-by-owner' }
+    expect(AskStartSchema.safeParse({ ...base, conversationReply: { sessionId: 'conversation-1', replyGeneration: 2 } }).success).toBe(true)
+    expect(AskStartSchema.safeParse({ ...base, conversationReply: { sessionId: 'conversation-1', replyGeneration: 2, captureToken: 'extra' } }).success).toBe(false)
+    expect(AskStartSchema.safeParse({ ...base, conversationReply: { sessionId: '', replyGeneration: 2 } }).success).toBe(false)
+    expect(AskStartSchema.safeParse({ ...base, conversationReply: { sessionId: 'conversation-1', replyGeneration: -1 } }).success).toBe(false)
   })
 })

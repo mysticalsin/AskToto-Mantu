@@ -1,6 +1,7 @@
 /** Main-process composition for input-session lifecycle hooks shared by voice capture and G27 playback. */
 import { IPC } from '@shared/ipc'
 import type { InputSessionStopReason } from '@shared/input-session'
+import type { InputSessionLease, TrustedInputOwner } from '@shared/input-session'
 import type { CommandSpeechCapture } from '../command-speech-capture'
 import { createCommandMicLeaseTimer } from '../command-mic-lease-timer'
 import { InputSessionAuthority } from '../input-session-authority'
@@ -13,6 +14,11 @@ interface OwnerWindowLike {
 
 export interface MainInputSessionWiringDeps {
   voiceActions(): Pick<VoiceActionsRuntime, 'onHardStop' | 'onMeetingReserved'> | null | undefined
+  conversation?(): {
+    onHardStop(reason: InputSessionStopReason): void
+    onMeetingReserved(): void
+    onInputLeaseRevoked(owner: TrustedInputOwner, lease: InputSessionLease, reason: InputSessionStopReason): void
+  } | null | undefined
   revokeSpokenReplies(): void
   commandMicActivationLeaseId(): string | null
   clearCommandMicActivationLeaseId(): void
@@ -31,9 +37,20 @@ export function createMainInputSessionWiring(deps: MainInputSessionWiringDeps) {
     authority: () => authority
   })
   authority = new InputSessionAuthority({
-    onHardStop: (reason: InputSessionStopReason) => deps.voiceActions()?.onHardStop(reason),
-    onMeetingReserved: () => deps.voiceActions()?.onMeetingReserved(),
+    onHardStop: (reason: InputSessionStopReason) => {
+      deps.voiceActions()?.onHardStop(reason)
+      deps.conversation?.()?.onHardStop(reason)
+    },
+    onMeetingReserved: () => {
+      deps.voiceActions()?.onMeetingReserved()
+      deps.conversation?.()?.onMeetingReserved()
+    },
     onRevoked: (owner, lease, reason) => {
+      try {
+        deps.conversation?.()?.onInputLeaseRevoked(owner, lease, reason)
+      } catch {
+        // Conversation state is best effort after lease authority has been revoked.
+      }
       try {
         deps.revokeSpokenReplies()
       } catch {

@@ -39,7 +39,11 @@ export const VOICE_ACTIONS_COPY = {
     'Keeps the microphone on to hear “Hey Métis”. Speech is processed on this computer and never saved. Uses more battery.',
   wakeUnavailable:
     'Not available yet. It needs an on-device listener that has passed Métis accuracy and battery checks.',
-  micWhy: 'Voice actions listen only while you hold the shortcut. Métis needs your microphone to hear you.'
+  micWhy: 'Voice actions listen only while you hold the shortcut. Métis needs your microphone to hear you.',
+  conversationLabel: 'Enable continuous conversation',
+  conversationDesc: 'Opt in to an ongoing voice conversation. Métis listens in short turns until you stop it.',
+  conversationStart: 'Start conversation',
+  conversationStartHint: 'Starting here opens the conversation. Microphone access is handled when capture begins.'
 } as const
 
 /** Voice actions state from main: the effective on/off (build default, QA, policy) and whether the shortcut runs. */
@@ -100,10 +104,12 @@ export function VoiceActionsSection({
   const chord = voice.holdChord[chordKey]
   const cloudOnly = isCloudOnlyProfile(resolveEnterpriseLiveProfile(settings.enterpriseLive))
   const managed = settings.managedKeys?.includes('voiceActions') === true
+  const conversationEnabled = voice.conversation.enabled === true
 
   // `null` follows the build default (on in QA builds, off as a Preview in release builds); a boolean is a choice.
   const chosen = typeof voice.enabled === 'boolean'
   const on = !cloudOnly && (chosen ? voice.enabled === true : snapshot?.enabled === true)
+  const canStartConversation = on && conversationEnabled && !managed && !cloudOnly
   const preview = !chosen && snapshot !== null && !snapshot.enabled && !cloudOnly
   const subDisabled = managed || !on
   const wakeOpen = VOICE_WAKE_WORD_GATE_PASSED
@@ -138,6 +144,28 @@ export function VoiceActionsSection({
       </ToggleRow>
       {managed && <Notice icon={<Lock size={12} aria-hidden />}>{VOICE_ACTIONS_COPY.managed}</Notice>}
       {cloudOnly && <Notice icon={<Info size={12} aria-hidden />}>{VOICE_ACTIONS_COPY.cloudOnly}</Notice>}
+      <div className="mt-1 flex flex-col gap-1 border-t border-[var(--cl-border)] pt-2 pl-3">
+        <ToggleRow
+          label={VOICE_ACTIONS_COPY.conversationLabel}
+          desc={VOICE_ACTIONS_COPY.conversationDesc}
+          on={conversationEnabled}
+          onChange={(enabled) =>
+            void patch({ voiceActions: { ...voice, conversation: { ...voice.conversation, enabled } } })
+          }
+          disabled={!on || managed || cloudOnly}
+          managedChip={managed}
+        />
+        <button
+          type="button"
+          data-metis-conversation-start
+          disabled={!canStartConversation}
+          onClick={() => void window.toto.conversation.start().catch(() => null)}
+          className="no-drag cl-focus w-fit rounded-md border border-[var(--cl-border)] px-2.5 py-1.5 text-xs font-medium text-[color:var(--cl-foreground)] disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          {VOICE_ACTIONS_COPY.conversationStart}
+        </button>
+        <div className={HINT}>{VOICE_ACTIONS_COPY.conversationStartHint}</div>
+      </div>
       {on && snapshot?.shortcut === 'stopped' && (
         <Notice icon={<AlertCircle size={12} aria-hidden />}>
           {VOICE_ACTIONS_COPY.stopped}{' '}

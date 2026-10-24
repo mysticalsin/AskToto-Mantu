@@ -75,9 +75,15 @@ export type InputSessionContext = z.infer<typeof InputSessionContextSchema>
 export const InputSessionStartRequestSchema = z
   .object({
     input: InputSessionStartSchema,
-    context: InputSessionContextSchema
+    context: InputSessionContextSchema,
+    conversationCaptureToken: z.string().min(1).max(64).optional()
   })
   .strict()
+  .superRefine((request, context) => {
+    if (request.conversationCaptureToken && (request.input.source !== 'push-to-talk' || request.input.purpose !== 'conversation' || request.input.activation !== 'explicit')) {
+      context.addIssue({ code: z.ZodIssueCode.custom, path: ['conversationCaptureToken'], message: 'Conversation capture tokens require explicit conversation push-to-talk.' })
+    }
+  })
 export type InputSessionStartRequest = z.infer<typeof InputSessionStartRequestSchema>
 export const InputSessionStopRequestSchema = z
   .object({

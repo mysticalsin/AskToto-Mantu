@@ -802,6 +802,11 @@ const AskStartBaseSchema = z.object({
   outputIntent: z.enum(['direct', 'ambient']).optional(),
   prompt: z.string().default(''),
   inputOrigin: z.enum(['user-typed', 'user-spoken-by-owner']).optional(), // provenance only; grants no authority
+  /** Exact main-owned conversation reply; ordinary asks omit it. */
+  conversationReply: z.object({
+    sessionId: z.string().min(1).max(64),
+    replyGeneration: z.number().int().nonnegative().safe()
+  }).strict().optional(),
   /** base64 image (JPEG from screen capture; no data: prefix) for vision mode. Max ~5.5 MB base64. */
   image: z
     .string()

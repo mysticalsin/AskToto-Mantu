@@ -1,4 +1,4 @@
-import type { InputPurpose } from '@shared/input-session'
+import type { InputPurpose, InputSessionResult } from '@shared/input-session'
 import type { InputSessionContext, InputSessionLease, InputSessionRevoked, MeetingMicCaptureRevoked } from '@shared/ipc'
 
 type Cleanup = () => void
@@ -63,12 +63,18 @@ export interface AdmittedMicrophone {
 }
 
 export interface InteractiveMicOptions {
+  /** Main-issued authority for one conversation window; never used by command or dictation. */
+  conversationCaptureToken?: string
   /**
    * Who decides what a device change means. By default a device change releases the lease and stops the stream.
    * A caller that must not lose audio it already accepted (the command capture, G18) passes this instead: the
    * lease and the stream stay until the caller releases them, and the caller is told.
    */
   onDeviceChange?: () => void
+}
+
+type ConversationAdmissionBridge = {
+  conversation: { startCapture(token: string, context: InputSessionContext): Promise<InputSessionResult> }
 }
 
 /** Obtain main-process authority before opening the renderer microphone. */
@@ -85,8 +91,20 @@ export async function acquireInteractiveMic(
   if (signal?.aborted) throw new DOMException('Microphone admission was cancelled.', 'AbortError')
   if (!context) throw new Error('Microphone admission is unavailable for this window.')
   const activation = source === 'application-probe' ? 'ambient' : 'explicit'
-  const result = await window.toto.startInputSession({ source, purpose, activation }, context)
+  const result = options.conversationCaptureToken
+    ? purpose === 'conversation' && source === 'push-to-talk'
+      ? await (window.toto as typeof window.toto & ConversationAdmissionBridge).conversation.startCapture(
+          options.conversationCaptureToken, context
+        )
+      : { ok: false as const, reason: 'invalid_request' as const }
+    : await window.toto.startInputSession({ source, purpose, activation }, context)
   if (!result.ok) throw new Error(`Microphone admission denied: ${result.reason}`)
+  if (options.conversationCaptureToken &&
+      (result.lease.source !== 'push-to-talk' || result.lease.purpose !== 'conversation' ||
+       result.lease.activation !== 'explicit' || result.lease.actionAuthority)) {
+    await window.toto.stopInputSession({ sessionId: result.lease.sessionId }, context).catch(() => undefined)
+    throw new Error('Microphone admission denied: unauthorized')
+  }
   if (signal?.aborted) {
     await window.toto.stopInputSession({ sessionId: result.lease.sessionId }, context).catch(() => undefined)
     throw new DOMException('Microphone admission was cancelled.', 'AbortError')

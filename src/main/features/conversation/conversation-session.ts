@@ -125,6 +125,7 @@ export class ConversationSession {
   #state: ConversationState = 'off'
   #reason: ConversationReason | null = null
   #replying = false
+  #replyPending = false
   #generation = 0
   #revision = 0
   #snapshot: ConversationSnapshot
@@ -148,6 +149,44 @@ export class ConversationSession {
   currentReplyToken(): ConversationReplyToken | null {
     const token = this.#session?.replyToken
     return token ? { ...token } : null
+  }
+
+  /** The recognized turn is being handed to Ask; keep the microphone closed until its reply settles. */
+  replyPending(owner: TrustedInputOwner, token: ConversationReplyToken): boolean {
+    const session = this.#session
+    if (!session || !sameOwner(session.owner, owner) || !this.#matchesReply(session, token)) return false
+    if (!this.#ownerAndDeadlineCurrent(session, true)) return false
+    this.#replyPending = true
+    this.#clearListen()
+    const captureToken = session.captureToken
+    session.captureToken = null
+    this.#cancelWindow(captureToken)
+    if (this.#session === session && this.#replyPending && this.#matchesReply(session, token))
+      this.#setState('thinking', null)
+    return true
+  }
+
+  /** Ask IPC accepts only the exact reply reserved by the latest recognized capture for this owner. */
+  isCurrentReply(owner: TrustedInputOwner, token: ConversationReplyToken): boolean {
+    const session = this.#session
+    return Boolean(
+      session &&
+        sameOwner(session.owner, owner) &&
+        this.#matchesReply(session, token) &&
+        this.#ownerAndDeadlineCurrent(session, true)
+    )
+  }
+
+  /** Main binds renderer capture traffic to the exact active owner, session, and one-use capture token. */
+  isCurrentCapture(owner: TrustedInputOwner, sessionId: string, captureToken: string): boolean {
+    const session = this.#session
+    return Boolean(
+      session &&
+        session.id === sessionId &&
+        session.captureToken === captureToken &&
+        sameOwner(session.owner, owner) &&
+        this.#ownerAndDeadlineCurrent(session, false)
+    )
   }
 
   /** Apply the current effective setting and drop a session whose preconditions went away. Idempotent. */
@@ -234,6 +273,7 @@ export class ConversationSession {
     const session = this.#session
     if (!session || !this.#matchesReply(session, token) || this.#replying) return
     if (!this.#ownerAndDeadlineCurrent(session, true)) return
+    this.#replyPending = false
     this.#replying = true
     this.#clearListen()
     const captureToken = session.captureToken
@@ -247,8 +287,9 @@ export class ConversationSession {
   replyFinished(token: ConversationReplyToken): void {
     const session = this.#session
     if (!session || !this.#matchesReply(session, token)) return
-    if (!this.#ownerAndDeadlineCurrent(session, this.#replying)) return
+    if (!this.#ownerAndDeadlineCurrent(session, this.#replying || this.#replyPending)) return
     this.#replying = false
+    this.#replyPending = false
     session.replyToken = null
     session.idleDeadline = this.deps.now() + this.#limits().idleMs
     this.#armExpiry(session)
@@ -348,6 +389,7 @@ export class ConversationSession {
         const oldReply = session.replyToken
         session.replyToken = { sessionId: session.id, generation: ++this.#generation }
         this.#replying = false
+        this.#replyPending = false
         this.#cancelReply(oldReply)
         if (this.#session !== session || this.#disposed || this.#ending) return
         session.idleDeadline = this.deps.now() + this.#limits().idleMs
@@ -410,7 +452,7 @@ export class ConversationSession {
     const now = this.deps.now()
     if (now >= session.maxDeadline) return this.#end('max_duration')
     if (now >= session.idleDeadline) {
-      if (this.#replying) {
+      if (this.#replying || this.#replyPending) {
         // A reply that is still playing is activity; the hard maximum still bounds it.
         session.idleDeadline = now + this.#limits().idleMs
         this.#armExpiry(session)
@@ -440,7 +482,7 @@ export class ConversationSession {
       this.#end('max_duration')
       return false
     }
-    if (now >= session.idleDeadline && !(allowReplyActivity && this.#replying)) {
+    if (now >= session.idleDeadline && !(allowReplyActivity && (this.#replying || this.#replyPending))) {
       this.#end('idle_timeout')
       return false
     }
@@ -466,6 +508,7 @@ export class ConversationSession {
     this.#session = null
     session.captureToken = null
     session.replyToken = null
+    this.#replyPending = false
     this.#replying = false
     this.#clearExpiry()
     this.#clearListen()

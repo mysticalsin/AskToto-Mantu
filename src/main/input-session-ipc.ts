@@ -39,6 +39,8 @@ interface Dependencies<Event extends EventLike> {
     source: InputSessionStart['source'],
     purpose: InputSessionStart['purpose']
   ): boolean
+  /** G28: a main-minted conversation window token is the only way to start continuous capture. */
+  authorizeConversationStart?(event: Event, owner: TrustedInputOwner, captureToken: string): boolean
 }
 
 function ownerFromEvent(
@@ -115,7 +117,11 @@ export function createInputSessionHandlers<Event extends EventLike>(dependencies
       }
       const owner = ownerFromEvent(event, dependencies.currentMainUrl(), current)
       if (!owner) return { ok: false, reason: 'unauthorized' }
-      if (
+      const conversationCaptureToken = parsed.data.conversationCaptureToken
+      if (conversationCaptureToken !== undefined) {
+        if (!dependencies.authorizeConversationStart?.(event, owner, conversationCaptureToken))
+          return { ok: false, reason: 'unauthorized' }
+      } else if (
         isSpeechCapturePurpose(parsed.data.input.purpose) &&
         !dependencies.authorizeCommandStart?.(event, owner, parsed.data.input.source, parsed.data.input.purpose)
       ) {

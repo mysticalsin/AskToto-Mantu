@@ -5,8 +5,9 @@ export const COMMAND_SPEECH_SAMPLE_RATE = 16_000
 export const COMMAND_SPEECH_MAX_SAMPLES = COMMAND_SPEECH_SAMPLE_RATE * COMMAND_SPEECH_MAX_SECONDS
 export const COMMAND_SPEECH_MAX_FRAME_SAMPLES = 2_048
 export const COMMAND_SPEECH_MAX_FRAMES = Math.ceil(COMMAND_SPEECH_MAX_SAMPLES / COMMAND_SPEECH_MAX_FRAME_SAMPLES)
-/** The cap plus two seconds for the final seal and the last frames still in flight. */
-const COMMAND_SPEECH_MAX_AGE_MS = COMMAND_SPEECH_MAX_SECONDS * 1_000 + 2_000
+/** Extra bounded time to seal frames and deliver captureFinish after the PCM duration cap. */
+export const COMMAND_SPEECH_FINALIZATION_GRACE_MS = 2_000
+const COMMAND_SPEECH_MAX_AGE_MS = COMMAND_SPEECH_MAX_SECONDS * 1_000 + COMMAND_SPEECH_FINALIZATION_GRACE_MS
 const COMMAND_SPEECH_FINALIZATION_TIMEOUT_MS = 125_000
 
 export type CommandSpeechResult =
