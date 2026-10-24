@@ -1,4 +1,3 @@
-import { randomBytes } from 'node:crypto'
 import {
   CONNECTOR_CATALOG,
   CONNECTOR_CATALOG_REVISION,
@@ -15,12 +14,17 @@ import type { AccountResolver } from './account-ref'
 import type { ConnectorAccountRegistry } from './account-registry'
 import type { AccountChoiceRunResult, AccountChoiceState } from '@shared/connector-account-choice'
 import { createAccountChoiceBroker, type AccountChoiceBroker, type PendingAccountChoice } from './account-choice-broker'
+import { requiresConfirm } from '@shared/connector-effects'
+import type { ConnectorConfirmState } from '@shared/connector-confirm'
 import { createCatalogPublisher } from './catalog-publisher'
+import { createConnectorConfirmBroker, type ConnectorConfirmBroker } from './connector-confirm-broker'
 import {
   createActionGuardWriteGate,
   createConnectorExecutor,
+  type ConnectorCall,
   type ConnectorExecutor,
   type ConnectorGrantSeam,
+  type PreparedConnectorCall,
   writeArgsHash
 } from './connector-executor'
 import { createBuiltinHandlers } from './connector-handlers'
@@ -135,19 +139,69 @@ export function configureAccountChoiceDelivery(
   choiceDelivery = send
 }
 
+let confirmDelivery: ((webContentsId: number, state: ConnectorConfirmState) => void) | null = null
+
+/** Wired by the lifecycle composition root: how a confirm card reaches the owner window. Tests pass a recorder. */
+export function configureConnectorConfirmDelivery(
+  send: ((webContentsId: number, state: ConnectorConfirmState) => void) | null
+): void {
+  confirmDelivery = send
+}
+
+let confirmBroker: ConnectorConfirmBroker | null = null
+/** The one connector confirm card broker (G64). Every write waits on it; its proposal id is the ActionGuard approval. */
+export function connectorConfirmBroker(): ConnectorConfirmBroker {
+  confirmBroker ??= createConnectorConfirmBroker({
+    send: (id, state) => confirmDelivery?.(id, state),
+    catalogRevision: () => connectorCatalog.current().revision,
+    audit: (event, metadata) => auditLog(event as never, metadata as never)
+  })
+  return confirmBroker
+}
+
+const CONNECTOR_LABELS: Readonly<Record<ConnectorKind, string>> = { outlook: 'Outlook' }
+
+/**
+ * Show the confirm card for a prepared write and run it only if the owner confirms. The approval the executor sees
+ * is the card's own proposal id bound to the hash of the exact arguments. Without a window to show the card in,
+ * nothing runs.
+ */
+async function confirmThenExecute(
+  call: ConnectorCall,
+  prepared: PreparedConnectorCall,
+  ownerWebContentsId: number | undefined
+): Promise<ConnectorResult> {
+  const exec = connectorExecutor()
+  if (!requiresConfirm(prepared.op.effectClass)) return exec.execute(call)
+  if (ownerWebContentsId === undefined) return prepared.refuse('not_approved', prepared.provenance)
+  const subject = (prepared.parsed as { subject?: unknown } | null)?.subject
+  const outcome = await connectorConfirmBroker().issue({
+    ownerWebContentsId,
+    opId: prepared.op.opId,
+    revision: prepared.snapshot.revision,
+    argsHash: prepared.argsHash,
+    effectClass: prepared.op.effectClass,
+    summary: prepared.op.summary,
+    connectorLabel: CONNECTOR_LABELS[prepared.op.kind],
+    ...(prepared.accountLabel ? { accountLabel: prepared.accountLabel } : {}),
+    ...(prepared.accountHint ? { maskedHint: prepared.accountHint } : {}),
+    ...(typeof subject === 'string' && subject.trim() ? { subjectPreview: subject.trim().slice(0, 80) } : {}),
+    ...(prepared.recipients.length ? { recipients: prepared.recipients } : {})
+  })
+  if (!outcome.confirmed) return prepared.refuse('confirm_declined', prepared.provenance)
+  return exec.execute({ ...call, approval: outcome.approval })
+}
+
 async function resumeChosenOperation(
   pending: PendingAccountChoice,
   accountRef: AccountRef
 ): Promise<AccountChoiceRunResult> {
-  // The owner's choice is the only thing that names the account. The approval is the card's own proposal id and
-  // the hash of the exact arguments, so the executor's write gate accepts this operation and nothing else.
-  const result = await connectorExecutor().execute({
-    opId: pending.opId,
-    revision: pending.revision,
-    input: pending.input,
-    accountRef,
-    approval: { proposalId: pending.choiceId, argsHash: pending.argsHash }
-  })
+  // The owner's choice is the only thing that names the account. It does not approve the write: the confirm card
+  // does, with its own proposal id bound to the hash of the exact arguments.
+  const call: ConnectorCall = { opId: pending.opId, revision: pending.revision, input: pending.input, accountRef }
+  const prepared = await connectorExecutor().prepare(call)
+  const result =
+    'prepared' in prepared ? await confirmThenExecute(call, prepared, pending.ownerWebContentsId) : prepared
   const { result: _result, ...legacy } = toLegacy(pending.opId, result)
   return legacy
 }
@@ -173,9 +227,8 @@ export interface ConnectorWriteOptions {
 
 /**
  * Run a catalog write for an owner who just asked for it through a main-window-gated IPC (the Review button). The
- * approval is minted here, bound to the schema-parsed arguments, and the executor still revalidates the revision,
- * the op, the input and the grant. ASSUMED until G64 routes the confirm card's own proposal id through here.
- * The result keeps the legacy `OutlookWriteResult` shape so the renderer is unchanged.
+ * approval is the confirm card's own proposal id, bound to the schema-parsed arguments (G64); the executor still
+ * revalidates the revision, the op, the input, the grant and the recipients. The result keeps the legacy `OutlookWriteResult` shape so the renderer is unchanged.
  *
  * When more than one account could run it and no trusted signal picks one, nothing runs: a choice card is issued to
  * `ownerWebContentsId`, and the owner's choice resumes exactly this operation once (account-choice-broker.ts).
@@ -207,30 +260,32 @@ export async function runConnectorWriteDetailed(
     }
     return { ok: false, error: result.message, result }
   }
-  const argsHash = writeArgsHash(opId, planned.revision, parsed.data)
-  const result = await exec.execute({
+  const call: ConnectorCall = {
     opId,
     revision: planned.revision,
     input,
-    ...(options.sourceAccountRef ? { sourceAccountRef: options.sourceAccountRef } : {}),
-    approval: { proposalId: randomBytes(16).toString('hex'), argsHash }
-  })
-  if (
-    !result.ok &&
-    result.reason === 'account_ambiguous' &&
-    result.choices &&
-    options.ownerWebContentsId !== undefined
-  ) {
-    accountChoiceBroker().issue({
-      ownerWebContentsId: options.ownerWebContentsId,
-      opId,
-      revision: planned.revision,
-      argsHash,
-      input: parsed.data,
-      options: result.choices
-    })
+    ...(options.sourceAccountRef ? { sourceAccountRef: options.sourceAccountRef } : {})
   }
-  return toLegacy(opId, result)
+  const prepared = await exec.prepare(call)
+  if (!('prepared' in prepared)) {
+    if (
+      prepared.ok === false &&
+      prepared.reason === 'account_ambiguous' &&
+      prepared.choices &&
+      options.ownerWebContentsId !== undefined
+    ) {
+      accountChoiceBroker().issue({
+        ownerWebContentsId: options.ownerWebContentsId,
+        opId,
+        revision: planned.revision,
+        argsHash: writeArgsHash(opId, planned.revision, parsed.data),
+        input: parsed.data,
+        options: prepared.choices
+      })
+    }
+    return toLegacy(opId, prepared)
+  }
+  return toLegacy(opId, await confirmThenExecute(call, prepared, options.ownerWebContentsId))
 }
 
 export async function runConnectorWrite(

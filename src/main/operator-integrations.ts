@@ -22,7 +22,8 @@ import {
   type OperatorIntegration,
   type OperatorIntegrationKind
 } from '@shared/operator-entitlements'
-import { connectMcp, pushToMcp, type McpPushResult } from './mcp/mcpClient'
+import { connectMcp, type McpPushResult } from './mcp/mcpClient'
+import { mcpCallRuntime, pushTransport } from './features/connectors/mcp-call-runtime'
 import { mainLog } from './logger'
 
 const REFRESH_INTERVAL_MS = 6 * 60 * 60 * 1000
@@ -289,14 +290,22 @@ export function operatorMcpServer(id: string): OperatorMcpRegistration | null {
 export async function callOperatorMcpTool(
   id: string,
   toolName: string,
-  args: Record<string, unknown>
+  args: Record<string, unknown>,
+  ownerWebContentsId?: number
 ): Promise<McpPushResult> {
   const reg = mcpRegistry.get(id)
   if (!reg) return { ok: false, error: 'This Operator connection is not available.' }
   if (reg.tools && !reg.tools.includes(toolName)) {
     return { ok: false, error: `Unknown ${reg.label} tool.` }
   }
-  return pushToMcp(reg.baseUrl, reg.credential, {}, toolName, args, reg.label)
+  // G64: an Operator tool is classified like any other (unknown means irreversible) and waits for the confirm card.
+  return mcpCallRuntime().write({
+    target: { source: 'operator', connectionKind: id, connectionId: id, label: reg.label },
+    toolName,
+    args,
+    ...(ownerWebContentsId !== undefined ? { ownerWebContentsId } : {}),
+    transport: pushTransport(reg.baseUrl, reg.credential, {}, reg.label)
+  })
 }
 
 // ── CRM push credential substitution (PLAN.md P2.2b #3) ──────────────────────────────────────────────

@@ -22,20 +22,45 @@ import { OUTLOOK_DRAFT_CONSENT_COPY } from '../../outlook-write'
 import { createMemoryConnectorAccountStore } from './account-store'
 import { createConnectorAccountRegistry } from './account-registry'
 import type { AccountChoiceState } from '@shared/connector-account-choice'
+import type { ConnectorConfirmCard } from '@shared/connector-confirm'
 import {
   accountChoiceBroker,
   configureAccountChoiceDelivery,
   configureConnectorAccountRuntime,
+  configureConnectorConfirmDelivery,
   connectorCatalog,
+  connectorConfirmBroker,
   runConnectorWrite,
   runConnectorWriteDetailed
 } from './connector-runtime'
 import { writeArgsHash } from './connector-executor'
+import { actionIdempotencyKey } from '../../action-guard'
 
 const SCOPE = { ownerKey: 'a'.repeat(64), tenantKey: 'b'.repeat(64) }
 let runtimeRegistry: ReturnType<typeof createConnectorAccountRegistry>
+const ASKED = { ownerWebContentsId: 5 }
+
+/** The owner's window answers every confirm card after the 300 ms guard. Cards are recorded for assertions. */
+function answerCards(confirm: boolean): ConnectorConfirmCard[] {
+  const seen: ConnectorConfirmCard[] = []
+  vi.useFakeTimers({ toFake: ['Date'] })
+  configureConnectorConfirmDelivery((id, state) => {
+    if (state.proposalId === null) return
+    seen.push(state)
+    vi.setSystemTime(Date.now() + 500)
+    connectorConfirmBroker().decide({
+      proposalId: state.proposalId,
+      nonce: state.nonce,
+      argsHash: state.argsHash,
+      confirm,
+      webContentsId: id
+    })
+  })
+  return seen
+}
 
 beforeEach(() => {
+  answerCards(true)
   getGraphTokenOutcome.mockReset()
   appendTimeSavedEvent.mockReset()
   getGraphTokenOutcome.mockResolvedValue({ ok: true, token: 'synthetic-token' })
@@ -57,6 +82,8 @@ beforeEach(() => {
 
 afterEach(() => {
   accountChoiceBroker().revokeAll('test')
+  connectorConfirmBroker().revokeAll('test')
+  configureConnectorConfirmDelivery(null)
   configureAccountChoiceDelivery(null)
   configureConnectorAccountRuntime(null)
   vi.useRealTimers()
@@ -68,21 +95,24 @@ describe('runConnectorWrite (Outlook IPC consumer)', () => {
       'fetch',
       vi.fn(async () => new Response(JSON.stringify({ id: 'AAMk1' }), { status: 201 }))
     )
-    const r = await runConnectorWriteDetailed('outlook.draft.create', { subject: 'Hi', body: 'x' })
+    const r = await runConnectorWriteDetailed('outlook.draft.create', { subject: 'Hi', body: 'x' }, ASKED)
     expect(r).toMatchObject({ ok: true, id: 'AAMk1' })
     expect(r.result).toMatchObject({
       ok: true,
       provenance: { connectorKind: 'outlook', opId: 'outlook.draft.create', revision: CONNECTOR_CATALOG_REVISION },
       receipt: { observation: expect.stringContaining('AAMk1') }
     })
-    expect(await runConnectorWrite('outlook.draft.create', { subject: 'Hi' })).toEqual({ ok: true, id: 'AAMk1' })
+    expect(await runConnectorWrite('outlook.draft.create', { subject: 'Hi' }, ASKED)).toEqual({
+      ok: true,
+      id: 'AAMk1'
+    })
   })
 
   it('refuses a stale grant with the existing consent copy and never calls Graph', async () => {
     getGraphTokenOutcome.mockResolvedValue({ ok: false, reason: 'interaction_required' })
     const fetchSpy = vi.fn()
     vi.stubGlobal('fetch', fetchSpy)
-    const r = await runConnectorWrite('outlook.draft.create', { subject: 'Hi' })
+    const r = await runConnectorWrite('outlook.draft.create', { subject: 'Hi' }, ASKED)
     expect(r).toEqual({ ok: false, needsConsent: true, error: OUTLOOK_DRAFT_CONSENT_COPY })
     expect(fetchSpy).not.toHaveBeenCalled()
   })
@@ -102,7 +132,7 @@ describe('runConnectorWrite (Outlook IPC consumer)', () => {
       'fetch',
       vi.fn(async () => new Response(JSON.stringify({ id: 'AAMk2' }), { status: 201 }))
     )
-    const result = await runConnectorWriteDetailed('outlook.draft.create', { subject: 'Hi', body: 'x' })
+    const result = await runConnectorWriteDetailed('outlook.draft.create', { subject: 'Hi', body: 'x' }, ASKED)
     expect(result.ok).toBe(true)
     expect(result.result).toMatchObject({ ok: true, provenance: { accountRef: expect.stringMatching(/^acct_/) } })
   })
@@ -115,7 +145,7 @@ describe('runConnectorWrite (Outlook IPC consumer)', () => {
     })
     const fetchSpy = vi.fn()
     vi.stubGlobal('fetch', fetchSpy)
-    const result = await runConnectorWriteDetailed('outlook.draft.create', { subject: 'Hi', body: 'x' })
+    const result = await runConnectorWriteDetailed('outlook.draft.create', { subject: 'Hi', body: 'x' }, ASKED)
     expect(result.result).not.toMatchObject({ reason: 'account_ambiguous' })
     expect(result.result).toMatchObject({ provenance: { accountRule: 'only_executable_account' } })
     expect(fetchSpy).toHaveBeenCalledOnce()
@@ -126,11 +156,57 @@ describe('runConnectorWrite (Outlook IPC consumer)', () => {
     const fetchSpy = vi.fn()
     vi.stubGlobal('fetch', fetchSpy)
 
-    const result = await runConnectorWriteDetailed('outlook.draft.create', { subject: 'Hi' })
+    const result = await runConnectorWriteDetailed('outlook.draft.create', { subject: 'Hi' }, ASKED)
 
     expect(result.result).toMatchObject({ ok: false, reason: 'account_not_ready' })
     expect(result.result).not.toHaveProperty('needsConsent')
     expect(await runtimeRegistry.listViews()).toMatchObject([{ health: 'degraded', reason: 'token_refresh_transient' }])
+    expect(fetchSpy).not.toHaveBeenCalled()
+  })
+})
+
+describe('connector writes wait for the confirm card (G64)', () => {
+  const created = () => vi.fn(async () => new Response(JSON.stringify({ id: 'AAMk-card' }), { status: 201 }))
+
+  it("runs an outlook draft only after confirm, with the card's own proposal id as the approval", async () => {
+    vi.useRealTimers()
+    const seen = answerCards(true)
+    vi.stubGlobal('fetch', created())
+    const r = await runConnectorWriteDetailed('outlook.draft.create', { subject: 'Hi', body: 'x' }, ASKED)
+    expect(seen).toHaveLength(1)
+    expect(seen[0]).toMatchObject({ effectClass: 'reversible_write', connectorLabel: 'Outlook', subjectPreview: 'Hi' })
+    expect(r.result).toMatchObject({ ok: true })
+    // The idempotency key is derived from the card's proposal id and the args hash, so it proves which id approved.
+    const receipt = (r.result as { receipt: { argsHash: string; idempotencyKey: string } }).receipt
+    expect(receipt.argsHash).toBe(seen[0].argsHash)
+    expect(receipt.idempotencyKey).toBe(actionIdempotencyKey(seen[0].proposalId, seen[0].argsHash))
+  })
+
+  it('a declined card returns confirm_declined and Graph is never called', async () => {
+    vi.useRealTimers()
+    answerCards(false)
+    const fetchSpy = vi.fn()
+    vi.stubGlobal('fetch', fetchSpy)
+    const r = await runConnectorWriteDetailed('outlook.draft.create', { subject: 'Hi' }, ASKED)
+    expect(r).toMatchObject({ ok: false, error: 'Cancelled. Nothing was changed.' })
+    expect(r.result).toMatchObject({ ok: false, reason: 'confirm_declined' })
+    expect(fetchSpy).not.toHaveBeenCalled()
+  })
+
+  it('without a window to show the card in, nothing runs', async () => {
+    const fetchSpy = vi.fn()
+    vi.stubGlobal('fetch', fetchSpy)
+    const r = await runConnectorWriteDetailed('outlook.draft.create', { subject: 'Hi' })
+    expect(r.result).toMatchObject({ ok: false, reason: 'not_approved' })
+    expect(fetchSpy).not.toHaveBeenCalled()
+  })
+
+  it('sign-out while the card is open revokes it and nothing runs', async () => {
+    configureConnectorConfirmDelivery(() => connectorConfirmBroker().revokeAll('sign-out'))
+    const fetchSpy = vi.fn()
+    vi.stubGlobal('fetch', fetchSpy)
+    const r = await runConnectorWriteDetailed('outlook.draft.create', { subject: 'Hi' }, ASKED)
+    expect(r.result).toMatchObject({ ok: false, reason: 'confirm_declined' })
     expect(fetchSpy).not.toHaveBeenCalled()
   })
 })
@@ -265,7 +341,7 @@ describe('account choice and the identity a handler really uses (G62)', () => {
     )
     appendTimeSavedEvent.mockClear()
     vi.useRealTimers()
-    await runConnectorWriteDetailed('outlook.draft.create', input)
+    await runConnectorWriteDetailed('outlook.draft.create', input, ASKED)
     expect(appendTimeSavedEvent).toHaveBeenCalledOnce()
   })
 })

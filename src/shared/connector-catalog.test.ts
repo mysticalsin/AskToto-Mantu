@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { allowedClassesFor } from './connector-effects'
 import { CONNECTOR_CATALOG, CONNECTOR_CATALOG_REVISION, catalogFingerprint, isWriteEffect } from './connector-catalog'
 
 // Pinned per revision. Changing the catalog without bumping CONNECTOR_CATALOG_REVISION (and adding the new
@@ -13,6 +14,11 @@ const PINNED: Record<number, string> = {
     'outlook.calendar.today|outlook|read|Calendars.Read|tz|events',
     'outlook.draft.create|outlook|create|Mail.ReadWrite|body,subject|id',
     'outlook.event.create|outlook|create|Calendars.ReadWrite|body,endIso,startIso,subject|endIso,id,startIso,verified'
+  ].join('\n'),
+  3: [
+    'outlook.calendar.today|outlook|read|read|Calendars.Read|tz|events',
+    'outlook.draft.create|outlook|create|reversible_write|Mail.ReadWrite|body,subject|id',
+    'outlook.event.create|outlook|create|reversible_write|Calendars.ReadWrite|body,endIso,startIso,subject|endIso,id,startIso,verified'
   ].join('\n')
 }
 
@@ -33,6 +39,11 @@ describe('connector catalog', () => {
       .sort((a, b) => a - b)
     expect(revisions[revisions.length - 1]).toBe(CONNECTOR_CATALOG_REVISION)
     expect(Number.isInteger(CONNECTOR_CATALOG_REVISION) && CONNECTOR_CATALOG_REVISION >= 1).toBe(true)
+  })
+
+  it('every catalog op declares an effectClass allowed for its effect', () => {
+    for (const op of CONNECTOR_CATALOG) expect(allowedClassesFor(op.effect)).toContain(op.effectClass)
+    expect(CONNECTOR_CATALOG_REVISION).toBe(3)
   })
 
   it('requires at least one scope per operation and classes only reads as non-writes', () => {

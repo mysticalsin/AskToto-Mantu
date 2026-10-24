@@ -2,6 +2,7 @@ import { readdirSync, readFileSync, statSync } from 'node:fs'
 import { join, relative } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { CONNECTOR_CATALOG, isWriteEffect } from '@shared/connector-catalog'
+import { allowedClassesFor } from '@shared/connector-effects'
 import { OUTLOOK_DRAFT_SCOPES, OUTLOOK_EVENT_SCOPES } from '../../outlook-write'
 import { createBuiltinHandlers } from './connector-handlers'
 import { OUTLOOK_CONSENT_COPY } from './connector-runtime'
@@ -39,8 +40,8 @@ describe('connector catalog <-> handler contract', () => {
 describe('write paths cannot bypass the ActionGuard', () => {
   // Direct Graph write calls are legal only inside the catalog handlers, which the executor gates.
   const GRAPH_WRITE_CALLERS = new Set(['features/connectors/connector-handlers', 'outlook-write'])
-  // Legacy raw MCP push call sites. G64 moves them behind the guard; this list may only shrink.
-  const LEGACY_MCP_PUSH_CALLERS = new Set(['index', 'mcp/mcpClient', 'operator-integrations'])
+  // The only raw MCP push call sites (G64): the client itself and the runtime that classifies, confirms and approves.
+  const LEGACY_MCP_PUSH_CALLERS = new Set(['mcp/mcpClient', 'features/connectors/mcp-call-runtime'])
 
   const files = sources(MAIN).map((f) => ({
     rel: relative(MAIN, f)
@@ -57,9 +58,19 @@ describe('write paths cannot bypass the ActionGuard', () => {
     expect(callers).toEqual([])
   })
 
-  it('does not grow the set of raw MCP push call sites', () => {
+  it('LEGACY_MCP_PUSH_CALLERS is exactly mcpClient + mcp-call-runtime', () => {
     const callers = files.filter((f) => /\bpushToMcp\s*\(/.test(f.text)).map((f) => f.rel)
-    expect(callers.filter((rel) => !LEGACY_MCP_PUSH_CALLERS.has(rel))).toEqual([])
+    expect(callers.sort()).toEqual([...LEGACY_MCP_PUSH_CALLERS].sort())
+  })
+
+  it('does not mint an approval locally: the confirm card is the only source of a proposal id', () => {
+    const runtime = files.find((f) => f.rel === 'features/connectors/connector-runtime')?.text ?? ''
+    expect(runtime).not.toMatch(/randomBytes/)
+    expect(runtime).toMatch(/approval: outcome\.approval/)
+  })
+
+  it('every catalog op declares an effectClass allowed for its effect', () => {
+    for (const op of CONNECTOR_CATALOG) expect(allowedClassesFor(op.effect)).toContain(op.effectClass)
   })
 
   it('wires the Outlook IPC writes through the connector runtime, not the raw functions', () => {

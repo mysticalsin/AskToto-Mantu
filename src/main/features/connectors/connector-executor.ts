@@ -3,9 +3,18 @@ import {
   type ConnectorKind,
   type ConnectorProvenance,
   type ConnectorRefusalReason,
-  type ConnectorResult,
-  isWriteEffect
+  type AccountResolutionRule,
+  type ConnectorOperation,
+  type ConnectorResult
 } from '@shared/connector-catalog'
+import { requiresConfirm } from '@shared/connector-effects'
+import { recipientFieldsIn } from '@shared/recipient-resolution'
+import {
+  noTrustedRecipients,
+  verifyRecipients,
+  type TrustedRecipient,
+  type TrustedRecipientSource
+} from './recipient-gate'
 import type { ConnectorAccountHealthSignal } from '@shared/connector-accounts'
 import { ACTION_OBSERVATION_MAX_CHARS, actionDigest, actionIdempotencyKey, isArgsHash } from '../../action-guard'
 import type { AccountResolver } from './account-ref'
@@ -100,6 +109,8 @@ export interface ConnectorExecutorDeps {
    */
   executableAccounts?: (kind: ConnectorKind) => Promise<readonly AccountRef[]>
   writeGate: ConnectorWriteGate
+  /** Trusted recipient addresses (G64). Absent means nobody is trusted: a write that names someone is refused. */
+  recipients?: TrustedRecipientSource
   /** Metadata only: opId, revision, outcome. Never input or output content. */
   audit?: (event: string, metadata: Record<string, string | number | boolean>) => void
 }
@@ -108,9 +119,33 @@ export type ConnectorPlan =
   | { ok: true; opId: string; revision: number }
   | { ok: false; reason: 'op_unknown'; message: string }
 
+/** Everything a confirm card needs, resolved by the same path `execute` uses (no second resolver). */
+export interface PreparedConnectorCall {
+  prepared: true
+  /** Verified recipients (empty when the arguments name nobody). */
+  recipients: readonly TrustedRecipient[]
+  op: ConnectorOperation
+  handler: ConnectorHandler
+  snapshot: { revision: number }
+  accountRef: AccountRef
+  accountLabel: string | undefined
+  accountHint: string | undefined
+  provenance: ConnectorProvenance
+  rule: AccountResolutionRule
+  parsed: unknown
+  argsHash: string
+  refuse(
+    reason: ConnectorRefusalReason,
+    provenance?: ConnectorProvenance,
+    extra?: { needsConsent?: boolean; error?: string; permission?: string }
+  ): ConnectorResult
+}
+
 export interface ConnectorExecutor {
   /** Stamp a call with the revision it is planned against. */
   plan(opId: string, input: unknown): ConnectorPlan
+  /** Op, input, account, grant and readiness checks without the write gate or the handler. A refusal is a result. */
+  prepare(call: ConnectorCall): Promise<PreparedConnectorCall | ConnectorResult>
   execute(call: ConnectorCall): Promise<ConnectorResult>
 }
 
@@ -126,7 +161,9 @@ const MESSAGES: Record<ConnectorRefusalReason, string> = {
   handler_failed: 'The connector could not complete the operation. Nothing was confirmed.',
   output_invalid: 'The connector returned something unexpected, so the result is not trusted.',
   os_permission_missing: 'This Mac has not given Métis permission for that. Nothing was changed.',
-  effect_uncertain: 'Métis could not confirm the change was made. Check before trying again. It was not retried.'
+  effect_uncertain: 'Métis could not confirm the change was made. Check before trying again. It was not retried.',
+  recipient_unverified: 'Métis could not verify who this goes to, so nothing was done.',
+  confirm_declined: 'Cancelled. Nothing was changed.'
 }
 
 export function createConnectorExecutor(deps: ConnectorExecutorDeps): ConnectorExecutor {
@@ -138,7 +175,7 @@ export function createConnectorExecutor(deps: ConnectorExecutorDeps): ConnectorE
     }
   }
 
-  return {
+  const self: ConnectorExecutor = {
     plan(opId, _input) {
       const snapshot = deps.catalog.current()
       if (!snapshot.operations.some((op) => op.opId === opId)) {
@@ -147,7 +184,7 @@ export function createConnectorExecutor(deps: ConnectorExecutorDeps): ConnectorE
       return { ok: true, opId, revision: snapshot.revision }
     },
 
-    async execute(call) {
+    async prepare(call) {
       const snapshot = deps.catalog.current()
       const refuse = (
         reason: ConnectorRefusalReason,
@@ -254,11 +291,62 @@ export function createConnectorExecutor(deps: ConnectorExecutorDeps): ConnectorE
         return refuse('account_not_ready', provenance, grant === 'stale' ? { needsConsent: true } : {})
       }
 
+      // Recipients are verified before any card is shown and again whenever the call is prepared: a send must name
+      // someone, and any write that names someone may name only people main trusts (G64).
+      let recipients: readonly TrustedRecipient[] = []
+      if (requiresConfirm(op.effectClass)) {
+        const named = recipientFieldsIn(parsed.data)
+        if (named.length > 0 || op.effectClass === 'send') {
+          let trusted: readonly TrustedRecipient[] = []
+          try {
+            trusted = await (deps.recipients ?? noTrustedRecipients).addressesFor({
+              accountRef,
+              ...(call.sourceAccountRef ? { sourceAccountRef: call.sourceAccountRef } : {})
+            })
+          } catch {
+            trusted = []
+          }
+          const verified = verifyRecipients(parsed.data, trusted)
+          if (!verified.ok || named.length === 0) {
+            audit('connector.refused', {
+              opId: op.opId,
+              reason: 'recipient_unverified',
+              effectClass: op.effectClass,
+              recipientCount: named.length
+            })
+            return refuse('recipient_unverified', provenance)
+          }
+          recipients = verified.recipients
+        }
+      }
+
+      return {
+        prepared: true,
+        recipients,
+        op,
+        handler,
+        snapshot,
+        accountRef,
+        accountLabel: candidates.find((c) => c.accountRef === accountRef)?.label,
+        accountHint: candidates.find((c) => c.accountRef === accountRef)?.maskedHint,
+        provenance,
+        rule: resolution.rule,
+        parsed: parsed.data,
+        argsHash: writeArgsHash(op.opId, snapshot.revision, parsed.data),
+        refuse
+      }
+    },
+
+    async execute(call) {
+      const prepared = await self.prepare(call)
+      if (!('prepared' in prepared)) return prepared
+      const { op, handler, snapshot, accountRef, provenance, refuse, argsHash } = prepared
+      const resolution = { rule: prepared.rule }
+      const parsed = { data: prepared.parsed }
+
       let ctx: HandlerContext = { accountRef }
-      let argsHash = ''
       let idempotencyKey = ''
-      if (isWriteEffect(op.effect)) {
-        argsHash = writeArgsHash(op.opId, snapshot.revision, parsed.data)
+      if (requiresConfirm(op.effectClass)) {
         if (!deps.writeGate.verify(call.approval, argsHash)) return refuse('not_approved', provenance)
         idempotencyKey = deps.writeGate.idempotencyKey(call.approval)
         ctx = { accountRef, idempotencyKey }
@@ -313,7 +401,7 @@ export function createConnectorExecutor(deps: ConnectorExecutorDeps): ConnectorE
         effect: op.effect,
         accountRule: resolution.rule
       })
-      if (!isWriteEffect(op.effect)) return { ok: true, output: output.data, provenance }
+      if (!requiresConfirm(op.effectClass)) return { ok: true, output: output.data, provenance }
       const id = (output.data as { id?: unknown }).id
       const observation = `${op.opId} confirmed${typeof id === 'string' ? ` id ${id}` : ''}`.slice(
         0,
@@ -322,4 +410,5 @@ export function createConnectorExecutor(deps: ConnectorExecutorDeps): ConnectorE
       return { ok: true, output: output.data, provenance, receipt: { argsHash, idempotencyKey, observation } }
     }
   }
+  return self
 }

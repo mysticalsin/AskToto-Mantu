@@ -12,6 +12,8 @@ vi.mock('./logger', () => ({
   auditLog: () => {}
 }))
 
+import { configureMcpCallRuntime, createMcpCallRuntime } from './features/connectors/mcp-call-runtime'
+
 const connectMcpMock = vi.fn()
 const pushToMcpMock = vi.fn()
 vi.mock('./mcp/mcpClient', () => ({
@@ -120,7 +122,17 @@ describe('reconcileOperatorMcpRegistry (register / replace / remove)', () => {
 
   it('keeps discovered tools when the same id is unchanged across a reconcile', () => {
     const current = new Map<string, OperatorMcpRegistration>([
-      ['int-custom', { id: 'int-custom', kind: 'custom-mcp', label: 'Internal Tools', baseUrl: customMcp.baseUrl!, credential: customMcp.credential!, tools: ['do_thing'] }]
+      [
+        'int-custom',
+        {
+          id: 'int-custom',
+          kind: 'custom-mcp',
+          label: 'Internal Tools',
+          baseUrl: customMcp.baseUrl!,
+          credential: customMcp.credential!,
+          tools: ['do_thing']
+        }
+      ]
     ])
     const next = reconcileOperatorMcpRegistry(current, [customMcp])
     expect(next.get('int-custom')?.tools).toEqual(['do_thing'])
@@ -128,7 +140,17 @@ describe('reconcileOperatorMcpRegistry (register / replace / remove)', () => {
 
   it('replaces on version change: same id, new baseUrl/credential resets tools for rediscovery', () => {
     const current = new Map<string, OperatorMcpRegistration>([
-      ['int-custom', { id: 'int-custom', kind: 'custom-mcp', label: 'Internal Tools', baseUrl: customMcp.baseUrl!, credential: customMcp.credential!, tools: ['old_tool'] }]
+      [
+        'int-custom',
+        {
+          id: 'int-custom',
+          kind: 'custom-mcp',
+          label: 'Internal Tools',
+          baseUrl: customMcp.baseUrl!,
+          credential: customMcp.credential!,
+          tools: ['old_tool']
+        }
+      ]
     ])
     const rotated: OperatorIntegration = { ...customMcp, credential: 'tok-2' }
     const next = reconcileOperatorMcpRegistry(current, [rotated])
@@ -139,7 +161,17 @@ describe('reconcileOperatorMcpRegistry (register / replace / remove)', () => {
 
   it('removes an id no longer present in the delivered list', () => {
     const current = new Map<string, OperatorMcpRegistration>([
-      ['int-custom', { id: 'int-custom', kind: 'custom-mcp', label: 'Internal Tools', baseUrl: customMcp.baseUrl!, credential: customMcp.credential!, tools: [] }]
+      [
+        'int-custom',
+        {
+          id: 'int-custom',
+          kind: 'custom-mcp',
+          label: 'Internal Tools',
+          baseUrl: customMcp.baseUrl!,
+          credential: customMcp.credential!,
+          tools: []
+        }
+      ]
     ])
     const next = reconcileOperatorMcpRegistry(current, [])
     expect(next.has('int-custom')).toBe(false)
@@ -148,14 +180,58 @@ describe('reconcileOperatorMcpRegistry (register / replace / remove)', () => {
 
   it('handles register + replace + remove all in one reconcile', () => {
     const current = new Map<string, OperatorMcpRegistration>([
-      ['keep-same', { id: 'keep-same', kind: 'custom-mcp', label: 'Keep', baseUrl: 'https://k.example', credential: 'k1', tools: ['t1'] }],
-      ['gone', { id: 'gone', kind: 'custom-mcp', label: 'Gone', baseUrl: 'https://g.example', credential: 'g1', tools: ['t2'] }],
-      ['rotate', { id: 'rotate', kind: 'custom-mcp', label: 'Rotate', baseUrl: 'https://r.example', credential: 'old', tools: ['t3'] }]
+      [
+        'keep-same',
+        {
+          id: 'keep-same',
+          kind: 'custom-mcp',
+          label: 'Keep',
+          baseUrl: 'https://k.example',
+          credential: 'k1',
+          tools: ['t1']
+        }
+      ],
+      [
+        'gone',
+        { id: 'gone', kind: 'custom-mcp', label: 'Gone', baseUrl: 'https://g.example', credential: 'g1', tools: ['t2'] }
+      ],
+      [
+        'rotate',
+        {
+          id: 'rotate',
+          kind: 'custom-mcp',
+          label: 'Rotate',
+          baseUrl: 'https://r.example',
+          credential: 'old',
+          tools: ['t3']
+        }
+      ]
     ])
     const delivered: OperatorIntegration[] = [
-      { id: 'keep-same', kind: 'custom-mcp', label: 'Keep', baseUrl: 'https://k.example', credential: 'k1', scopes: [] },
-      { id: 'rotate', kind: 'custom-mcp', label: 'Rotate', baseUrl: 'https://r.example', credential: 'new', scopes: [] },
-      { id: 'brand-new', kind: 'custom-mcp', label: 'Brand new', baseUrl: 'https://n.example', credential: 'n1', scopes: [] }
+      {
+        id: 'keep-same',
+        kind: 'custom-mcp',
+        label: 'Keep',
+        baseUrl: 'https://k.example',
+        credential: 'k1',
+        scopes: []
+      },
+      {
+        id: 'rotate',
+        kind: 'custom-mcp',
+        label: 'Rotate',
+        baseUrl: 'https://r.example',
+        credential: 'new',
+        scopes: []
+      },
+      {
+        id: 'brand-new',
+        kind: 'custom-mcp',
+        label: 'Brand new',
+        baseUrl: 'https://n.example',
+        credential: 'n1',
+        scopes: []
+      }
     ]
     const next = reconcileOperatorMcpRegistry(current, delivered)
     expect([...next.keys()].sort()).toEqual(['brand-new', 'keep-same', 'rotate'])
@@ -165,7 +241,14 @@ describe('reconcileOperatorMcpRegistry (register / replace / remove)', () => {
   })
 
   it('skips an integration with no baseUrl or no credential yet', () => {
-    const incomplete: OperatorIntegration = { id: 'incomplete', kind: 'notion', label: 'Notion', baseUrl: null, credential: null, scopes: [] }
+    const incomplete: OperatorIntegration = {
+      id: 'incomplete',
+      kind: 'notion',
+      label: 'Notion',
+      baseUrl: null,
+      credential: null,
+      scopes: []
+    }
     const next = reconcileOperatorMcpRegistry(new Map(), [incomplete])
     expect(next.size).toBe(0)
   })
@@ -173,7 +256,8 @@ describe('reconcileOperatorMcpRegistry (register / replace / remove)', () => {
 
 describe('MQA-295 fetchOperatorIntegrations credential isolation', () => {
   it('does not request integrations or clear a good cache when the device identity is not durable', async () => {
-    setOperatorIntegrationsFetchForTests((async () => jsonResponse({ ok: true, version: 1, integrations: [hubspot] })) as typeof fetch)
+    setOperatorIntegrationsFetchForTests((async () =>
+      jsonResponse({ ok: true, version: 1, integrations: [hubspot] })) as typeof fetch)
     await fetchOperatorIntegrations(SETTINGS)
     machineIdentity.durableId = null
     const fetcher = vi.fn(async () => jsonResponse({ ok: false, error: 'seat not entitled' }, 403))
@@ -185,7 +269,14 @@ describe('MQA-295 fetchOperatorIntegrations credential isolation', () => {
 
   it('makes a brokered path endpoint absolute, leaves an absolute endpoint alone, and marks both brokered', async () => {
     const brokeredRow = (id: string, endpoint: string) => ({
-      id, kind: 'custom-mcp', label: id, transport: 'mcp', mode: 'brokered', endpoint, gatewayToken: 'tok.sig', scopes: []
+      id,
+      kind: 'custom-mcp',
+      label: id,
+      transport: 'mcp',
+      mode: 'brokered',
+      endpoint,
+      gatewayToken: 'tok.sig',
+      scopes: []
     })
     setOperatorIntegrationsFetchForTests((async () =>
       jsonResponse({
@@ -195,23 +286,37 @@ describe('MQA-295 fetchOperatorIntegrations credential isolation', () => {
       })) as typeof fetch)
     await fetchOperatorIntegrations(SETTINGS)
     const byId = new Map(operatorIntegrationsSnapshot().integrations.map((i) => [i.id, i]))
-    expect(byId.get('rel')).toMatchObject({ baseUrl: 'https://operator.test/v1/mcp/rel', credential: 'tok.sig', brokered: true })
+    expect(byId.get('rel')).toMatchObject({
+      baseUrl: 'https://operator.test/v1/mcp/rel',
+      credential: 'tok.sig',
+      brokered: true
+    })
     expect(byId.get('abs')?.baseUrl).toBe('https://other.example/v1/mcp/abs')
   })
 
   it('never forwards a licence credential through an HTTP redirect', async () => {
-    const fetcher = vi.fn(async () => new Response(null, { status: 302, headers: { location: 'https://elsewhere.test' } }))
+    const fetcher = vi.fn(
+      async () => new Response(null, { status: 302, headers: { location: 'https://elsewhere.test' } })
+    )
     setOperatorIntegrationsFetchForTests(fetcher as typeof fetch)
     await fetchOperatorIntegrations({ ...SETTINGS, operatorLicenseToken: 'METIS-OP-1.fixture' })
-    expect(fetcher).toHaveBeenCalledWith('https://operator.test/v1/integrations', expect.objectContaining({
-      redirect: 'manual',
-      headers: expect.objectContaining({ 'x-metis-license': 'METIS-OP-1.fixture' })
-    }))
+    expect(fetcher).toHaveBeenCalledWith(
+      'https://operator.test/v1/integrations',
+      expect.objectContaining({
+        redirect: 'manual',
+        headers: expect.objectContaining({ 'x-metis-license': 'METIS-OP-1.fixture' })
+      })
+    )
   })
 
   it('cannot restore credentials from a pending request after the connection is cleared', async () => {
     let complete!: (response: Response) => void
-    setOperatorIntegrationsFetchForTests(() => new Promise((resolve) => { complete = resolve }))
+    setOperatorIntegrationsFetchForTests(
+      () =>
+        new Promise((resolve) => {
+          complete = resolve
+        })
+    )
     const pending = fetchOperatorIntegrations(SETTINGS)
     resetOperatorIntegrationsStateForTests()
     complete(jsonResponse({ ok: true, version: 1, integrations: [customMcp] }))
@@ -223,8 +328,14 @@ describe('MQA-295 fetchOperatorIntegrations credential isolation', () => {
 
   it.each([200, 403])('does not let an old connection response (%s) overwrite the new connection', async (status) => {
     let complete!: (response: Response) => void
-    const fetcher = vi.fn()
-      .mockImplementationOnce(() => new Promise((resolve) => { complete = resolve }))
+    const fetcher = vi
+      .fn()
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            complete = resolve
+          })
+      )
       .mockResolvedValueOnce(jsonResponse({ ok: true, version: 2, integrations: [plane] }))
     setOperatorIntegrationsFetchForTests(fetcher as typeof fetch)
     const old = fetchOperatorIntegrations(SETTINGS)
@@ -238,7 +349,8 @@ describe('MQA-295 fetchOperatorIntegrations credential isolation', () => {
   })
 
   it('fetches, caches, and registers custom-mcp connections', async () => {
-    setOperatorIntegrationsFetchForTests((async () => jsonResponse({ ok: true, version: 1, integrations: [customMcp] })) as typeof fetch)
+    setOperatorIntegrationsFetchForTests((async () =>
+      jsonResponse({ ok: true, version: 1, integrations: [customMcp] })) as typeof fetch)
     const result = await fetchOperatorIntegrations(SETTINGS)
     expect(result).toHaveLength(1)
     expect(operatorIntegrationsSnapshot().version).toBe(1)
@@ -250,7 +362,8 @@ describe('MQA-295 fetchOperatorIntegrations credential isolation', () => {
   })
 
   it('registration point: registeredOperatorMcpServers reflects the reconciled registry after a fetch', async () => {
-    setOperatorIntegrationsFetchForTests((async () => jsonResponse({ ok: true, version: 1, integrations: [customMcp] })) as typeof fetch)
+    setOperatorIntegrationsFetchForTests((async () =>
+      jsonResponse({ ok: true, version: 1, integrations: [customMcp] })) as typeof fetch)
     await fetchOperatorIntegrations(SETTINGS)
     const servers = registeredOperatorMcpServers()
     expect(servers).toHaveLength(1)
@@ -259,35 +372,42 @@ describe('MQA-295 fetchOperatorIntegrations credential isolation', () => {
   })
 
   it('replaces the registry on a version-bumped fetch with a rotated credential', async () => {
-    setOperatorIntegrationsFetchForTests((async () => jsonResponse({ ok: true, version: 1, integrations: [customMcp] })) as typeof fetch)
+    setOperatorIntegrationsFetchForTests((async () =>
+      jsonResponse({ ok: true, version: 1, integrations: [customMcp] })) as typeof fetch)
     await fetchOperatorIntegrations(SETTINGS)
     const rotated = { ...customMcp, credential: 'tok-rotated' }
-    setOperatorIntegrationsFetchForTests((async () => jsonResponse({ ok: true, version: 2, integrations: [rotated] })) as typeof fetch)
+    setOperatorIntegrationsFetchForTests((async () =>
+      jsonResponse({ ok: true, version: 2, integrations: [rotated] })) as typeof fetch)
     await fetchOperatorIntegrations(SETTINGS)
     expect(operatorMcpServer('int-custom')?.credential).toBe('tok-rotated')
   })
 
   it('removes a connection the Operator stops delivering', async () => {
-    setOperatorIntegrationsFetchForTests((async () => jsonResponse({ ok: true, version: 1, integrations: [customMcp] })) as typeof fetch)
+    setOperatorIntegrationsFetchForTests((async () =>
+      jsonResponse({ ok: true, version: 1, integrations: [customMcp] })) as typeof fetch)
     await fetchOperatorIntegrations(SETTINGS)
     expect(operatorMcpServer('int-custom')).not.toBeNull()
-    setOperatorIntegrationsFetchForTests((async () => jsonResponse({ ok: true, version: 2, integrations: [] })) as typeof fetch)
+    setOperatorIntegrationsFetchForTests((async () =>
+      jsonResponse({ ok: true, version: 2, integrations: [] })) as typeof fetch)
     await fetchOperatorIntegrations(SETTINGS)
     expect(operatorMcpServer('int-custom')).toBeNull()
     expect(registeredOperatorMcpServers()).toHaveLength(0)
   })
 
   it('clears the cache on a 403 (seat not entitled) instead of erroring', async () => {
-    setOperatorIntegrationsFetchForTests((async () => jsonResponse({ ok: true, version: 1, integrations: [hubspot] })) as typeof fetch)
+    setOperatorIntegrationsFetchForTests((async () =>
+      jsonResponse({ ok: true, version: 1, integrations: [hubspot] })) as typeof fetch)
     await fetchOperatorIntegrations(SETTINGS)
-    setOperatorIntegrationsFetchForTests((async () => jsonResponse({ ok: false, error: 'seat not entitled', code: 'not-entitled' }, 403)) as typeof fetch)
+    setOperatorIntegrationsFetchForTests((async () =>
+      jsonResponse({ ok: false, error: 'seat not entitled', code: 'not-entitled' }, 403)) as typeof fetch)
     const result = await fetchOperatorIntegrations(SETTINGS)
     expect(result).toEqual([])
     expect(operatorIntegrationFor('hubspot')).toBeNull()
   })
 
   it('returns null and never clears the cache on a transient network failure', async () => {
-    setOperatorIntegrationsFetchForTests((async () => jsonResponse({ ok: true, version: 1, integrations: [hubspot] })) as typeof fetch)
+    setOperatorIntegrationsFetchForTests((async () =>
+      jsonResponse({ ok: true, version: 1, integrations: [hubspot] })) as typeof fetch)
     await fetchOperatorIntegrations(SETTINGS)
     setOperatorIntegrationsFetchForTests((async () => {
       throw new Error('network down')
@@ -339,7 +459,8 @@ describe('maybeRefreshOperatorIntegrations', () => {
     expect(fn).toHaveBeenCalledTimes(1)
   })
   it('does nothing when the cache is already fresh for that version', async () => {
-    setOperatorIntegrationsFetchForTests((async () => jsonResponse({ ok: true, version: 1, integrations: [] })) as typeof fetch)
+    setOperatorIntegrationsFetchForTests((async () =>
+      jsonResponse({ ok: true, version: 1, integrations: [] })) as typeof fetch)
     await fetchOperatorIntegrations(SETTINGS, 1000)
     const fn = vi.fn()
     setOperatorIntegrationsFetchForTests(fn as unknown as typeof fetch)
@@ -355,7 +476,8 @@ describe('callOperatorMcpTool', () => {
   })
 
   it('refuses a tool not in the discovered tool list', async () => {
-    setOperatorIntegrationsFetchForTests((async () => jsonResponse({ ok: true, version: 1, integrations: [customMcp] })) as typeof fetch)
+    setOperatorIntegrationsFetchForTests((async () =>
+      jsonResponse({ ok: true, version: 1, integrations: [customMcp] })) as typeof fetch)
     await fetchOperatorIntegrations(SETTINGS)
     connectMcpMock.mockResolvedValue({ ok: true, tools: ['known_tool'] })
     await new Promise((r) => setTimeout(r, 0))
@@ -364,20 +486,45 @@ describe('callOperatorMcpTool', () => {
   })
 
   it('pushes through pushToMcp with the registered baseUrl/credential', async () => {
-    setOperatorIntegrationsFetchForTests((async () => jsonResponse({ ok: true, version: 1, integrations: [customMcp] })) as typeof fetch)
+    setOperatorIntegrationsFetchForTests((async () =>
+      jsonResponse({ ok: true, version: 1, integrations: [customMcp] })) as typeof fetch)
     connectMcpMock.mockResolvedValue({ ok: true, tools: ['do_thing'] })
     await fetchOperatorIntegrations(SETTINGS)
     await new Promise((r) => setTimeout(r, 0))
     pushToMcpMock.mockResolvedValue({ ok: true, result: { id: '123' } })
-    const result = await callOperatorMcpTool('int-custom', 'do_thing', { a: 1 })
-    expect(result).toEqual({ ok: true, result: { id: '123' } })
-    expect(pushToMcpMock).toHaveBeenCalledWith(customMcp.baseUrl, customMcp.credential, {}, 'do_thing', { a: 1 }, customMcp.label)
+    // Unconfigured, nothing can confirm: the call fails closed and never reaches the transport.
+    const refused = await callOperatorMcpTool('int-custom', 'do_thing', { a: 1 }, 4)
+    expect(refused).toMatchObject({ ok: false, refusal: 'confirm_declined' })
+    expect(pushToMcpMock).not.toHaveBeenCalled()
+    configureMcpCallRuntime(
+      createMcpCallRuntime({
+        confirm: {
+          issue: async (request) => ({
+            confirmed: true,
+            approval: { proposalId: 'e'.repeat(32), argsHash: request.argsHash }
+          })
+        },
+        catalogRevision: () => 3
+      })
+    )
+    const result = await callOperatorMcpTool('int-custom', 'do_thing', { a: 1 }, 4)
+    configureMcpCallRuntime(null)
+    expect(result).toMatchObject({ ok: true, result: { id: '123' }, effectClass: 'irreversible_write' })
+    expect(pushToMcpMock).toHaveBeenCalledWith(
+      customMcp.baseUrl,
+      customMcp.credential,
+      {},
+      'do_thing',
+      { a: 1 },
+      customMcp.label
+    )
   })
 })
 
 describe('operatorCrmCredentialFor', () => {
   it('returns a credential for plane when Operator supplies one', async () => {
-    setOperatorIntegrationsFetchForTests((async () => jsonResponse({ ok: true, version: 1, integrations: [plane] })) as typeof fetch)
+    setOperatorIntegrationsFetchForTests((async () =>
+      jsonResponse({ ok: true, version: 1, integrations: [plane] })) as typeof fetch)
     await fetchOperatorIntegrations(SETTINGS)
     const cred = operatorCrmCredentialFor('plane')
     expect(cred).not.toBeNull()
@@ -386,8 +533,16 @@ describe('operatorCrmCredentialFor', () => {
   })
 
   it('returns null for clickup even when Operator supplies one (OAuth-only local flow)', async () => {
-    const clickup: OperatorIntegration = { id: 'int-clickup', kind: 'clickup', label: 'ClickUp', baseUrl: 'https://cu.example', credential: 'cu-tok', scopes: [] }
-    setOperatorIntegrationsFetchForTests((async () => jsonResponse({ ok: true, version: 1, integrations: [clickup] })) as typeof fetch)
+    const clickup: OperatorIntegration = {
+      id: 'int-clickup',
+      kind: 'clickup',
+      label: 'ClickUp',
+      baseUrl: 'https://cu.example',
+      credential: 'cu-tok',
+      scopes: []
+    }
+    setOperatorIntegrationsFetchForTests((async () =>
+      jsonResponse({ ok: true, version: 1, integrations: [clickup] })) as typeof fetch)
     await fetchOperatorIntegrations(SETTINGS)
     expect(operatorCrmCredentialFor('clickup')).toBeNull()
   })

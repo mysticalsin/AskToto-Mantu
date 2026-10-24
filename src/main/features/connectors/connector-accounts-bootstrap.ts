@@ -7,13 +7,20 @@ import type { ConnectorAccountStore } from './account-store'
 import type { ConnectorAccountVerificationSignal } from './account-registry'
 import { createConnectorAccountRegistry } from './account-registry'
 import { ACCOUNT_CHOICE_IPC, type AccountChoiceState } from '@shared/connector-account-choice'
+import { CONNECTOR_CONFIRM_IPC, type ConnectorConfirmState } from '@shared/connector-confirm'
 import { registerAccountChoiceIpc } from '../../ipc/connector-account-choice-ipc'
+import { registerConnectorConfirmIpc } from '../../ipc/connector-confirm-ipc'
 import { registerConnectorAccountsIpc } from '../../ipc/connector-accounts-ipc'
 import {
   accountChoiceBroker,
   configureAccountChoiceDelivery,
-  configureConnectorAccountRuntime
+  configureConnectorAccountRuntime,
+  configureConnectorConfirmDelivery,
+  connectorCatalog,
+  connectorConfirmBroker
 } from './connector-runtime'
+import { auditLog } from '../../logger'
+import { configureMcpCallRuntime, createMcpCallRuntime } from './mcp-call-runtime'
 
 export interface ConnectorAccountsBootstrapDeps {
   ipcMain: Pick<IpcMain, 'handle'>
@@ -23,7 +30,7 @@ export interface ConnectorAccountsBootstrapDeps {
   userDataPath(): string
   onWillQuit(listener: () => void): void
   /** How an account choice card reaches its owner window (production: `webContents.fromId(id)?.send`). */
-  sendToWebContents?(webContentsId: number, channel: string, state: AccountChoiceState): void
+  sendToWebContents?(webContentsId: number, channel: string, state: AccountChoiceState | ConnectorConfirmState): void
   /** Test seam; production reads only the signed-in main-process auth session. */
   identity?(): { signedIn: boolean; email?: string }
   /** Test seams; production persists to userData and verifies against the main-process Graph token cache. */
@@ -89,11 +96,27 @@ export function bootstrapConnectorAccounts(deps: ConnectorAccountsBootstrapDeps)
     requireAuth: deps.requireAuth,
     broker: accountChoiceBroker()
   })
+  configureConnectorConfirmDelivery(
+    sendToWebContents ? (id, state) => sendToWebContents(id, CONNECTOR_CONFIRM_IPC.state, state) : null
+  )
+  configureMcpCallRuntime(
+    createMcpCallRuntime({
+      confirm: connectorConfirmBroker(),
+      catalogRevision: () => connectorCatalog.current().revision,
+      audit: (event, metadata) => auditLog(event as never, metadata as never)
+    })
+  )
+  registerConnectorConfirmIpc(deps.ipcMain, {
+    assertMainWindow: deps.assertMainWindow,
+    requireAuth: deps.requireAuth,
+    broker: connectorConfirmBroker()
+  })
 
   deps.ownerSession.onRevoked((ref, reason) => {
     if (reason !== 'sign-out' && reason !== 'auth-changed') return
     // A pending account choice belongs to the session that raised it: it never resumes under another owner.
     accountChoiceBroker().revokeAll(reason)
+    connectorConfirmBroker().revokeAll(reason)
     void registry.disconnectOwnerAccounts({ ownerKey: ref.ownerKey, tenantKey: ref.tenantKey })
   })
   deps.onWillQuit(() => {

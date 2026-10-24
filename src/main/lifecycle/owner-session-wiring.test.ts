@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { CloudSpeechSegmentEventSchema } from '@shared/cloud-speech'
 import { OWNER_SESSION_IPC } from '@shared/contracts/owner-session'
 import { ACCOUNT_CHOICE_IPC } from '@shared/connector-account-choice'
+import { CONNECTOR_CONFIRM_IPC } from '@shared/connector-confirm'
 import { CONNECTOR_ACCOUNTS_IPC } from '@shared/connector-accounts'
 import { ASSISTANT_IPC } from '@shared/assistants'
 import { ONBOARDING_INTERVIEW_IPC } from '@shared/onboarding-interview'
@@ -82,6 +83,9 @@ describe('owner session wiring', () => {
       ACCOUNT_CHOICE_IPC.current,
       ACCOUNT_CHOICE_IPC.decide,
       ACCOUNT_CHOICE_IPC.cancel,
+      CONNECTOR_CONFIRM_IPC.current,
+      CONNECTOR_CONFIRM_IPC.decide,
+      CONNECTOR_CONFIRM_IPC.cancel,
       SESSION_CONTEXT_IPC.appendLine,
       IPC.appendMeetingJournal,
       ...Object.values(DICTATION_MEMORY_IPC),
@@ -141,6 +145,7 @@ describe('owner session wiring', () => {
           length:
             3 +
             Object.values(CONNECTOR_ACCOUNTS_IPC).length +
+            3 +
             3 +
             Object.values(DICTATION_MEMORY_IPC).length +
             6 +

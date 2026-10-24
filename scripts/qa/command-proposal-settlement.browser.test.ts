@@ -59,6 +59,11 @@ window.toto = {
   accountChoice: {
     current: async () => ({ choiceId: null }),
     onChanged: () => () => undefined
+  },
+  // The connector confirm card (G64) shares this host too.
+  connectorConfirm: {
+    current: async () => ({ proposalId: null }),
+    onChanged: () => () => undefined
   }
 }
 const root = createRoot(document.getElementById('root'))

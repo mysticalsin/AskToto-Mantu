@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { commandResultCopy } from '@shared/command-copy'
 import type { MetisCommandNotice, MetisCommandPreview, MetisCommandState } from '@shared/metis-command-contract'
 import { AccountChoiceHost } from './AccountChoiceHost'
+import { ConnectorConfirmHost } from './ConnectorConfirmHost'
 import { CommandProposalCard } from './CommandProposalCard'
 
 type Line = { text: string; settingsKind?: MetisCommandNotice['settingsKind'] }
@@ -67,6 +68,7 @@ export function CommandProposalHost({ state }: { state: MetisCommandState }): JS
   return (
     <>
       <AccountChoiceHost onNotice={(text) => show({ text })} />
+      <ConnectorConfirmHost onNotice={(text) => show({ text })} />
       {state.proposalId ? (
         <CommandProposalCard
           key={state.proposalId}

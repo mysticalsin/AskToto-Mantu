@@ -21,6 +21,7 @@ import { createUserMemoryPreloadApi } from './user-memory'
 import { createMeetingRecordPreloadApi } from './meeting-record'
 import { createConnectorAccountsPreloadApi } from './connector-accounts'
 import { createAccountChoicePreloadApi } from './connector-account-choice'
+import { createConnectorConfirmPreloadApi } from './connector-confirm'
 import { createQuietPreloadApi } from './quiet'
 import { createDictationStatusPreloadApi } from './dictation-status'
 import { createComponentOffloadPreloadApi } from './component-offload'
@@ -54,6 +55,7 @@ export function createFeaturePreloadApis(ipc: IpcRenderer) {
     ...createMeetingRecordPreloadApi(ipc),
     ...createConnectorAccountsPreloadApi(ipc),
     ...createAccountChoicePreloadApi(ipc),
+    ...createConnectorConfirmPreloadApi(ipc),
     ...createQuietPreloadApi(ipc),
     ...createDictationStatusPreloadApi(ipc),
     ...createAttachmentsPreloadApi(ipc),

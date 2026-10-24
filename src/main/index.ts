@@ -902,7 +902,9 @@ import {
 import { asrManifestComplete } from './asr-manifest'
 import { createAsrModelProtocolHandler } from './asr-model-protocol'
 import { detectCli, setupCli, installCli, loginCli, prewarmCli, checkCliSession, connectCliSession } from './cli'
-import { connectMcp, pushToMcp } from './mcp/mcpClient'
+import { connectMcp, type McpPushResult } from './mcp/mcpClient'
+import { mcpCallRuntime, mcpTargetFor } from './features/connectors/mcp-call-runtime'
+import { createMcpPushTransport } from './features/connectors/mcp-refresh-transport'
 import { resolveWriteTargets } from './mcp/write-tools'
 import {
   discoverClickupList,
@@ -943,24 +945,14 @@ import {
   clearMcpApiKey,
   hasMcpApiKey,
   setMcpRefreshToken,
-  getMcpRefreshToken,
   clearMcpRefreshToken
 } from './mcp/mcpSecrets'
-import {
-  runClickupOAuth,
-  refreshClickupToken,
-  CLICKUP_MCP_ENDPOINT,
-  tryAcquireClickupTokenLock,
-  releaseClickupTokenLock
-} from './mcp/clickupOAuth'
+import { runClickupOAuth, CLICKUP_MCP_ENDPOINT } from './mcp/clickupOAuth'
 import {
   runPlaneOAuth,
-  refreshPlaneToken,
   savePlaneClientAndTokens,
   PLANE_MCP_OAUTH_ENDPOINT,
-  PLANE_MCP_PAT_ENDPOINT,
-  tryAcquirePlaneTokenLock,
-  releasePlaneTokenLock
+  PLANE_MCP_PAT_ENDPOINT
 } from './mcp/planeOAuth'
 import { scheduleRebuild, purgeGraphArtifacts, acquireGraphBuildFence } from './graphify'
 import { SaveMeetingSchema, SaveNoteSchema, stripProvisionalLines, type TranscriptLine } from '@shared/ipc'
@@ -6500,11 +6492,17 @@ function registerIpc(): void {
   async function discoverListForClickup(
     conn: McpConnection
   ): Promise<{ ok: true; list: ClickupList } | { ok: false; error: string }> {
-    const apiKey = getMcpApiKey(conn.id)
+    // Lookups go through the read path, which refuses any tool not classified `read` (G64).
     return discoverClickupList({
       tools: conn.tools,
       saved: savedClickupList(conn),
-      callTool: (toolName, args) => pushToMcp(conn.endpointUrl, apiKey, conn.extraHeaders, toolName, args, conn.label)
+      callTool: (toolName, args) =>
+        mcpCallRuntime().read({
+          target: mcpTargetFor(conn),
+          toolName,
+          args,
+          transport: createMcpPushTransport(conn)
+        })
     })
   }
 
@@ -6537,8 +6535,15 @@ function registerIpc(): void {
     if (!conn || !conn.connected || !conn.endpointUrl || !hasMcpApiKey(conn.id)) {
       return { ok: false, error: `${mcpLabelFor(action.kind)} is no longer connected.` }
     }
-    const apiKey = getMcpApiKey(conn.id)
-    return pushToMcp(conn.endpointUrl, apiKey, conn.extraHeaders, action.toolName, action.payload, conn.label)
+    // G64: a background retry has no owner at the keyboard. The runtime repeats a write only with a stored approval
+    // for these exact arguments; the queue carries none yet, so it is refused ("Confirm again in Review").
+    const retried = await mcpCallRuntime().write({
+      target: mcpTargetFor(conn),
+      toolName: action.toolName,
+      args: action.payload,
+      transport: createMcpPushTransport(conn)
+    })
+    return { ok: retried.ok, ...(retried.error ? { error: retried.error } : {}) }
   }
 
   applyOperatorCrmRetries = async (ids: string[]) => {
@@ -6755,41 +6760,16 @@ function registerIpc(): void {
     if (!conn.tools.includes(toolName)) {
       return { ok: false, error: `Unknown ${conn.label} tool.` }
     }
-    const apiKey = getMcpApiKey(connectionId)
     const started = Date.now()
-    let r = await pushToMcp(conn.endpointUrl, apiKey, conn.extraHeaders, toolName, args, conn.label)
-    // ClickUp-only: its credential is an OAuth access token, not a pasted key that only changes when the
-    // user edits it — a 401 here can mean the token simply expired. Attempt exactly one refresh + retry
-    // before surfacing reconnect-required, gated on the SAME single-flight lock the interactive OAuth
-    // flow uses (see clickupOAuth.ts) so a background refresh here and a user-initiated Reconnect in
-    // Settings can never both persist tokens at once.
-    if (
-      !r.ok &&
-      (conn.kind === 'clickup' || conn.kind === 'plane') &&
-      /401|403|unauthor|forbidden/i.test(r.error || '')
-    ) {
-      const acquire = conn.kind === 'clickup' ? tryAcquireClickupTokenLock : tryAcquirePlaneTokenLock
-      const release = conn.kind === 'clickup' ? releaseClickupTokenLock : releasePlaneTokenLock
-      const refresh = conn.kind === 'clickup' ? refreshClickupToken : refreshPlaneToken
-      const product = conn.kind === 'clickup' ? 'ClickUp' : 'Plane'
-      if (acquire()) {
-        try {
-          const refreshToken = getMcpRefreshToken(connectionId)
-          const refreshed = refreshToken ? await refresh(refreshToken) : { ok: false as const }
-          if (refreshed.ok && refreshed.accessToken) {
-            setMcpApiKey(connectionId, refreshed.accessToken)
-            setMcpRefreshToken(connectionId, refreshed.refreshToken ?? refreshToken ?? '')
-            r = await pushToMcp(conn.endpointUrl, refreshed.accessToken, conn.extraHeaders, toolName, args, conn.label)
-          } else {
-            r = { ok: false, error: `Your ${product} session expired. Reconnect ${product} in Settings.` }
-          }
-        } finally {
-          release()
-        }
-      } else {
-        r = { ok: false, error: `A ${product} sign-in or refresh is already in progress. Try again in a moment.` }
-      }
-    }
+    // G64: classified, confirmed on the owner's card and ActionGuard-approved before anything leaves. The ClickUp /
+    // Plane 401 refresh-and-retry lives inside the transport and reuses that one approval.
+    let r: McpPushResult = await mcpCallRuntime().write({
+      target: mcpTargetFor(conn),
+      toolName,
+      args,
+      ownerWebContentsId: e.sender.id,
+      transport: createMcpPushTransport(conn)
+    })
     auditLog('mcp.push', { connectionId, tool: toolName, ok: r.ok })
     const crmTitle = typeof args.title === 'string' ? args.title : undefined
     const meetingBase = meetingFile ? meetingFile.split(/[/\\]/).pop() || meetingFile : undefined

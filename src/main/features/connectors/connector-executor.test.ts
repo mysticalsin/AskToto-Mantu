@@ -16,6 +16,7 @@ const READ: ConnectorOperation = {
   opId: 'outlook.calendar.today',
   kind: 'outlook',
   effect: 'read',
+  effectClass: 'read',
   summary: 'read',
   scopes: ['Calendars.Read'],
   input: z.object({ tz: z.string().default('UTC') }),
@@ -25,9 +26,20 @@ const WRITE: ConnectorOperation = {
   opId: 'outlook.draft.create',
   kind: 'outlook',
   effect: 'create',
+  effectClass: 'reversible_write',
   summary: 'draft',
   scopes: ['Mail.ReadWrite'],
-  input: z.object({ subject: z.string().default('') }),
+  input: z.object({ subject: z.string().default(''), to: z.array(z.string()).optional() }),
+  output: z.object({ id: z.string().min(1) })
+}
+const SEND: ConnectorOperation = {
+  opId: 'outlook.mail.send',
+  kind: 'outlook',
+  effect: 'send',
+  effectClass: 'send',
+  summary: 'send',
+  scopes: ['Mail.Send'],
+  input: z.object({ subject: z.string().default(''), to: z.array(z.string()).optional() }),
   output: z.object({ id: z.string().min(1) })
 }
 
@@ -451,6 +463,73 @@ describe('connector executor', () => {
     await executor.execute({ opId: 'outlook.calendar.today', revision: 3, input: { tz: 'Europe/Paris' } })
     expect(audit).toHaveBeenCalled()
     expect(JSON.stringify(audit.mock.calls)).not.toContain('Europe/Paris')
+  })
+})
+
+describe('connector executor: prepare and recipient gate (G64)', () => {
+  function withRecipients(trusted: string[], operations: ConnectorOperation[] = [READ, WRITE]) {
+    const handler = vi.fn<ConnectorHandler>(async () => ({ ok: true, output: { id: 'draft-1' } }))
+    const executor = createConnectorExecutor({
+      catalog: createCatalogPublisher({ revision: 3, operations }),
+      handlers: { 'outlook.draft.create': handler, 'outlook.mail.send': handler },
+      grants: { check: async () => 'granted' as const },
+      accounts: {
+        candidates: () => [CANDIDATE],
+        isReady: () => true,
+        observe: async () => true
+      },
+      writeGate: createActionGuardWriteGate(),
+      recipients: { addressesFor: async () => trusted.map((address) => ({ address, source: 'calendar-attendee' })) }
+    })
+    return { executor, handler }
+  }
+
+  it('prepare returns the same account the execute path uses, with the schema-parsed args hash', async () => {
+    const { executor } = withRecipients([])
+    const prepared = await executor.prepare({ opId: 'outlook.draft.create', revision: 3, input: { subject: 's' } })
+    if (!('prepared' in prepared)) throw new Error('expected a prepared call')
+    expect(prepared.accountRef).toBe(ACCOUNT_REF)
+    expect(prepared.accountLabel).toBe('Work')
+    expect(prepared.argsHash).toBe(writeArgsHash('outlook.draft.create', 3, prepared.parsed))
+  })
+
+  it('a write with recipient fields and an empty trusted set refuses recipient_unverified before the handler', async () => {
+    const { executor, handler } = withRecipients([])
+    const input = { subject: 's', to: ['eve@example.test'] }
+    const r = await executor.execute({
+      opId: 'outlook.draft.create',
+      revision: 3,
+      input,
+      approval: approval('outlook.draft.create', 3, input)
+    })
+    expect(r).toMatchObject({ ok: false, reason: 'recipient_unverified' })
+    expect(handler).not.toHaveBeenCalled()
+  })
+
+  it('a write whose recipients are all trusted runs', async () => {
+    const { executor, handler } = withRecipients(['ana@example.test'])
+    const input = { subject: 's', to: ['ANA@example.test'] }
+    const r = await executor.execute({
+      opId: 'outlook.draft.create',
+      revision: 3,
+      input,
+      approval: approval('outlook.draft.create', 3, input)
+    })
+    expect(r).toMatchObject({ ok: true })
+    expect(handler).toHaveBeenCalledTimes(1)
+  })
+
+  it('a send op without verified recipients never calls the handler, even with no recipient fields', async () => {
+    const { executor, handler } = withRecipients(['ana@example.test'], [SEND])
+    const input = { subject: 's' }
+    const r = await executor.execute({
+      opId: 'outlook.mail.send',
+      revision: 3,
+      input,
+      approval: approval('outlook.mail.send', 3, input)
+    })
+    expect(r).toMatchObject({ ok: false, reason: 'recipient_unverified' })
+    expect(handler).not.toHaveBeenCalled()
   })
 })
 

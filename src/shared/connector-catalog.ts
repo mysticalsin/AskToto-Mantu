@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import type { ConnectorEffectClass } from './connector-effects'
 
 /**
  * Connector catalog (G60, CAP-30). One typed, versioned list of the operations Métis really performs against a
@@ -28,6 +29,8 @@ export interface ConnectorOperation {
   opId: string
   kind: ConnectorKind
   effect: ConnectorEffect
+  /** G64: what the call does to the outside world; requiresConfirm decides whether a card is needed. */
+  effectClass: ConnectorEffectClass
   /** One line for confirm cards and logs. */
   summary: string
   /** Provider scopes the account must hold for this call. */
@@ -62,6 +65,7 @@ export const CONNECTOR_CATALOG: readonly ConnectorOperation[] = Object.freeze([
     opId: 'outlook.calendar.today',
     kind: 'outlook',
     effect: 'read',
+    effectClass: 'read',
     summary: "Read today's calendar events",
     scopes: ['Calendars.Read'],
     input: CalendarTodayInput,
@@ -71,6 +75,7 @@ export const CONNECTOR_CATALOG: readonly ConnectorOperation[] = Object.freeze([
     opId: 'outlook.draft.create',
     kind: 'outlook',
     effect: 'create',
+    effectClass: 'reversible_write',
     summary: 'Create a mail draft (never sent)',
     scopes: ['Mail.ReadWrite'],
     input: OutlookDraftInput,
@@ -80,6 +85,7 @@ export const CONNECTOR_CATALOG: readonly ConnectorOperation[] = Object.freeze([
     opId: 'outlook.event.create',
     kind: 'outlook',
     effect: 'create',
+    effectClass: 'reversible_write',
     summary: 'Create a calendar event with no attendees (no invitations)',
     scopes: ['Calendars.ReadWrite'],
     input: OutlookEventInput,
@@ -92,7 +98,7 @@ export const CONNECTOR_CATALOG: readonly ConnectorOperation[] = Object.freeze([
  * effect, scopes or input shape changed). `CONNECTOR_CATALOG_DIGEST` is pinned by a test so a change without a
  * bump fails CI.
  */
-export const CONNECTOR_CATALOG_REVISION = 2
+export const CONNECTOR_CATALOG_REVISION = 3
 
 /** Stable description of the parts of an operation a plan depends on. */
 export function describeOperation(op: ConnectorOperation): string {
@@ -102,7 +108,15 @@ export function describeOperation(op: ConnectorOperation): string {
           .sort()
           .join(',')
       : '*'
-  return [op.opId, op.kind, op.effect, [...op.scopes].sort().join(','), shape(op.input), shape(op.output)].join('|')
+  return [
+    op.opId,
+    op.kind,
+    op.effect,
+    op.effectClass,
+    [...op.scopes].sort().join(','),
+    shape(op.input),
+    shape(op.output)
+  ].join('|')
 }
 
 export function catalogFingerprint(ops: readonly ConnectorOperation[]): string {
@@ -123,6 +137,10 @@ export type ConnectorRefusalReason =
   | 'output_invalid'
   | 'os_permission_missing'
   | 'effect_uncertain'
+  /** A recipient in the arguments is not in the trusted set main resolved (G64). Nothing ran. */
+  | 'recipient_unverified'
+  /** The owner declined, or the confirm card expired or was revoked (G64). Nothing ran. */
+  | 'confirm_declined'
 
 /**
  * Which rule chose the account (G62). A closed set of labels: never an email, a tenant id or an account ref, so it is

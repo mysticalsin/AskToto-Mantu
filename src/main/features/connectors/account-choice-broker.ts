@@ -16,6 +16,8 @@ export interface PendingAccountChoice {
   opId: string
   revision: number
   argsHash: string
+  /** The window the card went to; the confirm card that follows the choice goes to the same window (G64). */
+  ownerWebContentsId: number
   /** The schema-parsed arguments. Held here only; the renderer is shown none of it. */
   input: unknown
 }
