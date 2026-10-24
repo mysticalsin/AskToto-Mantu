@@ -232,6 +232,40 @@ describe('connector executor', () => {
     expect(write).toHaveBeenCalledTimes(1)
   })
 
+  it('os_permission_missing is typed and does not degrade health', async () => {
+    const { executor, accounts } = setup({
+      handler: async () => ({ ok: false, refusal: 'os_permission_missing', permission: 'denied' })
+    })
+    const input = { subject: 'x' }
+    const r = await executor.execute({
+      opId: 'outlook.draft.create',
+      revision: 3,
+      input,
+      approval: approval('outlook.draft.create', 3, input)
+    })
+    expect(r).toMatchObject({ ok: false, reason: 'os_permission_missing', permission: 'denied' })
+    if (!r.ok) expect(r.provenance?.accountRef).toBe(ACCOUNT_REF)
+    expect(accounts.observe.mock.calls.map((c) => c[2])).not.toContain('transient_failure')
+    expect(accounts.observe.mock.calls.map((c) => c[2])).not.toContain('operation_succeeded')
+  })
+
+  it('effect_uncertain carries provenance, no receipt', async () => {
+    const { executor, audit } = setup({
+      handler: async () => ({ ok: false, refusal: 'effect_uncertain', error: 'Could not confirm.' })
+    })
+    const input = { subject: 'x' }
+    const r = await executor.execute({
+      opId: 'outlook.draft.create',
+      revision: 3,
+      input,
+      approval: approval('outlook.draft.create', 3, input)
+    })
+    expect(r).toMatchObject({ ok: false, reason: 'effect_uncertain', error: 'Could not confirm.' })
+    expect(r).not.toHaveProperty('receipt')
+    if (!r.ok) expect(r.provenance).toMatchObject({ opId: 'outlook.draft.create', accountRef: ACCOUNT_REF })
+    expect(audit).not.toHaveBeenCalledWith('connector.executed', expect.anything())
+  })
+
   it('reports a handler failure and a handler output that breaks the contract', async () => {
     const failing = setup({ handler: async () => ({ ok: false, error: 'boom', needsConsent: true }) })
     const input = { subject: 'x' }

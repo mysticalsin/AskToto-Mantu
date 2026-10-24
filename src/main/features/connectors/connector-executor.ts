@@ -35,7 +35,16 @@ export interface HandlerContext {
 
 export type HandlerOutcome =
   | { ok: true; output: unknown }
-  | { ok: false; error?: string; needsConsent?: boolean; healthSignal?: ConnectorAccountHealthSignal }
+  | {
+      ok: false
+      error?: string
+      needsConsent?: boolean
+      healthSignal?: ConnectorAccountHealthSignal
+      /** A typed refusal instead of the generic `handler_failed`. */
+      refusal?: 'os_permission_missing' | 'effect_uncertain'
+      /** Operating-system permission status that caused `os_permission_missing`. */
+      permission?: string
+    }
 
 export type ConnectorHandler = (input: never, ctx: HandlerContext) => Promise<HandlerOutcome>
 export type ConnectorHandlers = Readonly<Record<string, ConnectorHandler>>
@@ -105,7 +114,9 @@ const MESSAGES: Record<ConnectorRefusalReason, string> = {
   grant_stale: 'The permission for this account is no longer valid. Reconnect it and try again.',
   not_approved: 'This change needs your confirmation first. Nothing was changed.',
   handler_failed: 'The connector could not complete the operation. Nothing was confirmed.',
-  output_invalid: 'The connector returned something unexpected, so the result is not trusted.'
+  output_invalid: 'The connector returned something unexpected, so the result is not trusted.',
+  os_permission_missing: 'This Mac has not given Métis permission for that. Nothing was changed.',
+  effect_uncertain: 'Métis could not confirm the change was made. Check before trying again. It was not retried.'
 }
 
 export function createConnectorExecutor(deps: ConnectorExecutorDeps): ConnectorExecutor {
@@ -131,7 +142,7 @@ export function createConnectorExecutor(deps: ConnectorExecutorDeps): ConnectorE
       const refuse = (
         reason: ConnectorRefusalReason,
         provenance?: ConnectorProvenance,
-        extra: { needsConsent?: boolean; error?: string } = {}
+        extra: { needsConsent?: boolean; error?: string; permission?: string } = {}
       ): ConnectorResult => {
         audit('connector.refused', {
           opId: call.opId.slice(0, 64),
@@ -206,6 +217,12 @@ export function createConnectorExecutor(deps: ConnectorExecutorDeps): ConnectorE
         return refuse('handler_failed', provenance)
       }
       if (!outcome.ok) {
+        if (outcome.refusal === 'os_permission_missing') {
+          // An OS permission the owner has not granted says nothing about the account's health.
+          return refuse('os_permission_missing', provenance, {
+            ...(outcome.permission ? { permission: outcome.permission.slice(0, 32) } : {})
+          })
+        }
         const healthSignal = outcome.healthSignal ?? (outcome.needsConsent ? 'consent_required' : undefined)
         if (healthSignal) {
           try {
@@ -215,7 +232,7 @@ export function createConnectorExecutor(deps: ConnectorExecutorDeps): ConnectorE
             return refuse('account_not_ready', provenance)
           }
         }
-        return refuse('handler_failed', provenance, {
+        return refuse(outcome.refusal === 'effect_uncertain' ? 'effect_uncertain' : 'handler_failed', provenance, {
           ...(outcome.needsConsent ? { needsConsent: true } : {}),
           ...(outcome.error ? { error: outcome.error } : {})
         })

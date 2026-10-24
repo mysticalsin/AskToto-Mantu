@@ -8,6 +8,11 @@ const PINNED: Record<number, string> = {
     'outlook.calendar.today|outlook|read|Calendars.Read|tz|events',
     'outlook.draft.create|outlook|create|Mail.ReadWrite|body,subject|id',
     'outlook.event.create|outlook|create|Calendars.ReadWrite|body,endIso,startIso,subject|id'
+  ].join('\n'),
+  2: [
+    'outlook.calendar.today|outlook|read|Calendars.Read|tz|events',
+    'outlook.draft.create|outlook|create|Mail.ReadWrite|body,subject|id',
+    'outlook.event.create|outlook|create|Calendars.ReadWrite|body,endIso,startIso,subject|endIso,id,startIso,verified'
   ].join('\n')
 }
 

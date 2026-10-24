@@ -25,10 +25,12 @@ export function createBuiltinHandlers(): ConnectorHandlers {
     endIso?: string
   }): Promise<HandlerOutcome> => {
     const r = await createOutlookEventForConnector(input)
-    return r.ok && r.id
-      ? { ok: true, output: { id: r.id } }
+    // Success needs the readback-confirmed id and times; anything unconfirmed is effect_uncertain.
+    return r.ok && r.id && r.startIso && r.endIso
+      ? { ok: true, output: { id: r.id, verified: true, startIso: r.startIso, endIso: r.endIso } }
       : {
           ok: false,
+          ...(r.uncertain || r.ok ? { refusal: 'effect_uncertain' as const } : {}),
           ...(r.error ? { error: r.error } : {}),
           ...(r.needsConsent ? { needsConsent: true } : {}),
           ...(r.healthSignal ? { healthSignal: r.healthSignal } : {})

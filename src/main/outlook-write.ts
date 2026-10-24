@@ -11,6 +11,7 @@
 
 import { getGraphToken, getGraphTokenOutcome } from './auth'
 import { auditLog } from './logger'
+import { type EventFacts, matchesReadback } from './features/calendar/eventkit-readback'
 import type { ConnectorAccountHealthSignal } from '@shared/connector-accounts'
 
 const GRAPH = 'https://graph.microsoft.com/v1.0'
@@ -35,6 +36,11 @@ export interface OutlookWriteResult {
   error?: string
   needsConsent?: boolean
   id?: string
+  /** The create may have happened but could not be confirmed by readback. Never retried automatically. */
+  uncertain?: boolean
+  /** The times the readback confirmed (events only). */
+  startIso?: string
+  endIso?: string
 }
 
 export type OutlookConnectorWriteResult = OutlookWriteResult & { healthSignal?: ConnectorAccountHealthSignal }
@@ -50,7 +56,8 @@ async function graphPost(
   scopes: string[],
   path: string,
   body: Record<string, unknown>,
-  missing: string
+  missing: string,
+  readback?: (token: string, id: string) => Promise<boolean>
 ): Promise<OutlookConnectorWriteResult> {
   let outcome: Awaited<ReturnType<typeof getGraphTokenOutcome>>
   try {
@@ -87,7 +94,8 @@ async function graphPost(
     if (res.status === 401 || res.status === 403) {
       return { ok: false, needsConsent: true, error: missing, healthSignal: 'consent_required' }
     }
-    if (res.status >= 500) return { ok: false, error: uncertain, healthSignal: 'transient_failure' }
+    const unsure = readback ? { uncertain: true as const } : {}
+    if (res.status >= 500) return { ok: false, error: uncertain, healthSignal: 'transient_failure', ...unsure }
     if (!res.ok) {
       return { ok: false, error: `Outlook refused the draft (${res.status}). Nothing was sent.` }
     }
@@ -96,10 +104,52 @@ async function graphPost(
       data && typeof data === 'object' && typeof (data as { id?: unknown }).id === 'string'
         ? (data as { id: string }).id.trim()
         : ''
-    if (!id) return { ok: false, error: uncertain, healthSignal: 'transient_failure' }
+    if (!id) return { ok: false, error: uncertain, healthSignal: 'transient_failure', ...unsure }
+    if (readback) {
+      // Success is claimed only after the provider reports the event back as requested. Never retried.
+      let confirmed = false
+      try {
+        confirmed = await readback(token, id)
+      } catch {
+        return { ok: false, error: uncertain, healthSignal: 'transient_failure', ...unsure }
+      }
+      if (!confirmed) return { ok: false, error: uncertain, ...unsure }
+    }
     return { ok: true, id, healthSignal: 'operation_succeeded' }
   } catch {
-    return { ok: false, error: uncertain, healthSignal: 'transient_failure' }
+    return { ok: false, error: uncertain, healthSignal: 'transient_failure', ...(readback ? { uncertain: true } : {}) }
+  }
+}
+
+function graphDateTimeToIso(value: unknown): string {
+  if (typeof value !== 'string' || !value) return ''
+  // Graph returns UTC without a zone designator when `Prefer: outlook.timezone="UTC"` is sent.
+  return /(Z|[+-]\d{2}:?\d{2})$/.test(value) ? value : `${value}Z`
+}
+
+/** GET the created event back and compare it with what the owner confirmed. */
+function eventReadback(requested: EventFacts): (token: string, id: string) => Promise<boolean> {
+  return async (token, id) => {
+    const res = await fetch(`${GRAPH}/me/events/${encodeURIComponent(id)}?$select=id,subject,start,end,isCancelled`, {
+      method: 'GET',
+      headers: { Authorization: `Bearer ${token}`, Prefer: 'outlook.timezone="UTC"' },
+      signal: AbortSignal.timeout(GRAPH_TIMEOUT_MS)
+    })
+    if (!res.ok) return false
+    const data = (await res.json()) as {
+      id?: unknown
+      subject?: unknown
+      start?: { dateTime?: unknown }
+      end?: { dateTime?: unknown }
+      isCancelled?: unknown
+    } | null
+    if (!data || data.id !== id) return false
+    return matchesReadback(requested, {
+      subject: typeof data.subject === 'string' ? data.subject : '',
+      startIso: graphDateTimeToIso(data.start?.dateTime),
+      endIso: graphDateTimeToIso(data.end?.dateTime),
+      cancelled: data.isCancelled === true
+    })
   }
 }
 
@@ -170,8 +220,10 @@ export async function createOutlookEventForConnector(input: {
       attendees: [],
       isReminderOn: false
     },
-    OUTLOOK_EVENT_CONSENT_COPY
+    OUTLOOK_EVENT_CONSENT_COPY,
+    eventReadback({ subject, startIso: start, endIso: end })
   )
-  if (r.ok) auditLog('outlook.draft', { ok: true, kind: 'event' })
-  return r
+  if (!r.ok) return r
+  auditLog('outlook.draft', { ok: true, kind: 'event' })
+  return { ...r, startIso: start, endIso: end }
 }

@@ -130,6 +130,7 @@ export async function runConnectorWriteDetailed(
     ok: false,
     error: consent ?? result.error ?? result.message,
     ...(result.needsConsent ? { needsConsent: true } : {}),
+    ...(result.reason === 'effect_uncertain' ? { uncertain: true } : {}),
     result
   }
 }

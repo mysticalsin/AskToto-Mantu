@@ -12,6 +12,7 @@ import {
   createOutlookDraft,
   createOutlookDraftForConnector,
   createOutlookEvent,
+  createOutlookEventForConnector,
   outlookWriteStatus
 } from './outlook-write'
 
@@ -182,22 +183,74 @@ describe('createOutlookDraft — never send', () => {
   })
 })
 
-describe('createOutlookEvent — no attendees, no invites', () => {
-  it('POSTs /me/events with an empty attendees list', async () => {
-    getGraphTokenOutcome.mockResolvedValue({ ok: true, token: 'synthetic-token' })
-    const fetchMock = vi.fn(async (_url: string, init: RequestInit) => {
-      const body = JSON.parse(String(init.body))
-      expect(body.attendees).toEqual([])
-      return { ok: true, status: 201, json: async () => ({ id: 'ev-1' }) }
+describe('createOutlookEvent — no attendees, no invites, readback before success', () => {
+  const input = {
+    subject: 'Next steps',
+    body: 'Review the recap',
+    startIso: '2026-09-01T09:00:00.000Z',
+    endIso: '2026-09-01T09:30:00.000Z'
+  }
+  const readbackBody = (over: Record<string, unknown> = {}): Record<string, unknown> => ({
+    id: 'ev-1',
+    subject: 'Next steps',
+    start: { dateTime: '2026-09-01T09:00:00.0000000', timeZone: 'UTC' },
+    end: { dateTime: '2026-09-01T09:30:00.0000000', timeZone: 'UTC' },
+    isCancelled: false,
+    ...over
+  })
+  const stub = (readback: () => unknown): ReturnType<typeof vi.fn> => {
+    const fetchMock = vi.fn(async (url: string, init: RequestInit) => {
+      if (init.method === 'POST') {
+        expect(JSON.parse(String(init.body)).attendees).toEqual([])
+        return { ok: true, status: 201, json: async () => ({ id: 'ev-1' }) }
+      }
+      expect(url).toMatch(/\/me\/events\/ev-1\?/)
+      expect((init.headers as Record<string, string>).Prefer).toBe('outlook.timezone="UTC"')
+      return readback()
     })
     vi.stubGlobal('fetch', fetchMock)
-    const r = await createOutlookEvent({
-      subject: 'Next steps',
-      body: 'Review the recap',
-      startIso: '2026-09-01T09:00:00.000Z',
-      endIso: '2026-09-01T09:30:00.000Z'
-    })
+    return fetchMock
+  }
+  const posts = (m: ReturnType<typeof vi.fn>): number =>
+    m.mock.calls.filter((c) => (c[1] as RequestInit).method === 'POST').length
+
+  it('event create ok only after matching GET readback', async () => {
+    getGraphTokenOutcome.mockResolvedValue({ ok: true, token: 'synthetic-token' })
+    const m = stub(() => ({ ok: true, status: 200, json: async () => readbackBody() }))
+    const r = await createOutlookEvent(input)
     expect(r.ok).toBe(true)
     expect(r.id).toBe('ev-1')
+    expect(m).toHaveBeenCalledTimes(2)
+    expect(auditLog).toHaveBeenCalledWith('outlook.draft', { ok: true, kind: 'event' })
+  })
+
+  it('404 readback → uncertain, no second POST', async () => {
+    getGraphTokenOutcome.mockResolvedValue({ ok: true, token: 'synthetic-token' })
+    const m = stub(() => ({ ok: false, status: 404, json: async () => ({}) }))
+    const r = await createOutlookEventForConnector(input)
+    expect(r).toMatchObject({ ok: false, uncertain: true })
+    expect(r.error).toMatch(/could not confirm/i)
+    expect(posts(m)).toBe(1)
+    expect(auditLog).not.toHaveBeenCalled()
+  })
+
+  it('mismatched readback → uncertain', async () => {
+    getGraphTokenOutcome.mockResolvedValue({ ok: true, token: 'synthetic-token' })
+    stub(() => ({
+      ok: true,
+      status: 200,
+      json: async () => readbackBody({ start: { dateTime: '2026-09-01T11:00:00.0000000', timeZone: 'UTC' } })
+    }))
+    await expect(createOutlookEventForConnector(input)).resolves.toMatchObject({ ok: false, uncertain: true })
+  })
+
+  it('thrown readback → uncertain', async () => {
+    getGraphTokenOutcome.mockResolvedValue({ ok: true, token: 'synthetic-token' })
+    stub(() => {
+      throw new Error('provider detail')
+    })
+    const r = await createOutlookEventForConnector(input)
+    expect(r).toMatchObject({ ok: false, uncertain: true })
+    expect(r.error).not.toMatch(/provider detail/)
   })
 })
