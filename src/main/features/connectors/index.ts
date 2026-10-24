@@ -7,5 +7,3 @@ export {
   runConnectorWriteDetailed
 } from './connector-runtime'
 export type { ConnectorAccountRuntime } from './connector-runtime'
-export { registerConnectorAccountsIpc } from './connector-accounts-ipc'
-export type { ConnectorAccountsIpcDeps } from './connector-accounts-ipc'
