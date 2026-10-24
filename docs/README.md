@@ -9,6 +9,7 @@ Each reference describes its own source version, not current hosted state or rel
 - [docs/MANTU-IT-REQUEST.md](MANTU-IT-REQUEST.md)
 - [docs/RELEASE-NOTES-2.12.md](RELEASE-NOTES-2.12.md)
 - [docs/release-2.12/dispositions.json](release-2.12/dispositions.json)
+- [docs/decisions/D-18-teams-auto-join.md](decisions/D-18-teams-auto-join.md)
 - [docs/license-platform-plan.md](license-platform-plan.md)
 - [license-server/HANDBOOK.md](../license-server/HANDBOOK.md)
 - [license-server/MIGRATION.md](../license-server/MIGRATION.md)

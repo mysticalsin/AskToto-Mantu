@@ -113,3 +113,7 @@ still to run. A `Not run:` line marks a check that needs hardware or an account 
 - Not run: CAP-38 Installed Windows runs
 - Not run: CAP-39 Reference-hardware measurements
 <!-- availability:end -->
+
+## Not in 2.12
+- Métis does not join Microsoft Teams meetings by itself. Use the Join link in the Agenda and start capture as
+  usual. After the meeting, speaker names from the Teams transcript are still added when your account can read it.
