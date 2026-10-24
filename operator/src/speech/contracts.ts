@@ -6,7 +6,7 @@ import {
   type Track
 } from '../../../src/shared/contracts/speech'
 
-const SessionIdSchema = z.string().uuid()
+const SessionIdSchema = z.guid()
 const TimestampSchema = z.number().int().positive()
 const GrantDigestSchema = z.string().regex(/^[a-f0-9]{64}$/)
 const TrackListSchema = z
