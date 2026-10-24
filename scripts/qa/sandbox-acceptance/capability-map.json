@@ -1,0 +1,1257 @@
+{
+  "schema": "metis.capability-map/1",
+  "capabilities": [
+    {
+      "id": "CAP-01",
+      "title": "Integration baseline and PR reconciliation",
+      "rows": [
+        {
+          "kind": "ci-only",
+          "evidence": "GATE-00 required CI gates on the integration head",
+          "target": "LOCALLY_TESTED"
+        }
+      ]
+    },
+    {
+      "id": "CAP-02",
+      "title": "Trusted session context and output freshness",
+      "rows": [
+        {
+          "kind": "ci-only",
+          "evidence": "session-context and session-queue unit tests (G13, G14)",
+          "target": "LOCALLY_TESTED"
+        }
+      ]
+    },
+    {
+      "id": "CAP-03",
+      "title": "Canonical transcript ledger and correction propagation",
+      "rows": [
+        {
+          "kind": "sandbox",
+          "scenario": "meeting",
+          "steps": ["transcript-observed"],
+          "target": "LOCALLY_TESTED"
+        },
+        {
+          "kind": "ci-only",
+          "evidence": "transcript revision reducer unit tests (G03, G15)",
+          "target": "LOCALLY_TESTED"
+        }
+      ]
+    },
+    {
+      "id": "CAP-04",
+      "title": "Licensed cloud speech and provider identity",
+      "rows": [
+        {
+          "kind": "blocked-external",
+          "decision": "GATE-03",
+          "unblock": "Tony provides a licensed staging seat; then the operator staging smoke (O13) runs a real licensed session"
+        },
+        {
+          "kind": "ci-only",
+          "evidence": "provider identity contract tests (G08)",
+          "target": "LOCALLY_TESTED"
+        }
+      ]
+    },
+    {
+      "id": "CAP-05",
+      "title": "Meeting capture resilience and per-source readiness",
+      "rows": [
+        {
+          "kind": "sandbox",
+          "scenario": "stress",
+          "steps": ["s1-start-stop-spam", "s2-kill9-mid-meeting"],
+          "target": "LOCALLY_TESTED"
+        },
+        {
+          "kind": "owner-checklist",
+          "item": "GATE-07/08 physical mic, system audio, Bluetooth and sleep checklist on a Mac",
+          "target": "LIVE_VERIFIED"
+        }
+      ]
+    },
+    {
+      "id": "CAP-06",
+      "title": "Meeting durability and saved-meeting integrity",
+      "rows": [
+        {
+          "kind": "sandbox",
+          "scenario": "stress",
+          "steps": ["s2-kill9-mid-meeting", "s2-journal-tail", "s3-kill9-during-save"],
+          "target": "LOCALLY_TESTED"
+        },
+        {
+          "kind": "sandbox",
+          "scenario": "meeting",
+          "steps": ["meeting-preserved-after-relaunch"],
+          "target": "LOCALLY_TESTED"
+        }
+      ]
+    },
+    {
+      "id": "CAP-07",
+      "title": "Notes, recap, structured decisions, follow-up drafts",
+      "rows": [
+        {
+          "kind": "sandbox",
+          "scenario": "meeting",
+          "steps": ["review-opens-meeting"],
+          "target": "LOCALLY_TESTED"
+        },
+        {
+          "kind": "ci-only",
+          "evidence": "notes, recap and export regression fixtures (G21, G78)",
+          "target": "LOCALLY_TESTED"
+        }
+      ]
+    },
+    {
+      "id": "CAP-08",
+      "title": "Multilingual meetings and translation",
+      "rows": [
+        {
+          "kind": "ci-only",
+          "evidence": "synthetic EN/FR/PT-BR/ES trigger fixtures (G72, G73)",
+          "target": "LOCALLY_TESTED"
+        },
+        {
+          "kind": "blocked-external",
+          "decision": "D-24",
+          "unblock": "Tony provides a consenting multilingual recording dataset; accuracy then becomes MEASURED"
+        }
+      ]
+    },
+    {
+      "id": "CAP-09",
+      "title": "Live copilot intervention and the JEV gate",
+      "rows": [
+        {
+          "kind": "ci-only",
+          "evidence": "12 JEV synthetic scenarios and shadow-mode tests (G70-G77)",
+          "target": "LOCALLY_TESTED"
+        },
+        {
+          "kind": "blocked-external",
+          "decision": "D-15",
+          "unblock": "Tony chooses the classifier provider and supplies a labelled dataset"
+        }
+      ]
+    },
+    {
+      "id": "CAP-10",
+      "title": "Screen context authorization and lifecycle",
+      "rows": [
+        {
+          "kind": "ci-only",
+          "evidence": "stale-capture and Private View logic tests (G16, G46, G47)",
+          "target": "LOCALLY_TESTED"
+        },
+        {
+          "kind": "owner-checklist",
+          "item": "GATE-18 real TCC revoke and grant cycle on an owner Mac",
+          "target": "LIVE_VERIFIED"
+        }
+      ]
+    },
+    {
+      "id": "CAP-11",
+      "title": "Overlay surface, placement, loader and transitions",
+      "rows": [
+        {
+          "kind": "ci-only",
+          "evidence": "overlay reconcile and loader tests (C32, G17)",
+          "target": "DESIGNED"
+        },
+        {
+          "kind": "owner-checklist",
+          "item": "DPI and sleep checks on real displays",
+          "target": "LIVE_VERIFIED"
+        }
+      ]
+    },
+    {
+      "id": "CAP-12",
+      "title": "Permissions and the guided grant helper (macOS and Windows)",
+      "rows": [
+        {
+          "kind": "owner-checklist",
+          "item": "Guided grant helper walk-through: Accessibility, Input Monitoring, Automation on an installed build",
+          "target": "LIVE_VERIFIED"
+        }
+      ]
+    },
+    {
+      "id": "CAP-13",
+      "title": "Onboarding, teaching and role interview",
+      "rows": [
+        {
+          "kind": "ci-only",
+          "evidence": "onboarding replay and interview resume tests (Q09, G56)",
+          "target": "LOCALLY_TESTED"
+        }
+      ]
+    },
+    {
+      "id": "CAP-14",
+      "title": "Settings (HIG), settings registry and config migrations",
+      "rows": [
+        {
+          "kind": "sandbox",
+          "scenario": "settings-hig",
+          "steps": [
+            "settings-shortcut-opens",
+            "settings-toggle-applies-without-save",
+            "settings-confirm-escape-cancels",
+            "settings-audio-no-mic-request",
+            "settings-endpoint-inline-validation",
+            "settings-last-pane-restored",
+            "settings-toggle-persisted-after-relaunch"
+          ],
+          "target": "LOCALLY_TESTED"
+        }
+      ]
+    },
+    {
+      "id": "CAP-15",
+      "title": "Hold-to-talk gestures and voice turn",
+      "rows": [
+        {
+          "kind": "sandbox",
+          "scenario": "voice-actions",
+          "steps": ["va-default-on", "va-idle-no-mic", "va-short-hold-ignored"],
+          "target": "LOCALLY_TESTED"
+        },
+        {
+          "kind": "owner-checklist",
+          "item": "Physical chord, VoiceOver conflict and AltGr checks",
+          "target": "LIVE_VERIFIED"
+        }
+      ]
+    },
+    {
+      "id": "CAP-16",
+      "title": "Voice actions: intent, catalog, confirmation, readback",
+      "rows": [
+        {
+          "kind": "sandbox",
+          "scenario": "voice-actions",
+          "steps": [
+            "va-read-only-immediate",
+            "va-confirm-escape",
+            "va-return-guard",
+            "va-confirm-return-uncertain",
+            "va-uncertain-reader-details"
+          ],
+          "target": "LOCALLY_TESTED"
+        },
+        {
+          "kind": "owner-checklist",
+          "item": "Real Notes note via physical chord and the Photo Booth Accessibility flow",
+          "target": "LIVE_VERIFIED"
+        }
+      ]
+    },
+    {
+      "id": "CAP-17",
+      "title": "\"Hey Métis\" wake word",
+      "rows": [
+        {
+          "kind": "owner-checklist",
+          "item": "Wake-word gate on reference hardware: M1 8 GB and a 4-core PC (false accepts, CPU, latency)",
+          "target": "MEASURED"
+        }
+      ]
+    },
+    {
+      "id": "CAP-18",
+      "title": "Spoken replies and continuous conversation",
+      "rows": [
+        {
+          "kind": "ci-only",
+          "evidence": "reply generation cancel and mute tests (G27, G28, G30)",
+          "target": "LOCALLY_TESTED"
+        },
+        {
+          "kind": "owner-checklist",
+          "item": "Barge-in latency on real speakers and headphones",
+          "target": "LIVE_VERIFIED"
+        }
+      ]
+    },
+    {
+      "id": "CAP-19",
+      "title": "Interactive voice robustness and model routing",
+      "rows": [
+        {
+          "kind": "ci-only",
+          "evidence": "typed voice failure and model routing tests (G18, G29)",
+          "target": "LOCALLY_TESTED"
+        },
+        {
+          "kind": "owner-checklist",
+          "item": "Bluetooth and device-loss recovery",
+          "target": "LIVE_VERIFIED"
+        }
+      ]
+    },
+    {
+      "id": "CAP-20",
+      "title": "Dictation sessions and target-bound insertion",
+      "rows": [
+        {
+          "kind": "ci-only",
+          "evidence": "target-bound insertion helper unit tests (G22-G24)",
+          "target": "LOCALLY_TESTED"
+        },
+        {
+          "kind": "owner-checklist",
+          "item": "AX insertion into other apps on the N03/N04 fixtures with an owner Accessibility grant",
+          "target": "LIVE_VERIFIED"
+        }
+      ]
+    },
+    {
+      "id": "CAP-21",
+      "title": "Dictation quality, cleanup, drafting, dictionary, recovery",
+      "rows": [
+        {
+          "kind": "ci-only",
+          "evidence": "dictation cleanup, CJK/Thai spacing and journal recovery tests (G25, G26)",
+          "target": "LOCALLY_TESTED"
+        }
+      ]
+    },
+    {
+      "id": "CAP-22",
+      "title": "Durable tasks, grants, queues, steering",
+      "rows": [
+        {
+          "kind": "sandbox",
+          "scenario": "voice-actions",
+          "steps": ["va-confirm-return-uncertain", "va-uncertain-reader-details", "va-renderer-reset-revokes"],
+          "target": "LOCALLY_TESTED"
+        },
+        {
+          "kind": "ci-only",
+          "evidence": "task session, grant and queue tests (G06, G31, G32)",
+          "target": "LOCALLY_TESTED"
+        }
+      ]
+    },
+    {
+      "id": "CAP-23",
+      "title": "Scoped external handoff",
+      "rows": [
+        {
+          "kind": "ci-only",
+          "evidence": "handoff envelope replay and expiry tests (G37)",
+          "target": "LOCALLY_TESTED"
+        }
+      ]
+    },
+    {
+      "id": "CAP-24",
+      "title": "Native computer control",
+      "rows": [
+        {
+          "kind": "owner-checklist",
+          "item": "Native computer control against real target apps with Accessibility granted (N06, N08)",
+          "target": "LIVE_VERIFIED"
+        }
+      ]
+    },
+    {
+      "id": "CAP-25",
+      "title": "Visual marks, annotations and walkthroughs",
+      "rows": [
+        {
+          "kind": "owner-checklist",
+          "item": "DPI change, multi-display and screen-sharing alignment of marks",
+          "target": "LIVE_VERIFIED"
+        }
+      ]
+    },
+    {
+      "id": "CAP-26",
+      "title": "Persistent assistants and conversations",
+      "rows": [
+        {
+          "kind": "sandbox",
+          "scenario": "memory-assistants",
+          "steps": ["ma-assistant-propose-card", "ma-assistant-idempotent", "ma-persisted-after-relaunch"],
+          "target": "DESIGNED"
+        }
+      ]
+    },
+    {
+      "id": "CAP-27",
+      "title": "Home workspace, notch peek and indicators",
+      "rows": [
+        {
+          "kind": "ci-only",
+          "evidence": "unread-state and geometry tests (G50-G52)",
+          "target": "LOCALLY_TESTED"
+        },
+        {
+          "kind": "owner-checklist",
+          "item": "Display hot-unplug",
+          "target": "LIVE_VERIFIED"
+        }
+      ]
+    },
+    {
+      "id": "CAP-28",
+      "title": "Artifacts, attachments, previews and export",
+      "rows": [
+        {
+          "kind": "ci-only",
+          "evidence": "artifact manifest and export receipt tests (G53-G58)",
+          "target": "LOCALLY_TESTED"
+        }
+      ]
+    },
+    {
+      "id": "CAP-29",
+      "title": "Memory and enterprise knowledge",
+      "rows": [
+        {
+          "kind": "sandbox",
+          "scenario": "memory-assistants",
+          "steps": [
+            "ma-memory-correct",
+            "ma-memory-delete-tombstone",
+            "ma-persisted-after-relaunch",
+            "ma-no-marker-at-rest"
+          ],
+          "target": "DESIGNED"
+        },
+        {
+          "kind": "blocked-external",
+          "decision": "D-17",
+          "unblock": "Tony deploys the server memory service (Hindsight); GATE-12/13 server rows then run"
+        }
+      ]
+    },
+    {
+      "id": "CAP-30",
+      "title": "Account-aware connectors and governed MCP",
+      "rows": [
+        {
+          "kind": "blocked-external",
+          "decision": "D-23",
+          "unblock": "Tony provides controlled test accounts (D-23), then the connector smoke runs on staging"
+        },
+        {
+          "kind": "ci-only",
+          "evidence": "connector catalog and health contract tests (G60-G65)",
+          "target": "LOCALLY_TESTED"
+        }
+      ]
+    },
+    {
+      "id": "CAP-31",
+      "title": "Routines",
+      "rows": [
+        {
+          "kind": "ci-only",
+          "evidence": "fake-clock routine coordinator tests (G66, G69)",
+          "target": "LOCALLY_TESTED"
+        },
+        {
+          "kind": "owner-checklist",
+          "item": "Real sleep and wake cycle",
+          "target": "LIVE_VERIFIED"
+        }
+      ]
+    },
+    {
+      "id": "CAP-32",
+      "title": "Read-only suggestions and quiet mode",
+      "rows": [
+        {
+          "kind": "sandbox",
+          "scenario": "quiet-mode",
+          "steps": ["qm-policy-default", "qm-unsolicited-held", "qm-direct-request-answered", "qm-released-after-stop"],
+          "target": "DESIGNED"
+        },
+        {
+          "kind": "blocked-external",
+          "decision": "D-23",
+          "unblock": "Tony provides controlled test accounts (D-23), then the connector smoke runs on staging"
+        }
+      ]
+    },
+    {
+      "id": "CAP-33",
+      "title": "Entitlements, meters and usage ledger",
+      "rows": [
+        {
+          "kind": "ci-only",
+          "evidence": "meter and idempotent usage ledger tests (G79-G81)",
+          "target": "LOCALLY_TESTED"
+        }
+      ]
+    },
+    {
+      "id": "CAP-34",
+      "title": "Operator zero-config and team admin",
+      "rows": [
+        {
+          "kind": "blocked-external",
+          "decision": "D-30",
+          "unblock": "Tony runs operator design section 6 steps 1-6 (O13/O14: D1, secrets, Access bypass, deploys, SSO sign-in)"
+        }
+      ]
+    },
+    {
+      "id": "CAP-35",
+      "title": "Privacy, data rights, credentials and diagnostics",
+      "rows": [
+        {
+          "kind": "blocked-external",
+          "decision": "GATE-19",
+          "unblock": "Tony signs in with a live Entra account for consent and refresh"
+        },
+        {
+          "kind": "ci-only",
+          "evidence": "redaction, credential inventory and deletion receipt tests (Q01, Q11, G20, G82-G84)",
+          "target": "LOCALLY_TESTED"
+        }
+      ]
+    },
+    {
+      "id": "CAP-36",
+      "title": "Teams auto-join",
+      "rows": [
+        {
+          "kind": "blocked-external",
+          "decision": "G94",
+          "unblock": "Tony provides a Teams tenant and app registration, or G94 records an explicit exclusion from 2.12"
+        }
+      ]
+    },
+    {
+      "id": "CAP-37",
+      "title": "Lean core and optional components",
+      "rows": [
+        {
+          "kind": "ci-only",
+          "evidence": "lean profile and component download tests (G11, G87)",
+          "target": "LOCALLY_TESTED"
+        }
+      ]
+    },
+    {
+      "id": "CAP-38",
+      "title": "Updates, rollback, single instance, platform support",
+      "rows": [
+        {
+          "kind": "sandbox",
+          "scenario": "upgrade",
+          "steps": ["single-instance", "rollback-launch", "rollback-data-integrity", "reupgrade-launch"],
+          "target": "LOCALLY_TESTED"
+        },
+        {
+          "kind": "owner-checklist",
+          "item": "Windows installed run and OS-disabled login item",
+          "target": "LIVE_VERIFIED"
+        }
+      ]
+    },
+    {
+      "id": "CAP-39",
+      "title": "Performance, accessibility and quality budgets",
+      "rows": [
+        {
+          "kind": "sandbox",
+          "scenario": "soak",
+          "steps": ["SOAK-ACCEPT-1"],
+          "target": "LOCALLY_TESTED"
+        },
+        {
+          "kind": "sandbox",
+          "scenario": "stress",
+          "steps": ["s7-long-meeting-memory"],
+          "target": "LOCALLY_TESTED"
+        },
+        {
+          "kind": "owner-checklist",
+          "item": "Reference-hardware budgets: Intel, Windows, 8 GB",
+          "target": "MEASURED"
+        }
+      ]
+    },
+    {
+      "id": "CAP-40",
+      "title": "Release qualification, disposition and audit",
+      "rows": [
+        {
+          "kind": "ci-only",
+          "evidence": "binding.test and e2e-report.test: exact-artifact binding and report join",
+          "target": "LOCALLY_TESTED"
+        }
+      ]
+    }
+  ],
+  "e2e": [
+    {
+      "id": "E2E-01",
+      "case": "H",
+      "caps": ["CAP-38", "CAP-12", "CAP-37"],
+      "rows": [
+        {
+          "kind": "owner-checklist",
+          "item": "Clean install, sign in, grant permissions on a fresh Mac",
+          "target": "LIVE_VERIFIED"
+        }
+      ]
+    },
+    {
+      "id": "E2E-01",
+      "case": "P",
+      "caps": ["CAP-38", "CAP-12", "CAP-37"],
+      "rows": [
+        {
+          "kind": "owner-checklist",
+          "item": "Deny mic and screen; revoke the licence; confirm named recovery",
+          "target": "LIVE_VERIFIED"
+        }
+      ]
+    },
+    {
+      "id": "E2E-01",
+      "case": "F",
+      "caps": ["CAP-38", "CAP-12", "CAP-37"],
+      "rows": [
+        {
+          "kind": "ci-only",
+          "evidence": "speech-pack download verify-then-rename tests",
+          "target": "LOCALLY_TESTED"
+        }
+      ]
+    },
+    {
+      "id": "E2E-01",
+      "case": "C",
+      "caps": ["CAP-38", "CAP-12", "CAP-37"],
+      "rows": [
+        {
+          "kind": "ci-only",
+          "evidence": "cancel setup stops downloads and helpers",
+          "target": "LOCALLY_TESTED"
+        }
+      ]
+    },
+    {
+      "id": "E2E-01",
+      "case": "R",
+      "caps": ["CAP-38", "CAP-12", "CAP-37"],
+      "rows": [
+        {
+          "kind": "sandbox",
+          "scenario": "upgrade",
+          "steps": ["candidate-meeting-preserved", "rollback-data-integrity", "reupgrade-meetings-present"],
+          "target": "LOCALLY_TESTED"
+        }
+      ]
+    },
+    {
+      "id": "E2E-01",
+      "case": "O",
+      "caps": ["CAP-38", "CAP-12", "CAP-37"],
+      "rows": [
+        {
+          "kind": "owner-checklist",
+          "item": "Older OS cannot run the optional helper",
+          "target": "LIVE_VERIFIED"
+        }
+      ]
+    },
+    {
+      "id": "E2E-02",
+      "case": "H",
+      "caps": ["CAP-03", "CAP-05", "CAP-06", "CAP-07", "CAP-08", "CAP-36"],
+      "rows": [
+        {
+          "kind": "sandbox",
+          "scenario": "meeting",
+          "steps": ["transcript-observed", "stop-and-save", "review-opens-meeting"],
+          "target": "LOCALLY_TESTED"
+        }
+      ]
+    },
+    {
+      "id": "E2E-02",
+      "case": "P",
+      "caps": ["CAP-03", "CAP-05", "CAP-06", "CAP-07", "CAP-08", "CAP-36"],
+      "rows": [
+        {
+          "kind": "owner-checklist",
+          "item": "Remove destination permission mid-capture",
+          "target": "LIVE_VERIFIED"
+        }
+      ]
+    },
+    {
+      "id": "E2E-02",
+      "case": "F",
+      "caps": ["CAP-03", "CAP-05", "CAP-06", "CAP-07", "CAP-08", "CAP-36"],
+      "rows": [
+        {
+          "kind": "ci-only",
+          "evidence": "relay-session reconnect tests",
+          "target": "LOCALLY_TESTED"
+        }
+      ]
+    },
+    {
+      "id": "E2E-02",
+      "case": "C",
+      "caps": ["CAP-03", "CAP-05", "CAP-06", "CAP-07", "CAP-08", "CAP-36"],
+      "rows": [
+        {
+          "kind": "sandbox",
+          "scenario": "stress",
+          "steps": ["s1-start-stop-spam"],
+          "target": "LOCALLY_TESTED"
+        }
+      ]
+    },
+    {
+      "id": "E2E-02",
+      "case": "R",
+      "caps": ["CAP-03", "CAP-05", "CAP-06", "CAP-07", "CAP-08", "CAP-36"],
+      "rows": [
+        {
+          "kind": "sandbox",
+          "scenario": "stress",
+          "steps": ["s3-kill9-during-save"],
+          "target": "LOCALLY_TESTED"
+        }
+      ]
+    },
+    {
+      "id": "E2E-02",
+      "case": "T",
+      "caps": ["CAP-03", "CAP-05", "CAP-06", "CAP-07", "CAP-08", "CAP-36"],
+      "rows": [
+        {
+          "kind": "ci-only",
+          "evidence": "revision-bound translation cache tests (G73)",
+          "target": "LOCALLY_TESTED"
+        }
+      ]
+    },
+    {
+      "id": "E2E-02",
+      "case": "J",
+      "caps": ["CAP-03", "CAP-05", "CAP-06", "CAP-07", "CAP-08", "CAP-36"],
+      "rows": [
+        {
+          "kind": "blocked-external",
+          "decision": "G94",
+          "unblock": "Tony provides a Teams tenant and app registration, or G94 records an explicit exclusion from 2.12"
+        }
+      ]
+    },
+    {
+      "id": "E2E-03",
+      "case": "H",
+      "caps": ["CAP-09", "CAP-32", "CAP-25"],
+      "rows": [
+        {
+          "kind": "sandbox",
+          "scenario": "quiet-mode",
+          "steps": ["qm-unsolicited-held", "qm-direct-request-answered"],
+          "target": "DESIGNED"
+        },
+        {
+          "kind": "ci-only",
+          "evidence": "JEV scenario replay tests",
+          "target": "LOCALLY_TESTED"
+        }
+      ]
+    },
+    {
+      "id": "E2E-03",
+      "case": "P",
+      "caps": ["CAP-09", "CAP-32", "CAP-25"],
+      "rows": [
+        {
+          "kind": "ci-only",
+          "evidence": "screen revocation drops queued results",
+          "target": "LOCALLY_TESTED"
+        }
+      ]
+    },
+    {
+      "id": "E2E-03",
+      "case": "F",
+      "caps": ["CAP-09", "CAP-32", "CAP-25"],
+      "rows": [
+        {
+          "kind": "ci-only",
+          "evidence": "missing evidence and late generation tests",
+          "target": "LOCALLY_TESTED"
+        }
+      ]
+    },
+    {
+      "id": "E2E-03",
+      "case": "C",
+      "caps": ["CAP-09", "CAP-32", "CAP-25"],
+      "rows": [
+        {
+          "kind": "ci-only",
+          "evidence": "pause or dismiss during generation stops presentation",
+          "target": "LOCALLY_TESTED"
+        }
+      ]
+    },
+    {
+      "id": "E2E-03",
+      "case": "R",
+      "caps": ["CAP-09", "CAP-32", "CAP-25"],
+      "rows": [
+        {
+          "kind": "ci-only",
+          "evidence": "old automatic interventions do not fire on startup",
+          "target": "LOCALLY_TESTED"
+        }
+      ]
+    },
+    {
+      "id": "E2E-03",
+      "case": "teach",
+      "caps": ["CAP-09", "CAP-32", "CAP-25"],
+      "rows": [
+        {
+          "kind": "owner-checklist",
+          "item": "Guided walkthrough with DPI change and screen sharing",
+          "target": "LIVE_VERIFIED"
+        }
+      ]
+    },
+    {
+      "id": "E2E-04",
+      "case": "H",
+      "caps": ["CAP-20", "CAP-21"],
+      "rows": [
+        {
+          "kind": "pending-disposition",
+          "ticket": "G92"
+        }
+      ]
+    },
+    {
+      "id": "E2E-04",
+      "case": "P",
+      "caps": ["CAP-20", "CAP-21"],
+      "rows": [
+        {
+          "kind": "pending-disposition",
+          "ticket": "G92"
+        }
+      ]
+    },
+    {
+      "id": "E2E-04",
+      "case": "F",
+      "caps": ["CAP-20", "CAP-21"],
+      "rows": [
+        {
+          "kind": "pending-disposition",
+          "ticket": "G92"
+        }
+      ]
+    },
+    {
+      "id": "E2E-04",
+      "case": "C",
+      "caps": ["CAP-20", "CAP-21"],
+      "rows": [
+        {
+          "kind": "pending-disposition",
+          "ticket": "G92"
+        }
+      ]
+    },
+    {
+      "id": "E2E-04",
+      "case": "R",
+      "caps": ["CAP-20", "CAP-21"],
+      "rows": [
+        {
+          "kind": "pending-disposition",
+          "ticket": "G92"
+        }
+      ]
+    },
+    {
+      "id": "E2E-05",
+      "case": "H",
+      "caps": ["CAP-16", "CAP-22", "CAP-24"],
+      "rows": [
+        {
+          "kind": "sandbox",
+          "scenario": "voice-actions",
+          "steps": ["va-read-only-immediate", "va-confirm-return-uncertain"],
+          "target": "LOCALLY_TESTED"
+        }
+      ]
+    },
+    {
+      "id": "E2E-05",
+      "case": "P",
+      "caps": ["CAP-16", "CAP-22", "CAP-24"],
+      "rows": [
+        {
+          "kind": "ci-only",
+          "evidence": "unsupported-route and account scope tests",
+          "target": "LOCALLY_TESTED"
+        }
+      ]
+    },
+    {
+      "id": "E2E-05",
+      "case": "F",
+      "caps": ["CAP-16", "CAP-22", "CAP-24"],
+      "rows": [
+        {
+          "kind": "ci-only",
+          "evidence": "uncertain-effect reconcile tests",
+          "target": "LOCALLY_TESTED"
+        }
+      ]
+    },
+    {
+      "id": "E2E-05",
+      "case": "C",
+      "caps": ["CAP-16", "CAP-22", "CAP-24"],
+      "rows": [
+        {
+          "kind": "sandbox",
+          "scenario": "voice-actions",
+          "steps": ["va-confirm-escape", "va-renderer-reset-revokes"],
+          "target": "LOCALLY_TESTED"
+        }
+      ]
+    },
+    {
+      "id": "E2E-05",
+      "case": "R",
+      "caps": ["CAP-16", "CAP-22", "CAP-24"],
+      "rows": [
+        {
+          "kind": "sandbox",
+          "scenario": "voice-actions",
+          "steps": ["va-uncertain-reader-details", "va-confirm-return-uncertain"],
+          "target": "LOCALLY_TESTED"
+        }
+      ]
+    },
+    {
+      "id": "E2E-06",
+      "case": "H",
+      "caps": ["CAP-26", "CAP-28"],
+      "rows": [
+        {
+          "kind": "sandbox",
+          "scenario": "memory-assistants",
+          "steps": ["ma-assistant-propose-card", "ma-assistant-idempotent"],
+          "target": "DESIGNED"
+        }
+      ]
+    },
+    {
+      "id": "E2E-06",
+      "case": "P",
+      "caps": ["CAP-26", "CAP-28"],
+      "rows": [
+        {
+          "kind": "ci-only",
+          "evidence": "owner and tenant scope tests (G48)",
+          "target": "LOCALLY_TESTED"
+        }
+      ]
+    },
+    {
+      "id": "E2E-06",
+      "case": "F",
+      "caps": ["CAP-26", "CAP-28"],
+      "rows": [
+        {
+          "kind": "ci-only",
+          "evidence": "partial output labelling and idempotent retry tests",
+          "target": "LOCALLY_TESTED"
+        }
+      ]
+    },
+    {
+      "id": "E2E-06",
+      "case": "C",
+      "caps": ["CAP-26", "CAP-28"],
+      "rows": [
+        {
+          "kind": "ci-only",
+          "evidence": "late work cannot recreate a deleted object",
+          "target": "LOCALLY_TESTED"
+        }
+      ]
+    },
+    {
+      "id": "E2E-06",
+      "case": "R",
+      "caps": ["CAP-26", "CAP-28"],
+      "rows": [
+        {
+          "kind": "sandbox",
+          "scenario": "memory-assistants",
+          "steps": ["ma-persisted-after-relaunch"],
+          "target": "DESIGNED"
+        }
+      ]
+    },
+    {
+      "id": "E2E-07",
+      "case": "H",
+      "caps": ["CAP-29", "CAP-35"],
+      "rows": [
+        {
+          "kind": "sandbox",
+          "scenario": "memory-assistants",
+          "steps": ["ma-memory-correct"],
+          "target": "DESIGNED"
+        }
+      ]
+    },
+    {
+      "id": "E2E-07",
+      "case": "P",
+      "caps": ["CAP-29", "CAP-35"],
+      "rows": [
+        {
+          "kind": "sandbox",
+          "scenario": "memory-assistants",
+          "steps": ["ma-memory-delete-tombstone"],
+          "target": "DESIGNED"
+        }
+      ]
+    },
+    {
+      "id": "E2E-07",
+      "case": "F",
+      "caps": ["CAP-29", "CAP-35"],
+      "rows": [
+        {
+          "kind": "blocked-external",
+          "decision": "D-17",
+          "unblock": "Tony deploys the server memory service (Hindsight); GATE-12/13 server rows then run"
+        }
+      ]
+    },
+    {
+      "id": "E2E-07",
+      "case": "C",
+      "caps": ["CAP-29", "CAP-35"],
+      "rows": [
+        {
+          "kind": "ci-only",
+          "evidence": "late retrieval checked against deletion",
+          "target": "LOCALLY_TESTED"
+        }
+      ]
+    },
+    {
+      "id": "E2E-07",
+      "case": "R",
+      "caps": ["CAP-29", "CAP-35"],
+      "rows": [
+        {
+          "kind": "sandbox",
+          "scenario": "memory-assistants",
+          "steps": ["ma-persisted-after-relaunch"],
+          "target": "DESIGNED"
+        }
+      ]
+    },
+    {
+      "id": "E2E-08",
+      "case": "H",
+      "caps": ["CAP-31", "CAP-32"],
+      "rows": [
+        {
+          "kind": "pending-disposition",
+          "ticket": "G92"
+        }
+      ]
+    },
+    {
+      "id": "E2E-08",
+      "case": "P",
+      "caps": ["CAP-31", "CAP-32"],
+      "rows": [
+        {
+          "kind": "pending-disposition",
+          "ticket": "G92"
+        }
+      ]
+    },
+    {
+      "id": "E2E-08",
+      "case": "F",
+      "caps": ["CAP-31", "CAP-32"],
+      "rows": [
+        {
+          "kind": "pending-disposition",
+          "ticket": "G92"
+        }
+      ]
+    },
+    {
+      "id": "E2E-08",
+      "case": "C",
+      "caps": ["CAP-31", "CAP-32"],
+      "rows": [
+        {
+          "kind": "pending-disposition",
+          "ticket": "G92"
+        }
+      ]
+    },
+    {
+      "id": "E2E-08",
+      "case": "R",
+      "caps": ["CAP-31", "CAP-32"],
+      "rows": [
+        {
+          "kind": "pending-disposition",
+          "ticket": "G92"
+        }
+      ]
+    },
+    {
+      "id": "E2E-09",
+      "case": "H",
+      "caps": ["CAP-37"],
+      "rows": [
+        {
+          "kind": "ci-only",
+          "evidence": "component inventory and download tests (G11, G87)",
+          "target": "LOCALLY_TESTED"
+        }
+      ]
+    },
+    {
+      "id": "E2E-09",
+      "case": "P",
+      "caps": ["CAP-37"],
+      "rows": [
+        {
+          "kind": "ci-only",
+          "evidence": "component inventory and download tests (G11, G87)",
+          "target": "LOCALLY_TESTED"
+        }
+      ]
+    },
+    {
+      "id": "E2E-09",
+      "case": "F",
+      "caps": ["CAP-37"],
+      "rows": [
+        {
+          "kind": "ci-only",
+          "evidence": "component inventory and download tests (G11, G87)",
+          "target": "LOCALLY_TESTED"
+        }
+      ]
+    },
+    {
+      "id": "E2E-09",
+      "case": "C",
+      "caps": ["CAP-37"],
+      "rows": [
+        {
+          "kind": "ci-only",
+          "evidence": "component inventory and download tests (G11, G87)",
+          "target": "LOCALLY_TESTED"
+        }
+      ]
+    },
+    {
+      "id": "E2E-09",
+      "case": "R",
+      "caps": ["CAP-37"],
+      "rows": [
+        {
+          "kind": "ci-only",
+          "evidence": "component inventory and download tests (G11, G87)",
+          "target": "LOCALLY_TESTED"
+        }
+      ]
+    },
+    {
+      "id": "E2E-10",
+      "case": "H",
+      "caps": ["CAP-34"],
+      "rows": [
+        {
+          "kind": "blocked-external",
+          "decision": "D-30",
+          "unblock": "Tony runs operator design section 6 steps 1-6; then the operator staging smoke runs this case"
+        }
+      ]
+    },
+    {
+      "id": "E2E-10",
+      "case": "P",
+      "caps": ["CAP-34"],
+      "rows": [
+        {
+          "kind": "blocked-external",
+          "decision": "D-30",
+          "unblock": "Tony runs operator design section 6 steps 1-6; then the operator staging smoke runs this case"
+        }
+      ]
+    },
+    {
+      "id": "E2E-10",
+      "case": "F",
+      "caps": ["CAP-34"],
+      "rows": [
+        {
+          "kind": "blocked-external",
+          "decision": "D-30",
+          "unblock": "Tony runs operator design section 6 steps 1-6; then the operator staging smoke runs this case"
+        }
+      ]
+    },
+    {
+      "id": "E2E-10",
+      "case": "C",
+      "caps": ["CAP-34"],
+      "rows": [
+        {
+          "kind": "blocked-external",
+          "decision": "D-30",
+          "unblock": "Tony runs operator design section 6 steps 1-6; then the operator staging smoke runs this case"
+        }
+      ]
+    },
+    {
+      "id": "E2E-10",
+      "case": "R",
+      "caps": ["CAP-34"],
+      "rows": [
+        {
+          "kind": "blocked-external",
+          "decision": "D-30",
+          "unblock": "Tony runs operator design section 6 steps 1-6; then the operator staging smoke runs this case"
+        }
+      ]
+    }
+  ]
+}

@@ -8,7 +8,8 @@ import { runTool } from './exec.mjs'
 import { GuardError, QA_BUNDLE_ID } from './guard.mjs'
 import { resolveInstallConfig, singleAppIn } from './install.mjs'
 import { CliError, parseWavInfo } from './lib.mjs'
-import { dryRunPlan, resolveConfig } from './run-acceptance.mjs'
+import { dryRunPlan, resolveConfig, SCENARIOS } from './run-acceptance.mjs'
+import { SCENARIO_STEPS } from './scenario-registry.mjs'
 import { assertSyntheticCaptureActive } from './scenario.mjs'
 import { SETTINGS_HIG_STEPS } from './settings-hig.mjs'
 import { stressSteps } from './stress-lib.mjs'
@@ -68,6 +69,38 @@ describe('run-acceptance configuration', () => {
         'settings-last-pane-restored'
       ])
     )
+  })
+
+  it('--scenario quiet-mode and memory-assistants dry-run lists their steps', () => {
+    for (const scenario of ['quiet-mode', 'memory-assistants']) {
+      const config = resolveConfig(['--run-id', 'r1', '--scenario', scenario, '--dry-run'], isolatedEnv())
+      const result = dryRunPlan(config, isolatedEnv(), { bundleId: QA_BUNDLE_ID, platform: 'darwin' })
+      expect(result.ok).toBe(true)
+      expect(result.plan.steps).toEqual([...SCENARIO_STEPS[scenario]])
+    }
+    expect(SCENARIO_STEPS['quiet-mode']).toContain('qm-direct-request-answered')
+    expect(SCENARIO_STEPS['memory-assistants']).toContain('ma-memory-delete-tombstone')
+    // Neither new scenario listens to the microphone for its own sake: memory-assistants defaults to the tone input.
+    expect(resolveConfig(['--scenario', 'memory-assistants'], isolatedEnv()).values.audio).toBe('tone')
+    expect(resolveConfig(['--scenario', 'quiet-mode'], isolatedEnv()).values.audio).toBe('speech')
+  })
+
+  it('dry-run plan steps come from SCENARIO_STEPS for every scenario that needs no zip', () => {
+    for (const scenario of ['meeting', 'settings-hig', 'voice-actions', 'quiet-mode', 'memory-assistants']) {
+      const config = resolveConfig(['--run-id', 'r1', '--scenario', scenario, '--dry-run'], isolatedEnv())
+      const result = dryRunPlan(config, isolatedEnv(), { bundleId: QA_BUNDLE_ID, platform: 'darwin' })
+      expect(result.plan.steps).toEqual([...SCENARIO_STEPS[scenario]])
+    }
+    expect(SCENARIOS).toEqual(Object.keys(SCENARIO_STEPS))
+  })
+
+  it('--provenance must be a readable file', () => {
+    expect(() => resolveConfig(['--provenance', join(base, 'missing.json')], isolatedEnv())).toThrow(
+      /--provenance: no such file/
+    )
+    const file = join(base, 'provenance.json')
+    writeFileSync(file, '{}')
+    expect(resolveConfig(['--provenance', file], isolatedEnv()).values.provenance).toBe(file)
   })
 
   it('rejects bad arguments', () => {
