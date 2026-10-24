@@ -95,9 +95,9 @@ describe('effectiveOperatorEntitlements (grace window)', () => {
     expect(effectiveOperatorEntitlements(null, now)).toEqual(askOnlyOperatorEntitlements())
   })
   it('returns ask-only when the snapshot has never had a successful heartbeat (at <= 0)', () => {
-    expect(effectiveOperatorEntitlements({ tier: 'metis', entitlements: emptyOperatorEntitlements(), at: 0 }, now)).toEqual(
-      askOnlyOperatorEntitlements()
-    )
+    expect(
+      effectiveOperatorEntitlements({ tier: 'metis', entitlements: emptyOperatorEntitlements(), at: 0 }, now)
+    ).toEqual(askOnlyOperatorEntitlements())
   })
   it('honours the last known entitlements inside the grace window', () => {
     const entitlements = { ...emptyOperatorEntitlements(), ask: true, listen: true }
@@ -167,8 +167,22 @@ describe('parseOperatorIntegrationsResponse', () => {
       ok: true,
       version: 3,
       integrations: [
-        { id: 'i1', kind: 'hubspot', label: 'HubSpot', baseUrl: 'https://a.example', credential: 'sk', scopes: ['crm'] },
-        { id: 'i2', kind: 'custom-mcp', label: 'Internal MCP', baseUrl: 'https://b.example/mcp', credential: 'tok', scopes: [] }
+        {
+          id: 'i1',
+          kind: 'hubspot',
+          label: 'HubSpot',
+          baseUrl: 'https://a.example',
+          credential: 'sk',
+          scopes: ['crm']
+        },
+        {
+          id: 'i2',
+          kind: 'custom-mcp',
+          label: 'Internal MCP',
+          baseUrl: 'https://b.example/mcp',
+          credential: 'tok',
+          scopes: []
+        }
       ]
     })
     expect(parsed?.ok).toBe(true)
@@ -213,7 +227,9 @@ describe('parseOperatorIntegrationsResponse', () => {
     expect(parsed?.integrations[0].id).toBe('good')
   })
   it('fails closed on the not-entitled error shape', () => {
-    expect(parseOperatorIntegrationsResponse({ ok: false, error: 'seat not entitled', code: 'not-entitled' })).toBeNull()
+    expect(
+      parseOperatorIntegrationsResponse({ ok: false, error: 'seat not entitled', code: 'not-entitled' })
+    ).toBeNull()
   })
   it('fails closed on a non-object, missing version, or non-array integrations', () => {
     expect(parseOperatorIntegrationsResponse(null)).toBeNull()
@@ -260,7 +276,15 @@ describe('Worker array wire shape (G79)', () => {
       tier: 'metis',
       entitlements: ['ask'],
       meters: [
-        { id: 'managed_tokens', label: 'Managed AI tokens', unit: 'tokens', limit: 50, used: 5, resetAt: 9, window: 'day' },
+        {
+          id: 'managed_tokens',
+          label: 'Managed AI tokens',
+          unit: 'tokens',
+          limit: 50,
+          used: 5,
+          resetAt: 9,
+          window: 'day'
+        },
         { id: 'bad', label: 'x', unit: 'tokens', limit: -1, used: 0, resetAt: null, window: 'day' }
       ]
     })
