@@ -403,6 +403,8 @@ export interface OperatorStore {
   insertAsk(row: AskRow): Promise<boolean>
   updateAskRating(id: string, rating: string): Promise<void>
   listAsks(limit: number, since?: number): Promise<AskRow[]>
+  /** Input plus output tokens of one device's Portal-proxied asks (`portal-cf` / `portal-direct`) at or after `since`. */
+  sumSeatManagedTokensSince(deviceId: string, since: number): Promise<number | null>
   getAsk(id: string): Promise<AskRow | null>
   listSeats(): Promise<SeatRow[]>
   /** True only when this pulse id was newly inserted; Ask retries use it to avoid double-counting sessions. */
@@ -724,6 +726,15 @@ export function memoryStore(): OperatorStore {
       let rows = [...asks.values()]
       if (since != null) rows = rows.filter((a) => a.ts >= since)
       return rows.sort((a, b) => b.ts - a.ts).slice(0, limit)
+    },
+    async sumSeatManagedTokensSince(deviceId, since) {
+      let sum = 0
+      for (const a of asks.values()) {
+        if (a.device_id !== deviceId || a.ts < since) continue
+        if (a.path_tag !== 'portal-cf' && a.path_tag !== 'portal-direct') continue
+        sum += (a.input_tokens ?? 0) + (a.output_tokens ?? 0)
+      }
+      return sum
     },
     async getAsk(id) {
       return asks.get(id) ?? null

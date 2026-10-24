@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { Check, AlertCircle, CircleCheck, X } from 'lucide-react'
 import { IdentitySection } from '../../components/IdentitySection'
 import { InlineOrb } from '../../components/AgentStatus'
+import { describeOperatorPlan, type OperatorPlan } from '@shared/operator-plan'
 import { ctl } from '../../ui/ctl'
 import { activePillStyle, OPERATOR_ENTITLEMENT_LABELS, primaryBtnStyle } from './ProductConnections'
 
@@ -29,10 +30,13 @@ export function OperatorLicenseCard({ refreshSettings, showIdentity = false }: {
     error: null
   })
 
+  const [plan, setPlan] = useState<OperatorPlan | null>(null)
+
   const refresh = (): void => {
     void window.toto.operatorStatus().then(setStatus).catch(() => {
       setState({ phase: 'error', error: 'Could not read your licence status. Try again.' })
     })
+    void window.toto.getOperatorPlan().then(setPlan).catch(() => setPlan(null))
   }
   useEffect(() => {
     refresh()
@@ -59,11 +63,14 @@ export function OperatorLicenseCard({ refreshSettings, showIdentity = false }: {
   }
 
   const hasLicense = !!status?.licenseLast4
-  const waitingForOperator = hasLicense && !status?.tier
+  // Until a heartbeat succeeds this run the plan is "checking": never Free, never "not included" (G79).
+  const checking = !!plan && plan.state === 'checking'
+  const waitingForOperator = hasLicense && (checking || !status?.tier)
+  const copy = plan ? describeOperatorPlan(plan, Date.now()) : null
 
   return (
     <>
-    {showIdentity && <IdentitySection managedTier={status?.tier ?? null} />}
+    {showIdentity && <IdentitySection managedTier={checking ? (plan?.lastKnownTier ?? null) : (status?.tier ?? null)} />}
     <div className="mt-2 flex flex-col gap-2 rounded-[10px] border border-[var(--cl-border)] bg-white/[0.02] p-3">
       <span className="text-[13px] font-medium text-[color:var(--cl-foreground)]">Métis licence</span>
       <p className="text-[12px] text-[color:var(--cl-muted-foreground)]">
@@ -117,8 +124,12 @@ export function OperatorLicenseCard({ refreshSettings, showIdentity = false }: {
           </div>
           {waitingForOperator ? (
             <div className="flex items-center gap-1.5 text-[11px] text-[color:var(--cl-muted-foreground)]">
-              <InlineOrb kind="connecting" /> Waiting for Operator to confirm this seat…
+              <InlineOrb kind="connecting" /> {checking && copy ? `${copy.headline} ${copy.detail}` : 'Waiting for Operator to confirm this seat…'}
             </div>
+          ) : copy && !copy.showEntitlements ? (
+            <span className="text-[11px] text-[color:var(--cl-muted-foreground)]">
+              {copy.headline} {copy.detail}
+            </span>
           ) : (
             <>
               <span className={`w-fit ${activePillStyle}`}>
@@ -129,6 +140,11 @@ export function OperatorLicenseCard({ refreshSettings, showIdentity = false }: {
                   ? 'Licence active. Managed AI is ready.'
                   : 'Licence active. Your administrator needs to enable a managed AI provider, or you can connect your own provider in AI settings.'}
               </span>
+              {copy?.meterLines.map((line) => (
+                <span key={line} className="text-[11px] text-[color:var(--cl-muted-foreground)]">
+                  {line}
+                </span>
+              ))}
               <div className="grid grid-cols-2 gap-x-3 gap-y-1">
                 {Object.entries(OPERATOR_ENTITLEMENT_LABELS).map(([key, label]) => {
                   const on = status?.entitlements?.[key] === true

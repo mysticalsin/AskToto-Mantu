@@ -164,6 +164,19 @@ describe.each(BACKENDS)('OperatorStore contract: %s', (_name, make) => {
     expect(await store.getAsk('missing')).toBeNull()
   })
 
+  it('sumSeatManagedTokensSince scopes by device, window and path tag', async () => {
+    const row = (id: string, o: Partial<AskRow>): AskRow =>
+      ask(id, { input_tokens: 10, output_tokens: 5, path_tag: 'portal-cf', ts: 5000, ...o })
+    await store.insertAsk(row('m-1', {}))
+    await store.insertAsk(row('m-2', { path_tag: 'portal-direct', output_tokens: null }))
+    await store.insertAsk(row('m-cli', { path_tag: 'cli' }))
+    await store.insertAsk(row('m-local', { path_tag: 'seat-local' }))
+    await store.insertAsk(row('m-old', { ts: 1999 }))
+    await store.insertAsk(row('m-other', { device_id: 'dev-b' }))
+    expect(await store.sumSeatManagedTokensSince('dev-a', 2000)).toBe(25)
+    expect(await store.sumSeatManagedTokensSince('dev-c', 2000)).toBe(0)
+  })
+
   it('records audit rows newest first with an action filter', async () => {
     await store.audit('e-1', 1000, 'system', 'platform.heartbeat', null, 'first')
     await store.audit('e-2', 2000, 'admin@example.test', 'approve', null, 'second')

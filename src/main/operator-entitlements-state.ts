@@ -20,16 +20,20 @@ import {
   type OperatorEntitlements,
   type OperatorGateResult
 } from '@shared/operator-entitlements'
+import type { OperatorMeter } from '@shared/operator-meters'
+import { deriveOperatorPlan, type OperatorPlan } from '@shared/operator-plan'
 import { operatorManaged } from './operator-seat'
 import { getSettings, setSettings } from './store'
 
 let memorySnapshot: OperatorEntitlementSnapshot | null = null
 let memoryConnection = ''
+let memoryMeters: OperatorMeter[] = []
 
 /** Drop session grants when transport identity changes; persisted offline leases remain separate. */
 export function resetOperatorEntitlementsState(): void {
   memorySnapshot = null
   memoryConnection = ''
+  memoryMeters = []
 }
 
 function connectionIdentity(): string {
@@ -73,6 +77,7 @@ export function recordOperatorHeartbeatResult(ok: boolean, json: unknown, now: n
   if (!ok) return
   const parsed = parseOperatorHeartbeatEntitlements(json)
   memorySnapshot = { tier: parsed.tier, entitlements: parsed.entitlements, at: now }
+  memoryMeters = parsed.meters
   memoryConnection = connectionIdentity()
   try {
     setSettings({
@@ -84,6 +89,29 @@ export function recordOperatorHeartbeatResult(ok: boolean, json: unknown, now: n
   } catch {
     /* best-effort — the in-memory snapshot above already governs gating for the rest of this run */
   }
+}
+
+/** The snapshot from a successful heartbeat this run for the CURRENT connection, or null ("checking"). */
+function liveSnapshot(): OperatorEntitlementSnapshot | null {
+  return memorySnapshot && memoryConnection === connectionIdentity() ? memorySnapshot : null
+}
+
+/** Server-defined meters from the last successful heartbeat of this run; empty when none or on a denial. */
+export function operatorLiveMeters(): OperatorMeter[] {
+  return liveSnapshot() ? memoryMeters : []
+}
+
+/** What Settings may say about the plan right now (G79). Read-only; never opens or closes a gate. */
+export function operatorPlanSnapshot(now: number = Date.now(), fundedProviders: string[] = []): OperatorPlan {
+  const s = getSettings()
+  return deriveOperatorPlan({
+    managed: operatorManaged(s),
+    live: liveSnapshot(),
+    persisted: settingsToSnapshot(s),
+    fundedProviders,
+    meters: operatorLiveMeters(),
+    now
+  })
 }
 
 /** The one gate every gated action in main consults. Reads live settings each call (cheap, in-memory

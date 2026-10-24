@@ -676,7 +676,7 @@ import { enrollmentAfterHeartbeat, enrollmentTick } from './operator-enrollment'
 import { enrollmentOnSignedIn, operatorReportingSnapshot, startOperatorEnrollment } from './operator-enrollment-runtime'
 import { operatorManaged } from './operator-seat'
 import { OPERATOR_REPORTING_SETTINGS_DEFAULTS } from '@shared/operator-reporting-settings'
-import { operatorGate } from './operator-entitlements-state'
+import { operatorGate, operatorPlanSnapshot } from './operator-entitlements-state'
 import { operatorIntegrationsSnapshot, registeredOperatorMcpServers } from './operator-integrations'
 import { initLogging, mainLog, auditLog, auditLogPath } from './logger'
 import { CommandConfirmation } from './command-confirmation'
@@ -725,7 +725,7 @@ import { registerRecoveredDraftCountIpc } from './ipc/recovered-draft-count-ipc'
 import { registerDiscardSavedTranscriptIpc } from './ipc/discard-saved-transcript-ipc'
 import { registerMeetingMicIpc } from './ipc/meeting-mic-ipc'
 import { registerBrainIpc } from './ipc/brain-ipc'
-import { registerOperatorReportingIpc } from './ipc/operator-reporting-ipc'
+import { OPERATOR_STATUS_SIGNED_OUT, registerOperatorReportingIpc } from './ipc/operator-reporting-ipc'
 import { registerRecallIpc } from './ipc/recall-ipc'
 import { createExportService } from './features/export/export-service'
 import { registerExportIpc } from './ipc/export-ipc'
@@ -6038,22 +6038,18 @@ function registerIpc(): void {
     assertMainWindow(e)
     return activateOperatorLicenseFromIpc(payload)
   })
-  registerOperatorReportingIpc({ ipcMain, assertMainWindow, snapshot: operatorReportingSnapshot })
+  registerOperatorReportingIpc({
+    ipcMain,
+    assertMainWindow,
+    snapshot: operatorReportingSnapshot,
+    requireAuth,
+    planSnapshot: () => operatorPlanSnapshot(Date.now(), operatorFundedProviders())
+  })
   // Read-only Operator status snapshot for Settings (local settings + in-memory integrations state
   // only, never touches the network) — mirrors licenseStatus's own "local settings only" contract.
   ipcMain.handle(IPC.operatorStatus, (e) => {
     assertMainWindow(e)
-    if (!requireAuth()) {
-      return {
-        configured: false,
-        tier: null,
-        entitlements: null,
-        licenseLast4: '',
-        licenseExpiresAt: null,
-        integrations: [],
-        mcpServers: []
-      }
-    }
+    if (!requireAuth()) return OPERATOR_STATUS_SIGNED_OUT
     const s = getSettings()
     return {
       configured: operatorManaged(s),
