@@ -6,6 +6,18 @@ import { ACCOUNT_CHOICE_IPC } from '@shared/connector-account-choice'
 import { CONNECTOR_ACCOUNTS_IPC } from '@shared/connector-accounts'
 import { ASSISTANT_IPC } from '@shared/assistants'
 import { ONBOARDING_INTERVIEW_IPC } from '@shared/onboarding-interview'
+import { ROUTINE_IPC } from '@shared/routines'
+
+/** The routine request channels, in registration order (the two pushes are main to renderer, not handlers). */
+const ROUTINE_REQUEST_CHANNELS = [
+  ROUTINE_IPC.list,
+  ROUTINE_IPC.compile,
+  ROUTINE_IPC.consent,
+  ROUTINE_IPC.pause,
+  ROUTINE_IPC.resume,
+  ROUTINE_IPC.runNow,
+  ROUTINE_IPC.remove
+]
 import { DICTATION_MEMORY_IPC } from '@shared/dictation-memory'
 import { USER_MEMORY_IPC } from '@shared/user-memory'
 import { MEETING_RECORD_IPC } from '@shared/meeting-record'
@@ -95,6 +107,7 @@ describe('owner session wiring', () => {
       ARTIFACT_IPC.copy,
       ...Object.values(ASSISTANT_IPC),
       ...Object.values(ONBOARDING_INTERVIEW_IPC),
+      ...ROUTINE_REQUEST_CHANNELS,
       ...Object.values(USER_MEMORY_IPC),
       ...Object.values(MEETING_RECORD_IPC),
       ...Object.values(SUGGESTION_IPC)
@@ -148,6 +161,7 @@ describe('owner session wiring', () => {
             6 +
             Object.values(ASSISTANT_IPC).length +
             Object.values(ONBOARDING_INTERVIEW_IPC).length +
+            ROUTINE_REQUEST_CHANNELS.length +
             Object.values(USER_MEMORY_IPC).length +
             Object.values(MEETING_RECORD_IPC).length +
             Object.values(SUGGESTION_IPC).length
