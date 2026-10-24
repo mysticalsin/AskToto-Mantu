@@ -1191,7 +1191,10 @@ func resolveFocusedElement() -> AxResolution {
         }
         selection = axRange(element)
     }
-    let launch = app.launchDate.map { Int64($0.timeIntervalSince1970 * 1000) } ?? 0
+    // A missing launch date is no process identity: never 0, which would let two unknown processes match.
+    guard let launchDate = app.launchDate else { return .noFocus }
+    let launch = Int64(launchDate.timeIntervalSince1970 * 1000)
+    guard launch > 0 else { return .noFocus }
     let snapshot = AxSnapshot(
         element: element, pid: owner, bundleId: bundleId, processStartMs: launch, windowId: windowId,
         role: role, subrole: subrole, token: token, secure: secure, editable: editable, terminal: terminal,
@@ -1264,9 +1267,9 @@ func terminalSafe(_ text: String) -> String {
             out.append(scalar)
         }
     }
-    var result = String(out)
-    while let last = result.last, last == " " { result.removeLast() }
-    return result
+    // Trimmed on Unicode scalars: String.last is a Character, and U+0600 followed by a space is a single one.
+    while let last = out.last, last == " " { out.removeLast() }
+    return String(out)
 }
 
 struct AxInsertRequest: Decodable {
@@ -1362,7 +1365,7 @@ func restorePasteboard(_ pasteboard: NSPasteboard, _ saved: SavedPasteboard) {
 }
 
 func axSameTarget(_ snapshot: AxSnapshot, _ request: AxInsertRequest) -> Bool {
-    snapshot.pid == request.pid && snapshot.processStartMs == request.processStartMs
+    snapshot.pid == request.pid && snapshot.processStartMs > 0 && snapshot.processStartMs == request.processStartMs
         && snapshot.windowId == request.windowId && snapshot.token == request.token
 }
 
@@ -1377,7 +1380,7 @@ func axStillBound(_ snapshot: AxSnapshot, _ request: AxInsertRequest) -> Bool {
 func runAxInsert() -> Never {
     let input = FileHandle.standardInput.readDataToEndOfFile()
     guard let request = try? JSONDecoder().decode(AxInsertRequest.self, from: input),
-          request.pid > 0, request.selectionLocation >= 0, request.selectionLength >= 0, !request.text.isEmpty,
+          request.pid > 0, request.processStartMs > 0, request.selectionLocation >= 0, request.selectionLength >= 0, !request.text.isEmpty,
           request.text.utf16.count <= axMaxInsertUnits else {
         emitJson(axInsertResult("refused", reason: "invalid_request"), command: "ax-insert")
     }
@@ -1432,7 +1435,7 @@ func runAxInsert() -> Never {
     }
     // The front application and the field must still be the same one at the moment of the paste.
     switch resolveFocusedElement() {
-    case .found(let again) where axStillBound(again, request):
+    case .found(let again) where axStillBound(again, request) && again.terminal == terminal:
         break
     case .permission:
         emitJson(axInsertResult("refused", reason: "permission", terminal: terminal), command: "ax-insert")

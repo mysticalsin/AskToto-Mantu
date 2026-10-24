@@ -66,6 +66,23 @@ function fakeClient(over: { snapshots?: Array<AxFocusSnapshot | null>; insert?: 
 const ports = (client: AxHelperClient, audit?: (detail: MacInsertAudit) => void) =>
   createMacDictationPorts({ client, platform: 'darwin', helperPresent: () => true, now: () => NOW, audit })
 
+describe('targetFromSnapshot process identity (G23 review P2)', () => {
+  it('never binds a snapshot whose process start is not a positive instant', () => {
+    expect(targetFromSnapshot(snapshot({ processStartMs: 0 }), NOW)).toMatchObject({ kind: 'unavailable' })
+  })
+
+  it('never builds a helper request for a bound process start of 0', async () => {
+    const target = targetFromSnapshot(snapshot(), NOW)
+    if (target.kind !== 'target') throw new Error('expected a target')
+    const forged = { ...target.target, processInstanceId: 'p4242.0' }
+    const { client, requests } = fakeClient()
+    const base = request(target)
+    const result = await ports(client).insertion.insert({ ...base, args: { ...base.args, target: forged } })
+    expect(result).toMatchObject({ outcome: 'no_effect' })
+    expect(requests).toHaveLength(0)
+  })
+})
+
 describe('targetFromSnapshot (G23)', () => {
   it('binds process, window, element, value and selection without the text of the field', () => {
     const observation = targetFromSnapshot(snapshot(), NOW)
@@ -226,7 +243,7 @@ describe('createMacDictationPorts: insertion outcomes (G23)', () => {
     })
   })
 
-  it('a terminal that made the text inert is verified only for exactly the inert text it was expected to write', async () => {
+  it('a terminal that rewrote the text is never a verified receipt for the original draft (review P2)', async () => {
     const dictated = 'synthetic line one\nsynthetic line two\r\u001b[31m '
     const inert = 'synthetic line one synthetic line two [31m'
     expect(terminalSafeText(dictated)).toBe(inert)
@@ -235,8 +252,20 @@ describe('createMacDictationPorts: insertion outcomes (G23)', () => {
     })
     const audits: MacInsertAudit[] = []
     const result = await ports(client, (a) => audits.push(a)).insertion.insert(request(undefined, dictated))
-    expect(result).toMatchObject({ outcome: 'verified', evidenceId: 'ax:verified:paste:inert' })
+    expect(result).toEqual({ outcome: 'uncertain', evidenceId: 'ax:inert-not-verbatim' })
     expect(audits[0]).toMatchObject({ method: 'paste', terminal: true, sanitized: true })
+  })
+
+  it('a terminal sink that left the text unchanged verifies it with the hash of the text actually inserted', async () => {
+    const dictated = 'synthetic plain words'
+    expect(terminalSafeText(dictated)).toBe(dictated)
+    const { client } = fakeClient({
+      insert: inserted({ method: 'paste', terminal: true, sanitized: true, textHash: sha(dictated) })
+    })
+    const req = request(undefined, dictated)
+    const result = await ports(client).insertion.insert(req)
+    expect(result).toMatchObject({ outcome: 'verified', evidenceId: 'ax:verified:paste:inert' })
+    expect((result as { receipt: { textHash: string } }).receipt.textHash).toBe(sha(dictated))
   })
 
   it('a sanitized claim never verifies an unrelated helper hash, or any non-terminal sanitizing (review P2)', async () => {

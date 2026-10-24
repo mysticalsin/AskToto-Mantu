@@ -114,7 +114,9 @@ describe('ax helper gateway (G23)', () => {
       '{}',
       JSON.stringify({ ...snapshotJson, valueHash: 'xyz' }),
       JSON.stringify({ ...snapshotJson, text: 'the field text' }).replace('"status":"ok"', '"status":"weird"'),
-      JSON.stringify({ ...snapshotJson, token: 'has space' })
+      JSON.stringify({ ...snapshotJson, token: 'has space' }),
+      // A missing launch date must never become a process identity of 0 (review P2).
+      JSON.stringify({ ...snapshotJson, processStartMs: 0 })
     ]) {
       expect(parseAxFocusSnapshot(bad)).toBeNull()
     }
@@ -310,7 +312,25 @@ describe('metis-mac-helper ax-*: privacy and safety by construction (G23)', () =
     ]) {
       expect(safe).toContain(scalar)
     }
-    expect(safe).toMatch(/while let last = result\.last, last == " "/)
+    // Trailing blanks are trimmed on Unicode scalars, never on String.last (a Character: U+0600 + U+0020 is one).
+    expect(safe).toMatch(/while let last = out\.last, last == " " \{ out\.removeLast\(\) \}/)
+    expect(safe).not.toMatch(/result\.last|String\(out\)\n[\s\S]*\.last/)
+    expect(safe).toMatch(/return String\(out\)/)
+  })
+
+  it('P2: a missing launch date is no process identity: rejected at capture and at admission, never 0 == 0', () => {
+    const resolve = block('func resolveFocusedElement')
+    expect(resolve).not.toMatch(/\?\? 0/)
+    expect(resolve).toMatch(/launchDate/)
+    expect(resolve).toMatch(/launch > 0/)
+    expect(block('func axSameTarget')).toMatch(/snapshot\.processStartMs > 0/)
+    expect(block('func runAxInsert')).toMatch(/request\.processStartMs > 0/)
+  })
+
+  it('P2: the final paste recheck also fails closed when the terminal classification changed', () => {
+    expect(block('func runAxInsert')).toMatch(
+      /case \.found\(let again\) where axStillBound\(again, request\) && again\.terminal == terminal:/
+    )
   })
 
   it('classifies terminals by bundle id and by what the element says it is', () => {
@@ -369,6 +389,12 @@ describe('terminal sink parity: the TypeScript mirror and the Swift sink strip e
         expect(terminalSafeText(input), `U+${v.toString(16)} in ${JSON.stringify(input)}`).toBe(swiftSink(input))
       }
     }
+  })
+
+  it('trims a trailing blank after a prepended-concatenation mark (U+0600 + space is one Character in Swift)', () => {
+    expect(terminalSafeText('a\u0600 ')).toBe('a\u0600')
+    expect(swiftSink('a\u0600 ')).toBe('a\u0600')
+    expect(terminalSafeText('\u0600  \n')).toBe('\u0600')
   })
 
   it('never leaves a line break, a control character or a trailing blank in the output', () => {

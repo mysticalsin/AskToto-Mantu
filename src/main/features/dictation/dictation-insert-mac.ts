@@ -109,6 +109,7 @@ export function targetFromSnapshot(snapshot: AxFocusSnapshot | null, observedAtM
     pid === null ||
     bundleId === null ||
     processStartMs === null ||
+    processStartMs <= 0 ||
     windowId === null ||
     token === null ||
     valueHash === null ||
@@ -143,9 +144,11 @@ export function helperRequestFor(request: DictationInsertRequest): HelperRequest
   if (!revision || !instance || target.secure || !target.editable || text.length === 0) return null
   const pid = Number(instance[1])
   if (!Number.isSafeInteger(pid) || pid <= 0 || pid > 2 ** 31 - 1) return null
+  const processStartMs = Number(instance[2])
+  if (!Number.isSafeInteger(processStartMs) || processStartMs <= 0) return null
   return {
     pid,
-    processStartMs: Number(instance[2]),
+    processStartMs,
     windowId: target.windowId,
     token: target.elementId,
     valueHash: revision[1],
@@ -252,13 +255,17 @@ export function createMacDictationPorts(deps: MacDictationPortsDeps = {}): Dicta
       if (result.textHash !== expected || (result.sanitized && !result.terminal)) {
         return { outcome: 'uncertain', evidenceId: 'ax:text-hash-mismatch' }
       }
+      // The receipt names the hash of the text actually inserted (`expected`, which the helper's hash was just checked
+      // against). A terminal sink that rewrote the dictation did not insert the draft verbatim: that is never a verified
+      // receipt for the original draft, so it settles uncertain and the session journals nothing.
+      if (expected !== request.args.textHash) return { outcome: 'uncertain', evidenceId: 'ax:inert-not-verbatim' }
       return {
         outcome: 'verified',
         receipt: {
           operationId: request.args.operationId,
           argsHash: request.argsHash,
           targetFingerprint: request.args.targetFingerprint,
-          textHash: request.args.textHash
+          textHash: expected
         },
         evidenceId: `ax:verified:${outcome.method}${result.sanitized ? ':inert' : ''}`
       }

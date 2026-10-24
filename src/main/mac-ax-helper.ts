@@ -23,7 +23,7 @@ const SnapshotSchema = z.object({
   status: z.enum(['ok', 'permission', 'no_focus']),
   pid: nul(z.number().int().positive()),
   bundleId: nul(z.string().regex(OPAQUE)),
-  processStartMs: nul(z.number().int().nonnegative()),
+  processStartMs: nul(z.number().int().positive()),
   windowId: nul(z.string().regex(OPAQUE)),
   role: nul(z.string().max(80)),
   subrole: nul(z.string().max(80)),
