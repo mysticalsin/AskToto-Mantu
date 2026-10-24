@@ -37,8 +37,9 @@ describe('suggestion copy (G69)', () => {
     expect(failed).toEqual({ tone: 'failed', text: 'Failed: Timed out' })
     // A queued run is never shown as failed, even when the previous run failed.
     expect(
-      queueHealth(listed({ activeRun: run({ state: 'queued' }), lastRun: run({ state: 'failed', errorClass: 'connector' }) }))
-        .text
+      queueHealth(
+        listed({ activeRun: run({ state: 'queued' }), lastRun: run({ state: 'failed', errorClass: 'connector' }) })
+      ).text
     ).toBe('Queued')
     expect(queueHealth(listed({ lastRun: run({ state: 'succeeded' }) })).text).toBe(
       'No suggestions right now. Check now anytime.'
@@ -68,11 +69,6 @@ describe('suggestion copy (G69)', () => {
     )
     expect(acceptOutcomeCopy({ ok: false, reason: 'stale' })).toBe(STALE_COPY)
     expect(acceptOutcomeCopy({ ok: false, reason: 'sources_changed' })).toBe(SOURCES_CHANGED_COPY)
-    expect(DISMISS_REASONS.map((r) => DISMISS_REASON_COPY[r])).toEqual([
-      'Not useful',
-      'Wrong',
-      'Already done',
-      'Other'
-    ])
+    expect(DISMISS_REASONS.map((r) => DISMISS_REASON_COPY[r])).toEqual(['Not useful', 'Wrong', 'Already done', 'Other'])
   })
 })

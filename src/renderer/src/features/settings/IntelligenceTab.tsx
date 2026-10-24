@@ -23,6 +23,7 @@ import { Section } from '../../ui/Section'
 import { ToggleRow } from '../../ui/Toggle'
 import { ctl } from '../../ui/ctl'
 import { activePillStyle, ClickupCard, McpConnectionCard, PlaneCard } from './ProductConnections'
+import { AutomationSections } from './AutomationSections'
 
 // Last recent-meetings list fetched this session — reused on remount so revisiting this tab shows the
 // prior list instantly instead of flashing "Loading…" again, while the effect below still refreshes it.
@@ -205,6 +206,8 @@ export function IntelligenceTab({
       </Section>
 
       <TimeSavedSettings settings={settings} patch={patch} />
+
+      <AutomationSections settings={settings} patch={patch} />
 
       <Section
         title="Meetings & follow-up"

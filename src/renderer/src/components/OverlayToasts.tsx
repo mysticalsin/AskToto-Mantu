@@ -6,12 +6,18 @@ import { RecoveredDraftToast } from './RecoveredDraftToast'
 import { RecordingConsentReminder } from './RecordingConsentReminder'
 import { ShortcutFailureToast, useShortcutFailureToast } from './ShortcutFailureToast'
 import { UpdateReadyToast } from './UpdateReadyToast'
+import { SuggestionCarousel } from '../features/suggestions/SuggestionCarousel'
 import { VisibilityToast, type VisibilityToastState } from './VisibilityToast'
 import type { UpdateReadyState } from '../lib/update-ready'
 import type { QuietDeferredBatch, QuietPolicy } from '@shared/quiet-mode-settings'
 
 /** Contract-tested inventory of the overlay toasts that can arrive without a current owner request. */
-export const QUIET_TOAST_COMPONENTS = ['UpdateReadyToast', 'RecoveredDraftToast', 'ShortcutFailureToast'] as const
+export const QUIET_TOAST_COMPONENTS = [
+  'SuggestionCarousel',
+  'UpdateReadyToast',
+  'RecoveredDraftToast',
+  'ShortcutFailureToast'
+] as const
 export const DIRECT_TOAST_COMPONENTS = [
   'NewMeetingToast',
   'VisibilityToast',
@@ -105,6 +111,7 @@ export function OverlayToasts(props: OverlayToastsProps): JSX.Element {
   }, [deferredBatch, hasUnsolicited])
   const toasts = (
     <>
+      <SuggestionCarousel mode="overlay" quietPolicy={quietPolicy} suspended={props.minimized} />
       <UpdateReadyToast
         open={nextQuietToast === 'update'}
         version={updateReady.version}

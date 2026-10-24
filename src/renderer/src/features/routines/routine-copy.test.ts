@@ -123,6 +123,6 @@ describe('routine copy (G69)', () => {
       ...Object.values(MUTATION_REFUSAL_COPY),
       routineStatus(routineView({ pauseReasons: ['failure', 'archive', 'review', 'quota', 'user'] }), NOW).primary
     ]
-    for (const text of all) expect(text).not.toContain('—')
+    for (const text of all) expect(text).not.toContain(String.fromCharCode(0x2014))
   })
 })
