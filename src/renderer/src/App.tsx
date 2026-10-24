@@ -145,6 +145,8 @@ import { EMAIL_RECAP_PROMPT, COLD_CALL_COACHING_PROMPT, BOOK_MEETING_PROMPT } fr
 import { isScreenCapturePermissionError } from '@shared/screen-capture'
 import { detectNoDecisionEnding } from '@shared/wrapup'
 import { transcriptStateKey } from '@shared/hash'
+import type { InterventionSnapshot } from '@shared/intervention-contract'
+import { useInterventionGate, useQuestionIntervention, useShadowPregeneration } from './lib/use-intervention-wiring'
 import {
   FACT_CHECK_SCREEN_PROMPT,
   LOCAL_SCREEN_SUMMARY_PROMPT,
@@ -385,14 +387,22 @@ export function App(): JSX.Element {
   // Transcript watermark of the last speculative run. `key` is a content hash of the exact transcript
   // tail the shadow suggestion was generated from — freshness = the CONVERSATION STATE still matches
   // (precise), not merely "≤2 new lines" (which could adopt a stale answer or miss a fresh one).
-  const specWatermarkRef = useRef({ lineCount: 0, at: 0, key: 0, meetingStart: 0, runId: '' })
+  const specWatermarkRef = useRef<{
+    lineCount: number
+    at: number
+    key: number
+    meetingStart: number
+    runId: string
+    snapshot: InterventionSnapshot | null
+  }>({ lineCount: 0, at: 0, key: 0, meetingStart: 0, runId: '', snapshot: null })
   const retireSpeculativeMeeting = useCallback(() => {
     specWatermarkRef.current = {
       lineCount: 0,
       at: 0,
       key: 0,
       meetingStart: meetingStartRef.current,
-      runId: ''
+      runId: '',
+      snapshot: null
     }
     setShowSpec(false)
     speculative.clear()
@@ -525,7 +535,6 @@ export function App(): JSX.Element {
   const nudgeExpired = useAddKeyNudgeExpired(settings?.onboardingDone, onboardingDoneAt, patch)
 
   const mode: ConversationMode = settings?.mode ?? 'general'
-  const lastSuggestRef = useRef(0)
   const historyRef = useRef<ChatTurn[]>([]) // multi-turn memory for plain Ask follow-ups
   const copilotHistoryRef = useRef<ChatTurn[]>([]) // multi-turn memory for Copilot follow-ups during Listen
   // When the last Ask turn completed — the renderer half of main's fresh-question staleness check. The
@@ -534,6 +543,12 @@ export function App(): JSX.Element {
   const lastTurnAtRef = useRef(0)
   const pendingUserRef = useRef<{ id: string; q: string } | null>(null)
   const meetingStartRef = useRef(0)
+  const interventionGate = useInterventionGate({
+    lines: listen.lines,
+    listening: listen.listening,
+    meetingStartRef,
+    signedIn: !!auth.status?.signedIn
+  })
   const meetingPauseRef = useRef(freshMeetingPauseClock())
   // Exact live-recap ownership. The answer hook deliberately carries old visible text until a new run's
   // first token; only a run id paired with this meeting start may turn that state into saved notes.
@@ -1300,29 +1315,6 @@ export function App(): JSX.Element {
   useAppSoundCues(ask.answer, settings?.soundCues, settings?.uiSounds, cancelledRef)
   useQuietRelease(listen.listening, settings, suggest)
 
-  // auto-answer when the other person asks a question (debounce = suggestEverySec)
-  onQuestionRef.current = (_line: TranscriptLine): void => {
-    if (!(settings?.autoSuggest ?? true)) return
-    // no provider → don't auto-fire a request that would just error (a local-only setup counts too,
-    // including the default-on fallback which serves the suggest this fires)
-    if (!settings?.providerReady && !settings?.localSuggestReady && !settings?.localFallbackReady) return
-    if (suggest.answer?.streaming) return
-    const now = Date.now()
-    const everyMs = (settings?.suggestEverySec ?? 8) * 1000
-    if (now - lastSuggestRef.current < everyMs) return
-    lastSuggestRef.current = now
-    // Don't yank the user out of a panel they're actively using (Settings / Review / History / Agenda);
-    // the proactive read still runs and is waiting on the copilot surface when they come back.
-    if (view === 'answer' || view === 'copilot') {
-      setView('copilot')
-      setCollapsed(false)
-    }
-    // Prefer a finished shadow suggestion (zero LLM wait) — same adopt rule as the manual "What to say
-    // next" button. Only hit the network when nothing speculative is ready for this transcript state.
-    if (tryAdoptSpeculative()) return
-    suggest.run({ mode: 'suggest', outputIntent: 'ambient', context: fieldContext('conversation') })
-  }
-
   // No-Decision Honk (innovation #5): once per meeting, when the conversation sounds like it's wrapping
   // with nothing decided and nothing owned, push ONE "force the ask" nudge through the existing copilot
   // suggestion surface. Latched per session; biased to silence (see shared/wrapup.ts). Same gates as
@@ -1790,7 +1782,7 @@ export function App(): JSX.Element {
   // streaming/errored, and was generated from the SAME conversation state we're in now (content-hash
   // match, not a line-count guess). Returns true when it painted the spec. Single source of truth for
   // every "what to say next" entry point so the adopt rule can't drift between them.
-  const tryAdoptSpeculative = useCallback((): boolean => {
+  const readySpeculative = useCallback((): { snapshot: InterventionSnapshot } | null => {
     const spec = speculative.answer
     const watermark = specWatermarkRef.current
     if (
@@ -1798,15 +1790,41 @@ export function App(): JSX.Element {
       !spec?.text ||
       spec.streaming ||
       spec.error ||
+      !watermark.snapshot ||
       watermark.meetingStart !== meetingStartRef.current ||
       watermark.runId !== spec.id ||
       transcriptStateKey(listen.text()) !== watermark.key
     ) {
-      return false
+      return null
     }
+    return { snapshot: watermark.snapshot }
+  }, [speculative.answer, settings?.instantSuggestions, listen.text])
+  // A pre-generated card is also dropped when the session moved on since it was made (G70 stale drop).
+  const tryAdoptSpeculative = useCallback((): boolean => {
+    const ready = readySpeculative()
+    if (!ready || !interventionGate.isCurrent(ready.snapshot)) return false
     setShowSpec(true)
     return true
-  }, [speculative.answer, settings?.instantSuggestions, listen.text])
+  }, [readySpeculative, interventionGate])
+  // Auto-answer when the other person asks a question (G70: decided by the InterventionPolicy; the existing
+  // rules stay the default). Adopting a shadow card is unsolicited output, so it asks the quiet gate first.
+  onQuestionRef.current = useQuestionIntervention({
+    gate: interventionGate,
+    lines: listen.lines,
+    listening: listen.listening,
+    settings,
+    suggest,
+    // Don't yank the user out of a panel they're actively using (Settings / Review / History / Agenda);
+    // the proactive read still runs and is waiting on the copilot surface when they come back.
+    focusCopilot: () => {
+      if (view === 'answer' || view === 'copilot') {
+        setView('copilot')
+        setCollapsed(false)
+      }
+    },
+    readySpeculative,
+    showSpeculative: () => setShowSpec(true)
+  })
 
   const answerNow = useCallback(() => {
     if (!requireProvider('suggest')) return
@@ -1820,42 +1838,20 @@ export function App(): JSX.Element {
   // 1) While a meeting is live, pre-generate a shadow "what to say next" whenever the OTHER side has
   //    spoken and the last speculative run is older than suggestEverySec — so the button / auto-suggest
   //    can paint instantly. Never fires while anything visible is streaming (visible work wins bandwidth).
-  useEffect(() => {
-    if (
-      !listen.listening ||
-      settings?.instantSuggestions === false ||
-      (!settings?.providerReady && !settings?.localSuggestReady)
-    )
-      return
-    const lines = listen.lines
-    if (!lines.length || lines[lines.length - 1].speaker !== 'them') return
-    const w = specWatermarkRef.current
-    const everyMs = (settings?.suggestEverySec ?? 8) * 1000
-    if (lines.length === w.lineCount || Date.now() - w.at < everyMs) return
-    if (ask.answer?.streaming || suggest.answer?.streaming || speculative.answer?.streaming) return
-    const transcript = listen.text()
-    const at = Date.now()
-    const runId = speculative.run({ mode: 'suggest', outputIntent: 'ambient', context: fieldContext('conversation') })
-    specWatermarkRef.current = {
-      lineCount: lines.length,
-      at,
-      key: transcriptStateKey(transcript),
-      meetingStart: meetingStartRef.current,
-      runId
+  useShadowPregeneration({
+    gate: interventionGate,
+    lines: listen.lines,
+    listening: listen.listening,
+    settings,
+    anyStreaming: !!(ask.answer?.streaming || suggest.answer?.streaming || speculative.answer?.streaming),
+    watermarkRef: specWatermarkRef,
+    runSpeculative: () =>
+      speculative.run({ mode: 'suggest', outputIntent: 'ambient', context: fieldContext('conversation') }),
+    commitWatermark: ({ lineCount, at, runId, snapshot }) => {
+      const key = transcriptStateKey(listen.text())
+      specWatermarkRef.current = { lineCount, at, key, meetingStart: meetingStartRef.current, runId, snapshot }
     }
-  }, [
-    listen.lines,
-    listen.listening,
-    listen.text,
-    settings?.instantSuggestions,
-    settings?.providerReady,
-    settings?.localSuggestReady,
-    settings?.suggestEverySec,
-    ask.answer?.streaming,
-    suggest.answer?.streaming,
-    speculative.answer?.streaming,
-    speculative.run
-  ])
+  })
   // 1b) Métis Local pre-warm (PLAN.md §4.4): while a meeting is live and local suggest is ready, send a
   //     debounced (~5s) transcript tail over local:prewarm so the sidecar's per-slot KV cache stays hot —
   //     independent of the shadow-suggestion cadence above (fires on ANY new line, not just after "them"
