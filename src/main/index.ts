@@ -9115,18 +9115,13 @@ protocol.registerSchemesAsPrivileged([
   }
 ])
 
-/** G37: registers `metis://` and forwards second-instance arguments; called only by the instance that won the lock. */
-function installHandoffRuntime(): void {
-  const handoff = installHandoff({ app, commandControl, getWindow: () => win, audit: auditLog })
-  app.on('second-instance', (_event, commandLine) => handoff.fromArgv(commandLine))
-}
-
+const handoffDeps = { app, commandControl, getWindow: () => win, audit: auditLog }
 if (
   !claimStartup({ app, dialog, reveal: () => reveal('second-instance', { focus: true }), argv: handleSmokeReopenProbe })
 ) {
   // G85: unsupported OS or lost the single-instance lock; quit requested, nothing booted.
 } else {
-  installHandoffRuntime()
+  installHandoff(handoffDeps) // G37: only the lock winner registers metis:// and second-instance forwarding
   app
     .whenReady()
     .then(async () => {

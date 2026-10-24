@@ -28,11 +28,13 @@ function setup(
   } = {}
 ) {
   let openUrl: ((e: { preventDefault(): void }, u: string) => void) | undefined
+  let secondInstance: ((e: unknown, argv: string[]) => void) | undefined
   const app: HandoffApp = {
     isPackaged: over.packaged ?? true,
-    on: (_event, listener) => {
-      openUrl = listener
-    },
+    on: ((event: string, listener: never) => {
+      if (event === 'open-url') openUrl = listener
+      if (event === 'second-instance') secondInstance = listener
+    }) as HandoffApp['on'],
     setAsDefaultProtocolClient: vi.fn(() => true),
     whenReady: () => Promise.resolve(),
     getPath: () => '/nonexistent-synthetic-userdata'
@@ -51,7 +53,14 @@ function setup(
     now: () => NOW,
     sleep: async () => undefined
   })
-  return { app, runtime, proposeChecked, audit, fire: (u: string) => openUrl?.({ preventDefault: () => undefined }, u) }
+  return {
+    app,
+    runtime,
+    proposeChecked,
+    audit,
+    fire: (u: string) => openUrl?.({ preventDefault: () => undefined }, u),
+    secondInstance: (argv: string[]) => secondInstance?.({}, argv)
+  }
 }
 const settle = async (): Promise<void> => {
   for (let i = 0; i < 20; i++) await new Promise((r) => setImmediate(r))
@@ -66,7 +75,7 @@ describe('installHandoff', () => {
   it('open-url and second-instance argv both reach the confirm card with the live window as owner', async () => {
     const h = setup()
     h.fire(url(nonce('a')))
-    h.runtime.fromArgv(['/app', '--x', url(nonce('b'))])
+    h.secondInstance(['/app', '--x', url(nonce('b'))])
     await settle()
     expect(h.proposeChecked).toHaveBeenCalledTimes(2)
     expect(h.proposeChecked.mock.calls[0]).toEqual([
@@ -150,9 +159,9 @@ describe('installHandoff with the real CommandControl (G37 final install fence)'
 })
 
 describe('main wiring', () => {
-  it('index.ts installs the handoff before ready and forwards second-instance arguments', () => {
+  it('index.ts installs the handoff before ready (second-instance forwarding lives in installHandoff)', () => {
     const source = readModuleSource(__dirname, '../../index').text.replace(/\r\n/g, '\n')
-    expect(source).toMatch(/installHandoff\(\{ app, commandControl, getWindow: \(\) => win, audit: auditLog \}\)/)
-    expect(source).toMatch(/handoff\.fromArgv\(commandLine\)/)
+    expect(source).toMatch(/const handoffDeps = \{ app, commandControl, getWindow: \(\) => win, audit: auditLog \}/)
+    expect(source).toMatch(/installHandoff\(handoffDeps\)/)
   })
 })

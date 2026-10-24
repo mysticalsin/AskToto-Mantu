@@ -20,6 +20,7 @@ const OWNER_POLL_MS = 500
 export interface HandoffApp {
   isPackaged: boolean
   on(event: 'open-url', listener: (event: { preventDefault(): void }, url: string) => void): unknown
+  on(event: 'second-instance', listener: (event: unknown, argv: string[]) => void): unknown
   setAsDefaultProtocolClient(scheme: string): boolean
   whenReady(): Promise<unknown>
   getPath(name: 'userData'): string
@@ -106,5 +107,8 @@ export function installHandoff(deps: HandoffDeps): HandoffRuntime {
   if (deps.app.isPackaged) deps.app.setAsDefaultProtocolClient(HANDOFF_SCHEME)
   const fromArgv = (argv: readonly string[]): void => extractHandoffUrls(argv).forEach(submit)
   fromArgv(deps.argv ?? process.argv)
+  // Windows and Linux deliver a handoff to the running instance as a second-instance command line. Only the
+  // instance that won the single-instance lock calls installHandoff, so this never runs in a losing instance.
+  deps.app.on('second-instance', (_event, argv) => fromArgv(argv))
   return { fromArgv }
 }
