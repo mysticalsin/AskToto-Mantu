@@ -1,0 +1,243 @@
+{
+  "synthetic": true,
+  "description": "Synthetic fr turn-trigger fixtures (G72, D-24). Fictional companies only.",
+  "cases": [
+    {
+      "id": "fr-01",
+      "text": "Pourquoi le projet Acme a pris du retard",
+      "expect": {
+        "kind": "question",
+        "lang": "fr"
+      }
+    },
+    {
+      "id": "fr-02",
+      "text": "Est-ce que vous pouvez partager le plan",
+      "expect": {
+        "kind": "question",
+        "lang": "fr"
+      }
+    },
+    {
+      "id": "fr-03",
+      "text": "Combien coûte la licence annuelle",
+      "expect": {
+        "kind": "question",
+        "lang": "fr"
+      }
+    },
+    {
+      "id": "fr-04",
+      "text": "Qu’est-ce que vous proposez pour Globex",
+      "expect": {
+        "kind": "question",
+        "lang": "fr"
+      }
+    },
+    {
+      "id": "fr-05",
+      "text": "Et alors, comment on fait pour la migration",
+      "expect": {
+        "kind": "question",
+        "lang": "fr"
+      }
+    },
+    {
+      "id": "fr-06",
+      "text": "Quel est le délai de mise en place",
+      "expect": {
+        "kind": "question",
+        "lang": "fr"
+      }
+    },
+    {
+      "id": "fr-07",
+      "text": "Pouvez-vous nous envoyer la proposition",
+      "expect": {
+        "kind": "question",
+        "lang": "fr"
+      }
+    },
+    {
+      "id": "fr-08",
+      "text": "Le prix reste le même, n’est-ce pas",
+      "expect": {
+        "kind": "question",
+        "lang": "fr"
+      }
+    },
+    {
+      "id": "fr-09",
+      "text": "C’est trop cher pour notre équipe",
+      "expect": {
+        "kind": "objection",
+        "lang": "fr"
+      }
+    },
+    {
+      "id": "fr-10",
+      "text": "Ça coûte trop pour ce que c’est",
+      "expect": {
+        "kind": "objection",
+        "lang": "fr"
+      }
+    },
+    {
+      "id": "fr-11",
+      "text": "Nous sommes hors budget cette année",
+      "expect": {
+        "kind": "objection",
+        "lang": "fr"
+      }
+    },
+    {
+      "id": "fr-12",
+      "text": "Il n’y a pas de budget pour ça",
+      "expect": {
+        "kind": "objection",
+        "lang": "fr"
+      }
+    },
+    {
+      "id": "fr-13",
+      "text": "Ce n’est pas dans notre budget",
+      "expect": {
+        "kind": "objection",
+        "lang": "fr"
+      }
+    },
+    {
+      "id": "fr-14",
+      "text": "On a déjà un outil pour ça",
+      "expect": {
+        "kind": "objection",
+        "lang": "fr"
+      }
+    },
+    {
+      "id": "fr-15",
+      "text": "Nous avons déjà signé avec Globex",
+      "expect": {
+        "kind": "objection",
+        "lang": "fr"
+      }
+    },
+    {
+      "id": "fr-16",
+      "text": "On utilise déjà Globex chez nous",
+      "expect": {
+        "kind": "objection",
+        "lang": "fr"
+      }
+    },
+    {
+      "id": "fr-17",
+      "text": "On n’a pas besoin d’un outil de plus",
+      "expect": {
+        "kind": "objection",
+        "lang": "fr"
+      }
+    },
+    {
+      "id": "fr-18",
+      "text": "Nous n’avons pas besoin de ça maintenant",
+      "expect": {
+        "kind": "objection",
+        "lang": "fr"
+      }
+    },
+    {
+      "id": "fr-19",
+      "text": "Je ne suis pas sûr de la valeur",
+      "expect": {
+        "kind": "objection",
+        "lang": "fr"
+      }
+    },
+    {
+      "id": "fr-20",
+      "text": "Je ne suis pas convaincu par la démo",
+      "expect": {
+        "kind": "objection",
+        "lang": "fr"
+      }
+    },
+    {
+      "id": "fr-21",
+      "text": "Ce n’est pas une priorité cette année",
+      "expect": {
+        "kind": "objection",
+        "lang": "fr"
+      }
+    },
+    {
+      "id": "fr-22",
+      "text": "Ce projet n’est pas prioritaire pour nous",
+      "expect": {
+        "kind": "objection",
+        "lang": "fr"
+      }
+    },
+    {
+      "id": "fr-23",
+      "text": "Le problème c’est le déploiement",
+      "expect": {
+        "kind": "objection",
+        "lang": "fr"
+      }
+    },
+    {
+      "id": "fr-24",
+      "text": "Ça ne nous convient pas vraiment",
+      "expect": {
+        "kind": "objection",
+        "lang": "fr"
+      }
+    },
+    {
+      "id": "fr-25",
+      "text": "D’accord",
+      "expect": null
+    },
+    {
+      "id": "fr-26",
+      "text": "Merci beaucoup à tous",
+      "expect": null
+    },
+    {
+      "id": "fr-27",
+      "text": "Je pense qu’on peut livrer lundi",
+      "expect": null
+    },
+    {
+      "id": "fr-28",
+      "text": "Combien coûte le",
+      "expect": null
+    },
+    {
+      "id": "fr-29",
+      "text": "Comme je disais le prix a changé",
+      "expect": null
+    },
+    {
+      "id": "fr-30",
+      "text": "Bonjour tout le monde",
+      "expect": null
+    },
+    {
+      "id": "fr-31",
+      "text": "Oui, c’est très bien",
+      "expect": null
+    },
+    {
+      "id": "fr-32",
+      "text": "Je voudrais un",
+      "expect": null
+    },
+    {
+      "id": "fr-33",
+      "text": "Parlons du budget la semaine prochaine",
+      "expect": null
+    }
+  ]
+}

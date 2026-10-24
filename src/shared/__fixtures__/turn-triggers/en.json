@@ -1,0 +1,253 @@
+{
+  "synthetic": true,
+  "description": "Synthetic en turn-trigger fixtures (G72, D-24). Fictional companies only.",
+  "cases": [
+    {
+      "id": "en-01",
+      "text": "What is the best way to deploy this at Acme",
+      "expect": {
+        "kind": "question",
+        "lang": "en"
+      }
+    },
+    {
+      "id": "en-02",
+      "text": "Can you explain the architecture for Globex",
+      "expect": {
+        "kind": "question",
+        "lang": "en"
+      }
+    },
+    {
+      "id": "en-03",
+      "text": "So what should we prioritize next quarter",
+      "expect": {
+        "kind": "question",
+        "lang": "en"
+      }
+    },
+    {
+      "id": "en-04",
+      "text": "How do we handle retries",
+      "expect": {
+        "kind": "question",
+        "lang": "en"
+      }
+    },
+    {
+      "id": "en-05",
+      "text": "Tell me about the rollout plan",
+      "expect": {
+        "kind": "question",
+        "lang": "en"
+      }
+    },
+    {
+      "id": "en-06",
+      "text": "Where are you from",
+      "expect": {
+        "kind": "question",
+        "lang": "en"
+      }
+    },
+    {
+      "id": "en-07",
+      "text": "Ready?",
+      "expect": {
+        "kind": "question",
+        "lang": null
+      }
+    },
+    {
+      "id": "en-08",
+      "text": "Honestly this is too expensive for a team our size",
+      "expect": {
+        "kind": "objection",
+        "lang": "en"
+      }
+    },
+    {
+      "id": "en-09",
+      "text": "It costs too much compared to what we pay now",
+      "expect": {
+        "kind": "objection",
+        "lang": "en"
+      }
+    },
+    {
+      "id": "en-10",
+      "text": "Feels too pricey right now",
+      "expect": {
+        "kind": "objection",
+        "lang": "en"
+      }
+    },
+    {
+      "id": "en-11",
+      "text": "That is not in our budget this year",
+      "expect": {
+        "kind": "objection",
+        "lang": "en"
+      }
+    },
+    {
+      "id": "en-12",
+      "text": "Anything like that is not in the budget until Q3",
+      "expect": {
+        "kind": "objection",
+        "lang": "en"
+      }
+    },
+    {
+      "id": "en-13",
+      "text": "We are over budget already",
+      "expect": {
+        "kind": "objection",
+        "lang": "en"
+      }
+    },
+    {
+      "id": "en-14",
+      "text": "We have no budget for new tools",
+      "expect": {
+        "kind": "objection",
+        "lang": "en"
+      }
+    },
+    {
+      "id": "en-15",
+      "text": "We already use Globex for this",
+      "expect": {
+        "kind": "objection",
+        "lang": "en"
+      }
+    },
+    {
+      "id": "en-16",
+      "text": "We already have a vendor for that",
+      "expect": {
+        "kind": "objection",
+        "lang": "en"
+      }
+    },
+    {
+      "id": "en-17",
+      "text": "Honestly we’re happy with our current setup",
+      "expect": {
+        "kind": "objection",
+        "lang": "en"
+      }
+    },
+    {
+      "id": "en-18",
+      "text": "We don’t need another dashboard",
+      "expect": {
+        "kind": "objection",
+        "lang": "en"
+      }
+    },
+    {
+      "id": "en-19",
+      "text": "There is no need for a second tool",
+      "expect": {
+        "kind": "objection",
+        "lang": "en"
+      }
+    },
+    {
+      "id": "en-20",
+      "text": "I’m not sure about this timeline",
+      "expect": {
+        "kind": "objection",
+        "lang": "en"
+      }
+    },
+    {
+      "id": "en-21",
+      "text": "Right now it is not a priority for the team",
+      "expect": {
+        "kind": "objection",
+        "lang": "en"
+      }
+    },
+    {
+      "id": "en-22",
+      "text": "The problem is the migration effort",
+      "expect": {
+        "kind": "objection",
+        "lang": "en"
+      }
+    },
+    {
+      "id": "en-23",
+      "text": "My concern is the security review",
+      "expect": {
+        "kind": "objection",
+        "lang": "en"
+      }
+    },
+    {
+      "id": "en-24",
+      "text": "Frankly it doesn’t work for us",
+      "expect": {
+        "kind": "objection",
+        "lang": "en"
+      }
+    },
+    {
+      "id": "en-25",
+      "text": "ok",
+      "expect": null
+    },
+    {
+      "id": "en-26",
+      "text": "Sounds good, thanks",
+      "expect": null
+    },
+    {
+      "id": "en-27",
+      "text": "I think we should ship it",
+      "expect": null
+    },
+    {
+      "id": "en-28",
+      "text": "best way to deploy this",
+      "expect": null
+    },
+    {
+      "id": "en-29",
+      "text": "What is the",
+      "expect": null
+    },
+    {
+      "id": "en-30",
+      "text": "Can you give me your",
+      "expect": null
+    },
+    {
+      "id": "en-31",
+      "text": "Thanks everyone for joining today",
+      "expect": null
+    },
+    {
+      "id": "en-32",
+      "text": "Let’s circle back next week",
+      "expect": null
+    },
+    {
+      "id": "en-33",
+      "text": "what is",
+      "expect": null
+    },
+    {
+      "id": "en-34",
+      "text": "It is too expensive. We will think about it.",
+      "expect": null
+    },
+    {
+      "id": "en-35",
+      "text": "How do we deal with the",
+      "expect": null
+    }
+  ]
+}

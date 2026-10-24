@@ -1,0 +1,296 @@
+{
+  "synthetic": true,
+  "description": "Synthetic es turn-trigger fixtures (G72, D-24). Fictional companies only.",
+  "cases": [
+    {
+      "id": "es-01",
+      "text": "Cuánto cuesta la licencia anual",
+      "expect": {
+        "kind": "question",
+        "lang": "es"
+      }
+    },
+    {
+      "id": "es-02",
+      "text": "Cuál es el plazo de implementación",
+      "expect": {
+        "kind": "question",
+        "lang": "es"
+      }
+    },
+    {
+      "id": "es-03",
+      "text": "Dónde está alojado el servidor",
+      "expect": {
+        "kind": "question",
+        "lang": "es"
+      }
+    },
+    {
+      "id": "es-04",
+      "text": "Quién aprueba el contrato de su lado",
+      "expect": {
+        "kind": "question",
+        "lang": "es"
+      }
+    },
+    {
+      "id": "es-05",
+      "text": "Puedes enviarme la propuesta hoy",
+      "expect": {
+        "kind": "question",
+        "lang": "es"
+      }
+    },
+    {
+      "id": "es-06",
+      "text": "Podrías explicar la integración con Globex",
+      "expect": {
+        "kind": "question",
+        "lang": "es"
+      }
+    },
+    {
+      "id": "es-07",
+      "text": "¿Cuándo podemos empezar el piloto con el equipo de ventas",
+      "expect": {
+        "kind": "question",
+        "lang": "es"
+      }
+    },
+    {
+      "id": "es-08",
+      "text": "Y cuándo empezamos con el piloto",
+      "expect": {
+        "kind": "question",
+        "lang": "es"
+      }
+    },
+    {
+      "id": "es-09",
+      "text": "Qué es lo que incluye el plan",
+      "expect": {
+        "kind": "question",
+        "lang": "es"
+      }
+    },
+    {
+      "id": "es-10",
+      "text": "Qué piensas de la propuesta de Globex",
+      "expect": {
+        "kind": "question",
+        "lang": "es"
+      }
+    },
+    {
+      "id": "es-11",
+      "text": "Empezamos el lunes, verdad",
+      "expect": {
+        "kind": "question",
+        "lang": "es"
+      }
+    },
+    {
+      "id": "es-12",
+      "text": "Es una buena idea, no crees",
+      "expect": {
+        "kind": "question",
+        "lang": "es"
+      }
+    },
+    {
+      "id": "es-13",
+      "text": "Es muy caro para nuestro tamaño",
+      "expect": {
+        "kind": "objection",
+        "lang": "es"
+      }
+    },
+    {
+      "id": "es-14",
+      "text": "Me parece demasiado caro",
+      "expect": {
+        "kind": "objection",
+        "lang": "es"
+      }
+    },
+    {
+      "id": "es-15",
+      "text": "Cuesta mucho para lo que ofrece",
+      "expect": {
+        "kind": "objection",
+        "lang": "es"
+      }
+    },
+    {
+      "id": "es-16",
+      "text": "Está fuera del presupuesto de este año",
+      "expect": {
+        "kind": "objection",
+        "lang": "es"
+      }
+    },
+    {
+      "id": "es-17",
+      "text": "Queda fuera de nuestro presupuesto",
+      "expect": {
+        "kind": "objection",
+        "lang": "es"
+      }
+    },
+    {
+      "id": "es-18",
+      "text": "Estamos sin presupuesto ahora",
+      "expect": {
+        "kind": "objection",
+        "lang": "es"
+      }
+    },
+    {
+      "id": "es-19",
+      "text": "No tenemos presupuesto para eso",
+      "expect": {
+        "kind": "objection",
+        "lang": "es"
+      }
+    },
+    {
+      "id": "es-20",
+      "text": "Ya tenemos una herramienta para eso",
+      "expect": {
+        "kind": "objection",
+        "lang": "es"
+      }
+    },
+    {
+      "id": "es-21",
+      "text": "Ya usamos Globex hoy",
+      "expect": {
+        "kind": "objection",
+        "lang": "es"
+      }
+    },
+    {
+      "id": "es-22",
+      "text": "Estamos contentos con lo que tenemos",
+      "expect": {
+        "kind": "objection",
+        "lang": "es"
+      }
+    },
+    {
+      "id": "es-23",
+      "text": "No necesitamos otra herramienta",
+      "expect": {
+        "kind": "objection",
+        "lang": "es"
+      }
+    },
+    {
+      "id": "es-24",
+      "text": "No nos hace falta ahora",
+      "expect": {
+        "kind": "objection",
+        "lang": "es"
+      }
+    },
+    {
+      "id": "es-25",
+      "text": "No estoy seguro del retorno",
+      "expect": {
+        "kind": "objection",
+        "lang": "es"
+      }
+    },
+    {
+      "id": "es-26",
+      "text": "No estoy convencida del valor",
+      "expect": {
+        "kind": "objection",
+        "lang": "es"
+      }
+    },
+    {
+      "id": "es-27",
+      "text": "No es una prioridad este trimestre",
+      "expect": {
+        "kind": "objection",
+        "lang": "es"
+      }
+    },
+    {
+      "id": "es-28",
+      "text": "Ahora mismo no es prioridad",
+      "expect": {
+        "kind": "objection",
+        "lang": "es"
+      }
+    },
+    {
+      "id": "es-29",
+      "text": "El problema es el despliegue",
+      "expect": {
+        "kind": "objection",
+        "lang": "es"
+      }
+    },
+    {
+      "id": "es-30",
+      "text": "No nos funciona con ese formato",
+      "expect": {
+        "kind": "objection",
+        "lang": "es"
+      }
+    },
+    {
+      "id": "es-31",
+      "text": "Vale",
+      "expect": null
+    },
+    {
+      "id": "es-32",
+      "text": "Sí, claro",
+      "expect": null
+    },
+    {
+      "id": "es-33",
+      "text": "Gracias a todos por venir",
+      "expect": null
+    },
+    {
+      "id": "es-34",
+      "text": "Cuánto cuesta el",
+      "expect": null
+    },
+    {
+      "id": "es-35",
+      "text": "Cómo dije antes el plazo cambió",
+      "expect": null
+    },
+    {
+      "id": "es-36",
+      "text": "Porque el plazo cambió bastante",
+      "expect": null
+    },
+    {
+      "id": "es-37",
+      "text": "Creo que podemos entregar el lunes",
+      "expect": null
+    },
+    {
+      "id": "es-38",
+      "text": "Buenos días a todos",
+      "expect": null
+    },
+    {
+      "id": "es-39",
+      "text": "Hablemos del presupuesto la semana próxima",
+      "expect": null
+    },
+    {
+      "id": "es-40",
+      "text": "Dónde está el",
+      "expect": null
+    }
+  ]
+}

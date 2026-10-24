@@ -1,0 +1,317 @@
+{
+  "synthetic": true,
+  "description": "Synthetic pt-BR turn-trigger fixtures (G72, D-24). Fictional companies only.",
+  "cases": [
+    {
+      "id": "pt-01",
+      "text": "O que vocês propõem para a Acme",
+      "expect": {
+        "kind": "question",
+        "lang": "pt-BR"
+      }
+    },
+    {
+      "id": "pt-02",
+      "text": "Quanto custa a licença anual",
+      "expect": {
+        "kind": "question",
+        "lang": "pt-BR"
+      }
+    },
+    {
+      "id": "pt-03",
+      "text": "Qual é o prazo de implantação",
+      "expect": {
+        "kind": "question",
+        "lang": "pt-BR"
+      }
+    },
+    {
+      "id": "pt-04",
+      "text": "Será que dá para fechar hoje",
+      "expect": {
+        "kind": "question",
+        "lang": "pt-BR"
+      }
+    },
+    {
+      "id": "pt-05",
+      "text": "Então, quando vocês conseguem entregar",
+      "expect": {
+        "kind": "question",
+        "lang": "pt-BR"
+      }
+    },
+    {
+      "id": "pt-06",
+      "text": "Você pode me mandar a proposta",
+      "expect": {
+        "kind": "question",
+        "lang": "pt-BR"
+      }
+    },
+    {
+      "id": "pt-07",
+      "text": "Onde fica o servidor de vocês",
+      "expect": {
+        "kind": "question",
+        "lang": "pt-BR"
+      }
+    },
+    {
+      "id": "pt-08",
+      "text": "Quem aprova o contrato do lado de vocês",
+      "expect": {
+        "kind": "question",
+        "lang": "pt-BR"
+      }
+    },
+    {
+      "id": "pt-09",
+      "text": "Tem como ajustar o preço do plano",
+      "expect": {
+        "kind": "question",
+        "lang": "pt-BR"
+      }
+    },
+    {
+      "id": "pt-10",
+      "text": "Vamos fechar hoje, né",
+      "expect": {
+        "kind": "question",
+        "lang": "pt-BR"
+      }
+    },
+    {
+      "id": "pt-11",
+      "text": "O prazo continua o mesmo, não é",
+      "expect": {
+        "kind": "question",
+        "lang": "pt-BR"
+      }
+    },
+    {
+      "id": "pt-12",
+      "text": "Isso faz sentido pra vocês, não acha",
+      "expect": {
+        "kind": "question",
+        "lang": "pt-BR"
+      }
+    },
+    {
+      "id": "pt-13",
+      "text": "Isso é muito caro para o nosso porte",
+      "expect": {
+        "kind": "objection",
+        "lang": "pt-BR"
+      }
+    },
+    {
+      "id": "pt-14",
+      "text": "Achei caro demais",
+      "expect": {
+        "kind": "objection",
+        "lang": "pt-BR"
+      }
+    },
+    {
+      "id": "pt-15",
+      "text": "Custa muito para o que entrega",
+      "expect": {
+        "kind": "objection",
+        "lang": "pt-BR"
+      }
+    },
+    {
+      "id": "pt-16",
+      "text": "Está fora do orçamento deste ano",
+      "expect": {
+        "kind": "objection",
+        "lang": "pt-BR"
+      }
+    },
+    {
+      "id": "pt-17",
+      "text": "Isso fica fora do nosso orçamento",
+      "expect": {
+        "kind": "objection",
+        "lang": "pt-BR"
+      }
+    },
+    {
+      "id": "pt-18",
+      "text": "Estamos sem orçamento agora",
+      "expect": {
+        "kind": "objection",
+        "lang": "pt-BR"
+      }
+    },
+    {
+      "id": "pt-19",
+      "text": "Nós não temos orçamento para isso",
+      "expect": {
+        "kind": "objection",
+        "lang": "pt-BR"
+      }
+    },
+    {
+      "id": "pt-20",
+      "text": "Já temos uma ferramenta para isso",
+      "expect": {
+        "kind": "objection",
+        "lang": "pt-BR"
+      }
+    },
+    {
+      "id": "pt-21",
+      "text": "Já usamos a Globex hoje",
+      "expect": {
+        "kind": "objection",
+        "lang": "pt-BR"
+      }
+    },
+    {
+      "id": "pt-22",
+      "text": "Estamos satisfeitos com o que temos",
+      "expect": {
+        "kind": "objection",
+        "lang": "pt-BR"
+      }
+    },
+    {
+      "id": "pt-23",
+      "text": "Não precisamos de outra ferramenta",
+      "expect": {
+        "kind": "objection",
+        "lang": "pt-BR"
+      }
+    },
+    {
+      "id": "pt-24",
+      "text": "A gente não precisa disso agora",
+      "expect": {
+        "kind": "objection",
+        "lang": "pt-BR"
+      }
+    },
+    {
+      "id": "pt-25",
+      "text": "Não tenho certeza se vale a pena",
+      "expect": {
+        "kind": "objection",
+        "lang": "pt-BR"
+      }
+    },
+    {
+      "id": "pt-26",
+      "text": "Não estou convencido do retorno",
+      "expect": {
+        "kind": "objection",
+        "lang": "pt-BR"
+      }
+    },
+    {
+      "id": "pt-27",
+      "text": "Ainda não estou convencida",
+      "expect": {
+        "kind": "objection",
+        "lang": "pt-BR"
+      }
+    },
+    {
+      "id": "pt-28",
+      "text": "Isso não é prioridade agora",
+      "expect": {
+        "kind": "objection",
+        "lang": "pt-BR"
+      }
+    },
+    {
+      "id": "pt-29",
+      "text": "Isso não é uma prioridade neste trimestre",
+      "expect": {
+        "kind": "objection",
+        "lang": "pt-BR"
+      }
+    },
+    {
+      "id": "pt-30",
+      "text": "O problema é a implantação",
+      "expect": {
+        "kind": "objection",
+        "lang": "pt-BR"
+      }
+    },
+    {
+      "id": "pt-31",
+      "text": "Não funciona pra nós nesse formato",
+      "expect": {
+        "kind": "objection",
+        "lang": "pt-BR"
+      }
+    },
+    {
+      "id": "pt-32",
+      "text": "Não funciona para a gente assim",
+      "expect": {
+        "kind": "objection",
+        "lang": "pt-BR"
+      }
+    },
+    {
+      "id": "pt-33",
+      "text": "Ok, entendi",
+      "expect": null
+    },
+    {
+      "id": "pt-34",
+      "text": "Sim, claro",
+      "expect": null
+    },
+    {
+      "id": "pt-35",
+      "text": "Beleza, obrigado a todos",
+      "expect": null
+    },
+    {
+      "id": "pt-36",
+      "text": "Que bom que vocês vieram hoje",
+      "expect": null
+    },
+    {
+      "id": "pt-37",
+      "text": "Como eu disse antes o prazo mudou",
+      "expect": null
+    },
+    {
+      "id": "pt-38",
+      "text": "Porque o prazo mudou bastante",
+      "expect": null
+    },
+    {
+      "id": "pt-39",
+      "text": "Qual é o",
+      "expect": null
+    },
+    {
+      "id": "pt-40",
+      "text": "Quanto custa o plano e",
+      "expect": null
+    },
+    {
+      "id": "pt-41",
+      "text": "Acho que podemos entregar na segunda",
+      "expect": null
+    },
+    {
+      "id": "pt-42",
+      "text": "Vamos falar de orçamento na próxima semana",
+      "expect": null
+    },
+    {
+      "id": "pt-43",
+      "text": "Bom dia a todos",
+      "expect": null
+    }
+  ]
+}
