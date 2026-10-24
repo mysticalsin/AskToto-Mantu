@@ -285,6 +285,9 @@ mac:
     # Desktop commands (src/main/desktop-adapters.ts) drive Notes / Photo Booth through /usr/bin/osascript after
     # the person confirms them; macOS attributes those Apple Events to Métis and shows this sentence.
     NSAppleEventsUsageDescription: Métis uses Apple Events to carry out desktop commands you confirm, such as creating a note.
+    # Apple Calendar events (G65, EventKit through the mac helper) after the person confirms them.
+    NSCalendarsFullAccessUsageDescription: Métis uses your calendar to add events you confirm and to check they were saved.
+    NSCalendarsUsageDescription: Métis uses your calendar to add events you confirm and to check they were saved.
     LSUIElement: true
 mas:
   # Mac App Store builds are opt-in: run `npm run release:mas`.
@@ -300,6 +303,8 @@ mas:
     NSAudioCaptureUsageDescription: Métis uses system audio to transcribe the other side of the meetings you start.
     NSSpeechRecognitionUsageDescription: Métis uses Apple Speech to transcribe meetings on this Mac when you choose it in Settings.
     NSAppleEventsUsageDescription: Métis uses Apple Events to carry out desktop commands you confirm, such as creating a note.
+    NSCalendarsFullAccessUsageDescription: Métis uses your calendar to add events you confirm and to check they were saved.
+    NSCalendarsUsageDescription: Métis uses your calendar to add events you confirm and to check they were saved.
     LSUIElement: true
 masDev:
   entitlements: build/entitlements.mas.plist

@@ -48,6 +48,14 @@ export const graphScopeGrants: ConnectorGrantSeam = {
   }
 }
 
+/**
+ * Per-kind grants. Apple Calendar has no provider scope: its OS permission is checked by the handler at the moment of
+ * dispatch (and reported as the typed `os_permission_missing`), so the account itself is always granted.
+ */
+export const connectorGrants: ConnectorGrantSeam = {
+  check: (input) => (input.connectorKind === 'outlook' ? graphScopeGrants.check(input) : 'granted')
+}
+
 /** Main-owned catalog publication point. Consumers read the current revision at execution time. */
 export const connectorCatalog = createCatalogPublisher({
   revision: CONNECTOR_CATALOG_REVISION,
@@ -88,7 +96,7 @@ export function connectorExecutor(): ConnectorExecutor {
   executor ??= createConnectorExecutor({
     catalog: connectorCatalog,
     handlers: createBuiltinHandlers(),
-    grants: graphScopeGrants,
+    grants: connectorGrants,
     accounts: registeredAccounts,
     executableAccounts: async (kind) => {
       const ref = await ensureCurrentConnectorAccount(kind)
@@ -117,7 +125,8 @@ function recordWriteSuccess(id: string): void {
 function toLegacy(opId: string, result: ConnectorResult): OutlookWriteResult & { result: ConnectorResult } {
   if (result.ok) {
     const id = (result.output as { id: string }).id
-    if (result.receipt) recordWriteSuccess(id)
+    // The time-saved log counts Outlook pushes; an Apple Calendar event is not one.
+    if (result.receipt && opId.startsWith('outlook.')) recordWriteSuccess(id)
     return { ok: true, id, result }
   }
   const consent = result.needsConsent ? OUTLOOK_CONSENT_COPY[opId] : undefined

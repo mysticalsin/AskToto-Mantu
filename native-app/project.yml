@@ -59,6 +59,8 @@ targets:
         # when it first runs, and onboarding explains it before that happens. (The Electron app still declares
         # NSScreenCaptureUsageDescription; Apple documents no such key for ScreenCaptureKit, so it is harmless there.)
         INFOPLIST_KEY_NSSpeechRecognitionUsageDescription: "Métis uses speech recognition to transcribe your meetings on this Mac."
+        INFOPLIST_KEY_NSCalendarsFullAccessUsageDescription: "Métis uses your calendar to add events you confirm and to check they were saved."
+        INFOPLIST_KEY_NSCalendarsUsageDescription: "Métis uses your calendar to add events you confirm and to check they were saved."
   MetisPersistenceTests:
     type: bundle.unit-test
     platform: macOS

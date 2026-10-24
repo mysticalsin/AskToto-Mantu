@@ -223,6 +223,26 @@ first="$(head -n 1 "$work/wm.out")"
 if printf '%s\n' "$first" | grep -Eq '^m [0-9]{1,4} [0-9]{1,10}$'; then pass "watch-modifiers prints one well-formed initial line"; else fail "watch-modifiers first line: '$first' ($(cat "$work/wm.err"))"; fi
 if [ "$(grep -Evc '^m [0-9]{1,4} [0-9]{1,10}$' "$work/wm.out")" = "0" ]; then pass "watch-modifiers prints only protocol lines (no key identity)"; else fail "watch-modifiers stray output: $(cat "$work/wm.out")"; fi
 
+# --- calendar (G65; EventKit). Only the read-only status and an input-rejection path run here: this script never
+# --- calls calendar-access-ask (it would raise the Calendar prompt) and never reaches a save. -----------
+err="$("$helper" 2>&1 >/dev/null)"
+case "$err" in *usage:*calendar-event-create*) pass "usage lists the calendar subcommands" ;; *) fail "usage lists calendar: $err" ;; esac
+out="$("$helper" calendar-status 2>/dev/null)"; code=$?
+expect_exit "calendar-status exits 0" 0 "$code"
+if printf '%s' "$out" | py 'import json,sys
+d = json.load(sys.stdin)
+assert set(d) == {"status"}, d
+assert d["status"] in {"notDetermined", "denied", "restricted", "writeOnly", "fullAccess"}, d
+'; then pass "calendar-status prints one {status} object and never prompts"; else fail "calendar-status JSON: $out"; fi
+"$helper" calendar-event-read >/dev/null 2>&1; code=$?
+expect_exit "calendar-event-read without an id exits 1" 1 "$code"
+out="$(printf '{"subject":"x","startIso":"nope","endIso":"nope"}' | "$helper" calendar-event-create 2>/dev/null)"; code=$?
+expect_exit "calendar-event-create rejects bad input with exit 0" 0 "$code"
+if printf '%s' "$out" | py 'import json,sys
+d = json.load(sys.stdin)
+assert d == {"ok": False, "error": "bad_input"}, d
+'; then pass "calendar-event-create refuses unparseable times before touching EventKit"; else fail "calendar-event-create bad_input JSON: $out"; fi
+
 if [ "$failures" -eq 0 ]; then echo "all helper tests passed"; exit 0; fi
 echo "$failures helper test(s) failed"
 exit 1

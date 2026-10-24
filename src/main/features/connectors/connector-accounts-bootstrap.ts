@@ -54,6 +54,8 @@ export function bootstrapConnectorAccounts(deps: ConnectorAccountsBootstrapDeps)
     const identity = (deps.identity ?? authStatus)()
     if (!identity.signedIn || !identity.email) return null
     await registry.prepareCurrentScope()
+    // Apple Calendar is the Mac itself: still gated on the signed-in Métis owner, and scoped to that owner and tenant.
+    if (kind === 'apple_calendar') return registry.ensureAccount({ kind, providerAccountId: 'this-mac' })
     const accountRef = await registry.ensureAccount({ kind, providerAccountId: identity.email })
     const pendingFlows = (await registry.listOnboardingFlows()).filter(
       (flow) => flow.kind === kind && flow.status === 'pending'

@@ -1,12 +1,26 @@
 import { calendarTodayForConnector } from '../../calendar'
 import { createOutlookDraftForConnector, createOutlookEventForConnector } from '../../outlook-write'
+import { createEventKitHost, type EventKitHost } from '../../infra/process/eventkit-helper-host'
+import { macHelperPath, macHelperPresent } from '../../mac-helper'
+import { createAppleEventCreateHandler } from './apple-calendar-handler'
 import type { ConnectorHandler, ConnectorHandlers, HandlerOutcome } from './connector-executor'
+
+export interface BuiltinHandlerDeps {
+  /** Test seam; production talks to the bundled mac helper and is unavailable off macOS. */
+  eventKit?: EventKitHost
+}
+
+const productionEventKit = (): EventKitHost =>
+  createEventKitHost({
+    platform: process.platform,
+    helperPath: () => (macHelperPresent() ? macHelperPath() : null)
+  })
 
 /**
  * The only place the Graph write functions are called (a contract test pins it). Every entry here is a catalog op and
  * every catalog op is here, so nothing is advertised without a real handler.
  */
-export function createBuiltinHandlers(): ConnectorHandlers {
+export function createBuiltinHandlers(deps: BuiltinHandlerDeps = {}): ConnectorHandlers {
   const draft: ConnectorHandler = async (input: { subject: string; body: string }): Promise<HandlerOutcome> => {
     const r = await createOutlookDraftForConnector(input)
     return r.ok && r.id
@@ -50,6 +64,7 @@ export function createBuiltinHandlers(): ConnectorHandlers {
   return {
     'outlook.calendar.today': today,
     'outlook.draft.create': draft,
-    'outlook.event.create': event
+    'outlook.event.create': event,
+    'apple.calendar.event.create': createAppleEventCreateHandler(deps.eventKit ?? productionEventKit())
   }
 }

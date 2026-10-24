@@ -11,7 +11,7 @@ import type { ConnectorEffectClass } from './connector-effects'
  */
 
 /** Connector kinds that have fixed, built-in operations. */
-export const CONNECTOR_KINDS = ['outlook'] as const
+export const CONNECTOR_KINDS = ['outlook', 'apple_calendar'] as const
 export type ConnectorKind = (typeof CONNECTOR_KINDS)[number]
 
 /** What an operation does to the account. Everything except `read` must pass the ActionGuard. */
@@ -48,6 +48,13 @@ const OutlookEventInput = z.object({
   body: z.string().max(20_000).default(''),
   startIso: z.string().max(40).optional(),
   endIso: z.string().max(40).optional()
+})
+/** Apple Calendar needs both times: EventKit would otherwise pick its own, and the readback has nothing to compare. */
+const AppleEventInput = z.object({
+  subject: z.string().max(200).default(''),
+  body: z.string().max(20_000).default(''),
+  startIso: z.string().max(40),
+  endIso: z.string().max(40)
 })
 const CreatedId = z.object({ id: z.string().min(1) })
 /** A created event is returned only after the provider has read it back as requested (G65). */
@@ -89,6 +96,16 @@ export const CONNECTOR_CATALOG: readonly ConnectorOperation[] = Object.freeze([
     summary: 'Create a calendar event with no attendees (no invitations)',
     scopes: ['Calendars.ReadWrite'],
     input: OutlookEventInput,
+    output: CreatedEvent
+  },
+  {
+    opId: 'apple.calendar.event.create',
+    kind: 'apple_calendar',
+    effect: 'create',
+    summary: 'Create an Apple Calendar event on this Mac with no attendees (no invitations)',
+    // Not a provider scope: the OS permission the helper must hold. It is checked in the handler at dispatch time.
+    scopes: ['EventKit.FullAccess'],
+    input: AppleEventInput,
     output: CreatedEvent
   }
 ])

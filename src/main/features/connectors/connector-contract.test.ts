@@ -31,9 +31,19 @@ describe('connector catalog <-> handler contract', () => {
   })
 
   it('carries consent copy for every write op so a stale grant keeps the existing honest message', () => {
-    for (const op of CONNECTOR_CATALOG.filter((o) => isWriteEffect(o.effect))) {
+    for (const op of CONNECTOR_CATALOG.filter((o) => o.kind === 'outlook' && isWriteEffect(o.effect))) {
       expect(OUTLOOK_CONSENT_COPY[op.opId]).toMatch(/will not send/i)
     }
+  })
+
+  it('has no Graph consent copy for Apple Calendar, whose permission is an OS permission', () => {
+    expect(OUTLOOK_CONSENT_COPY['apple.calendar.event.create']).toBeUndefined()
+  })
+
+  it('declares an apple_calendar write op that the handler map really serves', () => {
+    const op = CONNECTOR_CATALOG.find((o) => o.kind === 'apple_calendar')
+    expect(op && isWriteEffect(op.effect)).toBe(true)
+    expect(Object.keys(handlers)).toContain('apple.calendar.event.create')
   })
 })
 
