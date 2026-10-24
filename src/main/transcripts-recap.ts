@@ -100,7 +100,7 @@ const RECAP_SECTION_ALIASES: Readonly<Record<string, string>> = {
   'citations marquantes': 'notable quotes'
 }
 
-const foldRecapLabel = (text: string): string =>
+export const foldRecapLabel =(text: string): string =>
   text.trim().normalize('NFD').replace(/\p{M}/gu, '').replace(/[’‘]/g, "'").toLowerCase()
 
 export function recapSectionKey(text: string): string {

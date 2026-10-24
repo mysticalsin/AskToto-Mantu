@@ -1698,10 +1698,9 @@ export const Review = memo(function Review({
         </section>
       )}
 
-      {/* No inner scroll: the transcript flows in full and the single review panel scrolls as one, so the
-        whole Overview + transcript is visible without fighting a nested 300px scroll box. */}
       {lines.length === 0 ? null : (
         <ReviewTranscript
+          savedFile={isPastMeeting ? savedPath?.split('/').pop() : null}
           speechLines={speechLines}
           open={transcriptOpen}
           onOpenChange={setTranscriptOpen}

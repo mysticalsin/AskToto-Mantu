@@ -44,6 +44,8 @@ import { editMeetingIndex, removeMeetingFile } from './meeting-files'
 import { getSettings } from './store'
 import { deleteMeetingWithMemoryPropagation, propagateMeetingMemoryDeletion } from './memory-server/delete-propagation'
 import { readLegacyTranscript } from './features/meetings/legacy-transcript'
+import { removeMeetingRecordEdits } from './features/meeting-record'
+import { defaultRecordEditsDeps } from './features/meeting-record/default-deps'
 import { measuredDurationMs } from '@shared/meeting-duration'
 import { readRecapStatus, recapStatusValidationError, type RecapStatus } from '@shared/recap-status'
 import {
@@ -758,6 +760,7 @@ export async function deleteAllMeetings(): Promise<{
       await removeMeetingFile(folder, file)
       deleted++
       await propagateMeetingMemoryDeletion(file)
+      await removeMeetingRecordEdits(defaultRecordEditsDeps, folder, file)
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code !== 'ENOENT') failed.push(file)
     }

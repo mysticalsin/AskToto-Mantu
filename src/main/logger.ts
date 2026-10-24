@@ -411,6 +411,7 @@ export type AuditEvent =
   | 'assistant.store'
   // G57: the user memory (a correction or delete of a remembered preference or project context). Action and outcome only; never text.
   | 'user.memory'
+  | 'meeting.record'
   // V03: one voice action decision and its outcome (action id, class, source, status; never a title, query or words).
   | 'voice.action'
   // G44: one walkthrough event (started, planned, advanced, paused, completed, abandoned; step number and enum reason only, never the goal, an instruction or screen text).

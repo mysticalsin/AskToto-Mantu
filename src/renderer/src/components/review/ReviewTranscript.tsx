@@ -1,25 +1,49 @@
 import { Check, ChevronDown, Copy, FileText } from 'lucide-react'
 import type { TranscriptLine } from '@shared/ipc'
+import type { RecordItem } from '@shared/meeting-record'
+import { MeetingRecordPanel } from '../MeetingRecordPanel'
 import { TextButton } from '../ui'
 import { clock, speakerDisplay } from './review-format'
 
 /** The Review screen's transcript disclosure: a one-click "Show Transcript" button while collapsed,
  *  the full speech transcript with a Copy action once opened. Presentational only; Review owns the state. */
-export function ReviewTranscript({
-  speechLines,
-  open,
-  onOpenChange,
-  copied,
-  copyError,
-  onCopy
-}: {
+type TranscriptProps = {
   speechLines: TranscriptLine[]
   open: boolean
   onOpenChange: (open: boolean) => void
   copied: boolean
   copyError: string | null
   onCopy: () => void
-}): JSX.Element {
+}
+
+/** The saved meeting's structured record (G78) above the transcript; a citation chip opens the transcript and
+ *  scrolls to the cited line. Hidden for a live meeting, which has no saved file yet. */
+export function ReviewTranscript({
+  savedFile,
+  ...props
+}: TranscriptProps & { savedFile?: string | null }): JSX.Element {
+  const jump = (item: RecordItem): void => {
+    if (!item.citation) return
+    props.onOpenChange(true)
+    const t = item.citation.fromT
+    setTimeout(() => document.querySelector(`[data-t="${t}"]`)?.scrollIntoView({ block: 'center' }), 50)
+  }
+  return (
+    <>
+      {savedFile ? <MeetingRecordPanel file={savedFile} onJump={jump} /> : null}
+      <TranscriptDisclosure {...props} />
+    </>
+  )
+}
+
+function TranscriptDisclosure({
+  speechLines,
+  open,
+  onOpenChange,
+  copied,
+  copyError,
+  onCopy
+}: TranscriptProps): JSX.Element {
   if (!open) {
     return (
       // Summary-first: the full transcript is hidden behind a one-click disclosure unless the user has
@@ -63,7 +87,7 @@ export function ReviewTranscript({
           <div className="text-[13px] text-[color:var(--color-ink-2)]">No transcript captured.</div>
         ) : (
           speechLines.map((l, i) => (
-            <div key={i} className="flex gap-2 text-[13px] leading-snug">
+            <div key={i} data-t={l.t} className="flex gap-2 text-[13px] leading-snug">
               <span className="shrink-0 font-mono text-[10px] text-[color:var(--color-ink-3)]">{clock(l.t)}</span>
               <span
                 className={
