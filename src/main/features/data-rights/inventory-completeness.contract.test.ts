@@ -6,6 +6,8 @@ import { readModuleSource } from '../../../test-helpers/module-source'
 import { createProductionErasers, type ErasureHost } from './erasers'
 
 const MAIN = join(__dirname, '..', '..')
+/** Repository-relative path with forward slashes, so the reviewed lists match on Windows too. */
+const rel = (file: string): string => relative(MAIN, file).replace(/\\/g, '/')
 
 /** Folders and files under userData that are not owner data, reviewed one by one (model packs, installs, licence, keys, run state). */
 const NOT_OWNER_DATA: ReadonlyMap<string, string> = new Map([
@@ -65,7 +67,7 @@ describe('data store inventory completeness (G82)', () => {
     for (const file of sourcesUnder(wiringDir).filter((f) => /-wiring\.ts$/.test(f))) {
       const text = readFileSync(file, 'utf8')
       for (const match of text.matchAll(/(?:userDataPath\(\)|getPath\('userData'\)),\s*'([^']+)'/g)) {
-        found.push({ file: relative(MAIN, file), folder: match[1] as string })
+        found.push({ file: rel(file), folder: match[1] as string })
       }
     }
     expect(found.length).toBeGreaterThan(3)
@@ -81,10 +83,10 @@ describe('data store inventory completeness (G82)', () => {
     const missing: string[] = []
     for (const area of ['features', 'tasks', 'brain']) {
       for (const file of sourcesUnder(join(MAIN, area))) {
-        const rel = relative(MAIN, file)
+        const relPath = rel(file)
         // Inside the brain root (erased whole by the `brain` row), the speech model packs (not owner data) and this
         // feature's own export and receipt files.
-        if (/^(?:brain\/|features\/components\/speech-pack\/|features\/data-rights\/)/.test(rel)) continue
+        if (/^(?:brain\/|features\/components\/speech-pack\/|features\/data-rights\/)/.test(relPath)) continue
         const text = readFileSync(file, 'utf8')
         for (const match of text.matchAll(literal)) {
           const name = match[1] as string
@@ -95,7 +97,7 @@ describe('data store inventory completeness (G82)', () => {
             [...inventoried].some((n) => n.length > 3 && (name.endsWith(n) || n.endsWith(name))) ||
             [...NOT_OWNER_DATA.keys()].some((k) => name.startsWith(k)) ||
             REVIEWED_FILE_LITERALS.has(name)
-          if (!covered) missing.push(`${relative(MAIN, file)}: ${name}`)
+          if (!covered) missing.push(`${relPath}: ${name}`)
         }
       }
     }
