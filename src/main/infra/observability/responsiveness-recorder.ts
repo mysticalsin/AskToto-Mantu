@@ -294,9 +294,24 @@ export interface AskTiming {
   displayed(askId: string): void
   /** Cancel an ask: abort and release its stream, and record how long that took in main. */
   cancel(streams: Map<string, { abort: () => void }>, askId: string): void
+  /** The renderer's duplicate-review outcome for a card. Counted once, only for a card marked displayed. */
+  cardOutcome(askId: string, outcome: CardOutcomeName): void
 }
 
+/** Closed set of card outcomes the renderer may report (G71); anything else is ignored. */
+export const CARD_OUTCOME_COUNTERS = {
+  duplicate_rolled_back: 'card_duplicate_rolled_back',
+  duplicate_retained: 'card_duplicate_retained',
+  review_expired: 'card_review_expired',
+  review_superseded: 'card_review_superseded'
+} as const
+export type CardOutcomeName = keyof typeof CARD_OUTCOME_COUNTERS
+
+/** Displayed ids main remembers for outcome matching: bounded, oldest evicted first. */
+const DISPLAYED_ID_CAP = 64
+
 export function createAskTiming(source: RecorderSource, now: () => number = () => performance.now()): AskTiming {
+  const displayedIds = new Set<string>()
   return {
     start(askId, mode) {
       if (mode !== 'suggest') return
@@ -313,10 +328,22 @@ export function createAskTiming(source: RecorderSource, now: () => number = () =
     displayed(askId) {
       safely(() => {
         const rec = resolve(source)
-        if (rec.endSpan('display_receipt_ms', askId) !== null) rec.increment('suggestions_displayed')
+        if (rec.endSpan('display_receipt_ms', askId) === null) return
+        rec.increment('suggestions_displayed')
+        displayedIds.add(askId)
+        if (displayedIds.size > DISPLAYED_ID_CAP) {
+          const oldest = displayedIds.values().next().value
+          if (oldest !== undefined) displayedIds.delete(oldest)
+        }
       })
     },
+    cardOutcome(askId, outcome) {
+      const counter = Object.hasOwn(CARD_OUTCOME_COUNTERS, outcome) ? CARD_OUTCOME_COUNTERS[outcome] : undefined
+      if (!counter || !displayedIds.delete(askId)) return
+      safely(() => resolve(source).increment(counter))
+    },
     cancel(streams, askId) {
+      displayedIds.delete(askId)
       const handle = streams.get(askId)
       const startedAt = now()
       try {

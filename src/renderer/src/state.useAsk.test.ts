@@ -144,6 +144,7 @@ type TotoStub = {
   ask: ReturnType<typeof vi.fn>
   cancel: ReturnType<typeof vi.fn>
   reportDisplayReceipt: ReturnType<typeof vi.fn>
+  reportCardOutcome: ReturnType<typeof vi.fn>
   onDelta: (cb: (d: StreamDelta) => void) => () => void
   onDone: (cb: (d: StreamDone) => void) => () => void
   onMeta: (cb: (d: unknown) => void) => () => void
@@ -171,6 +172,7 @@ function installTotoStub(): TotoStub {
     ask: vi.fn().mockResolvedValue(undefined),
     cancel: vi.fn().mockResolvedValue(undefined),
     reportDisplayReceipt: vi.fn().mockResolvedValue(undefined),
+    reportCardOutcome: vi.fn().mockResolvedValue(undefined),
     onDelta: (cb) => {
       deltaCb = cb
       return () => {
@@ -742,5 +744,114 @@ describe('G12 — the renderer confirms a suggestion is on screen', () => {
     await host.__settle()
     await nextFrame()
     expect(view.result.answer).toMatchObject({ id, text: 'Try this.' })
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────
+// G71 — card identity, revision and the guarded duplicate review. Synthetic text only.
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────
+describe('G71 — suggestion card identity and duplicate review', () => {
+  let toto: TotoStub
+
+  beforeEach(() => {
+    host.__reset()
+    toto = installTotoStub()
+  })
+
+  const nextFrame = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 10))
+
+  async function suggestion(view: { result: ReturnType<typeof useAsk> }, text: string, finish = true): Promise<string> {
+    const id = view.result.run({ mode: 'suggest', prompt: 'ambient' })
+    await host.__settle()
+    toto.__fireDelta({ id, text })
+    await host.__settle()
+    if (finish) {
+      toto.__fireDone({ id })
+      await host.__settle()
+    }
+    return id
+  }
+
+  it('answer carries cardId equal to the ask id and a revision that increases per card', async () => {
+    const view = renderAsk()
+    const first = await suggestion(view, 'Synthetic card alpha')
+    const firstRevision = view.result.answer?.revision
+    expect(view.result.answer?.cardId).toBe(first)
+    const second = await suggestion(view, 'Synthetic beta timeline risk')
+    expect(view.result.answer?.cardId).toBe(second)
+    expect(view.result.answer?.revision).toBeGreaterThan(firstRevision as number)
+  })
+
+  it('a duplicate suggestion is replaced by the previous suggestion after done', async () => {
+    const view = renderAsk()
+    const first = await suggestion(view, 'Synthetic card alpha')
+    const firstRevision = view.result.answer?.revision as number
+    const second = await suggestion(view, 'Synthetic card alpha')
+    await nextFrame()
+    await host.__settle()
+    expect(view.result.answer).toMatchObject({ id: first, cardId: first, text: 'Synthetic card alpha' })
+    expect(view.result.answer?.revision).toBeGreaterThan(firstRevision)
+    expect(second).not.toBe(first)
+  })
+
+  it('keeps a distinct suggestion', async () => {
+    const view = renderAsk()
+    await suggestion(view, 'Synthetic card alpha')
+    const second = await suggestion(view, 'Synthetic beta timeline risk')
+    await nextFrame()
+    await host.__settle()
+    expect(view.result.answer).toMatchObject({ id: second, text: 'Synthetic beta timeline risk' })
+    expect(toto.reportCardOutcome).toHaveBeenCalledWith(second, 'duplicate_retained')
+  })
+
+  it('clear during duplicate review keeps the card cleared', async () => {
+    const view = renderAsk()
+    await suggestion(view, 'Synthetic card alpha')
+    const second = await suggestion(view, 'Synthetic card alpha', false)
+    toto.__fireDone({ id: second })
+    view.result.clear()
+    await host.__settle()
+    await nextFrame()
+    await host.__settle()
+    expect(view.result.answer).toBeNull()
+    expect(toto.reportCardOutcome).not.toHaveBeenCalled()
+  })
+
+  it('answer-mode asks never enter duplicate review', async () => {
+    const view = renderAsk()
+    for (const text of ['Synthetic card alpha', 'Synthetic card alpha']) {
+      const id = view.result.run({ mode: 'answer', prompt: 'q' })
+      await host.__settle()
+      toto.__fireDelta({ id, text })
+      await host.__settle()
+      toto.__fireDone({ id })
+      await host.__settle()
+    }
+    await nextFrame()
+    await host.__settle()
+    expect(view.result.answer?.id).toBe(view.result.answer?.cardId)
+    expect(toto.reportCardOutcome).not.toHaveBeenCalled()
+  })
+
+  it('display receipt is sent once per painted suggestion and not for a rollback restore', async () => {
+    const view = renderAsk()
+    const first = await suggestion(view, 'Synthetic card alpha')
+    await nextFrame()
+    const second = await suggestion(view, 'Synthetic card alpha')
+    await nextFrame()
+    await host.__settle()
+    await nextFrame()
+    expect(view.result.answer?.id).toBe(first)
+    expect(toto.reportDisplayReceipt.mock.calls).toEqual([[first], [second]])
+  })
+
+  it('reportCardOutcome receives only the ask id and outcome, never card text', async () => {
+    const view = renderAsk()
+    await suggestion(view, 'Synthetic card alpha')
+    const second = await suggestion(view, 'Synthetic card alpha')
+    await nextFrame()
+    await host.__settle()
+    await nextFrame()
+    expect(toto.reportCardOutcome.mock.calls).toEqual([[second, 'duplicate_rolled_back']])
   })
 })

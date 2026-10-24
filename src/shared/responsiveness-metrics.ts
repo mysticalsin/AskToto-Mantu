@@ -36,7 +36,11 @@ export const COUNTER_METRICS = [
   'router_unavailable',
   'handoff_started',
   'handoff_superseded',
-  'handoff_refused'
+  'handoff_refused',
+  'card_duplicate_rolled_back',
+  'card_duplicate_retained',
+  'card_review_expired',
+  'card_review_superseded'
 ] as const
 export const PEAK_METRICS = ['queue_depth_peak'] as const
 
@@ -75,12 +79,12 @@ const latency = (
   measuredFrom,
   measuredTo
 })
-const counter = (label: string, wiring: { wired: true } | { owner: string }): MetricDefinition => ({
+const counter = (label: string, wiring: { wired: true; owner?: string } | { owner: string }): MetricDefinition => ({
   kind: 'counter',
   unit: 'count',
   label,
   wiring: 'wired' in wiring ? 'wired' : 'slot',
-  owner: 'owner' in wiring ? wiring.owner : null,
+  owner: wiring.owner ?? null,
   measuredFrom: null,
   measuredTo: null
 })
@@ -126,6 +130,13 @@ export const METRIC_DEFINITIONS: Readonly<Record<MetricId, MetricDefinition>> = 
   handoff_started: counter('Fast-to-deep handoffs started', { wired: true }),
   handoff_superseded: counter('Fast answers superseded by a deep one', { wired: true }),
   handoff_refused: counter('Deeper asks run fresh, not handed off', { wired: true }),
+  card_duplicate_rolled_back: counter('Duplicate suggestions rolled back to the prior card', {
+    wired: true,
+    owner: 'G71'
+  }),
+  card_duplicate_retained: counter('Suggestions kept after the duplicate review', { wired: true, owner: 'G71' }),
+  card_review_expired: counter('Duplicate reviews that ran out of time', { wired: true, owner: 'G71' }),
+  card_review_superseded: counter('Duplicate reviews overtaken by a newer card', { wired: true, owner: 'G71' }),
   queue_depth_peak: {
     kind: 'peak',
     unit: 'count',

@@ -180,4 +180,49 @@ describe('responsiveness report and display receipt (G12)', () => {
     expect(rec.snapshot().counters.suggestions_displayed).toBe(1)
     expect(rec.snapshot().latencies.display_receipt_ms).toEqual([40])
   })
+
+  function displayed(id: string, advance: (ms: number) => void): void {
+    askTiming.start(id, 'suggest')
+    advance(10)
+    askTiming.firstVisible(id)
+    askTiming.displayed(id)
+  }
+
+  it('card-outcome rejects a non-main sender', async () => {
+    const { rec, advance } = useRecorder()
+    displayed('ask-1', advance)
+    const bad = setup()
+    bad.assertMainWindow.mockImplementation(() => {
+      throw new Error('not the main window')
+    })
+    expect(() => bad.call(RESPONSIVENESS_IPC.cardOutcome, 'ask-1', 'review_expired')).toThrow('not the main window')
+    expect(rec.snapshot().counters.card_review_expired).toBeUndefined()
+  })
+
+  it('card-outcome ignores unauthenticated calls', async () => {
+    const { rec, advance } = useRecorder()
+    displayed('ask-1', advance)
+    await setup({ auth: false }).call(RESPONSIVENESS_IPC.cardOutcome, 'ask-1', 'review_expired')
+    expect(rec.snapshot().counters.card_review_expired).toBeUndefined()
+  })
+
+  it('card-outcome ignores an unknown outcome or malformed id, and counts a valid one once', async () => {
+    const { rec, advance } = useRecorder()
+    displayed('ask-1', advance)
+    const ok = setup()
+    for (const [id, outcome] of [
+      ['ask-1', 'something_else'],
+      ['ask-1', 42],
+      ['ask-1', undefined],
+      [42, 'review_expired'],
+      ['', 'review_expired'],
+      ['x'.repeat(129), 'review_expired']
+    ]) {
+      await ok.call(RESPONSIVENESS_IPC.cardOutcome, id, outcome)
+    }
+    expect(rec.snapshot().counters.card_review_expired).toBeUndefined()
+    await ok.call(RESPONSIVENESS_IPC.cardOutcome, 'ask-1', 'review_expired')
+    await ok.call(RESPONSIVENESS_IPC.cardOutcome, 'ask-1', 'review_expired')
+    expect(rec.snapshot().counters.card_review_expired).toBe(1)
+  })
 })

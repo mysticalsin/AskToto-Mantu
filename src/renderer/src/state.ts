@@ -13,7 +13,8 @@ import type {
   SignInResult
 } from '@shared/ipc'
 import type { ProviderId } from '@shared/providers'
-import { reportDisplayReceiptWhenPainted } from './lib/display-receipt'
+import { reportCardOutcomeAfterReceipt, reportDisplayReceiptWhenPainted } from './lib/display-receipt'
+import { lexicalDuplicateScore, SuggestionCardController } from './lib/duplicate-review'
 import { buildAskStart } from './lib/ask-start'
 import type { AnswerState, AskRequest } from './lib/ask-types'
 export { useQuietRelease } from './lib/quiet-release'
@@ -253,6 +254,32 @@ export function useAsk(): {
     []
   )
 
+  // G71: card identity and the guarded duplicate review. All review logic lives in SuggestionCardController.
+  const revisionRef = useRef(0) // monotonic per hook; bumps on every visible card change
+  const previousCardRef = useRef<{ askId: string; card: AnswerState } | null>(null)
+  const cardsRef = useRef<SuggestionCardController | null>(null)
+  const cards = useCallback((): SuggestionCardController => {
+    cardsRef.current ??= new SuggestionCardController({
+      reviewer: (previous, candidate) => lexicalDuplicateScore(previous, candidate),
+      setTimer: (fn, ms) => setTimeout(fn, ms),
+      clearTimer: (timer) => clearTimeout(timer as ReturnType<typeof setTimeout>),
+      onRollback: (previous, replacedAskId) => {
+        if (answerRef.current?.id !== replacedAskId) return false
+        updateAnswer(() => ({ ...previous, revision: ++revisionRef.current }))
+        return true
+      },
+      onOutcome: reportCardOutcomeAfterReceipt
+    })
+    return cardsRef.current
+  }, [updateAnswer])
+  useEffect(
+    () => () => {
+      cardsRef.current?.dispose()
+      cardsRef.current = null // a remount (StrictMode) gets a fresh controller, never a disposed one
+    },
+    []
+  )
+
   const flush = useCallback((): void => {
     if (rafRef.current) cancelAnimationFrame(rafRef.current)
     rafRef.current = 0
@@ -271,6 +298,7 @@ export function useAsk(): {
       if (!id) return answerRef.current
       flush() // includes current tokens that have not reached their animation frame or first paint
       idRef.current = '' // terminal ownership ends now; duplicate or late IPC events are inert
+      if (completion === 'incomplete') cardsRef.current?.invalidate('incomplete')
       const noOutput = pendingReplaceRef.current
       pendingReplaceRef.current = false
       return updateAnswer((a) =>
@@ -300,6 +328,7 @@ export function useAsk(): {
         flush()
         // Painted-or-finished, not replaced: a newer request owning idRef means this card was swapped out.
         if (lastReqRef.current?.mode === 'suggest') {
+          if (answerRef.current?.id === d.id) cards().painted(answerRef.current)
           reportDisplayReceiptWhenPainted(d.id, () => idRef.current === d.id || !idRef.current)
         }
       } else if (!rafRef.current) {
@@ -308,7 +337,11 @@ export function useAsk(): {
     })
     const offDone = window.toto.onDone((d: StreamDone) => {
       if (!idRef.current || d.id !== idRef.current) return
-      finishCurrent('complete', null)
+      const final = finishCurrent('complete', null)
+      if (lastReqRef.current?.mode === 'suggest' && final?.id === d.id && final.completion === 'complete') {
+        const previous = previousCardRef.current
+        cards().completed(final, previous?.askId === d.id ? previous.card : null)
+      }
     })
     const offMeta = window.toto.onMeta((m: StreamMeta) => {
       if (!idRef.current || m.id !== idRef.current) return
@@ -340,7 +373,7 @@ export function useAsk(): {
       offErr()
       if (rafRef.current) cancelAnimationFrame(rafRef.current)
     }
-  }, [finishCurrent, flush, updateAnswer])
+  }, [cards, finishCurrent, flush, updateAnswer])
 
   const resetBuffer = useCallback((): void => {
     pendingRef.current = ''
@@ -378,8 +411,17 @@ export function useAsk(): {
       //
       // Follow-up asks (Answer already mounted): paint synchronously so the first stream delta never races
       // a deferred transition and drops / delays TTFT.
+      const shown = answerRef.current
+      previousCardRef.current =
+        req.mode === 'suggest' && shown?.ephemeral && shown.completion === 'complete' && shown.text
+          ? { askId: id, card: shown }
+          : null
+      if (req.mode === 'suggest') cards().superseded()
+      else cardsRef.current?.invalidate('non-suggest')
       updateAnswer((prev) => ({
         id,
+        cardId: id,
+        revision: ++revisionRef.current,
         text: prev?.text ?? '',
         streaming: true,
         completion: 'pending',
@@ -398,7 +440,7 @@ export function useAsk(): {
       })
       return id
     },
-    [resetBuffer, updateAnswer, finishCurrent]
+    [resetBuffer, updateAnswer, finishCurrent, cards]
   )
 
   const fail = useCallback(
@@ -411,7 +453,18 @@ export function useAsk(): {
       lastReqRef.current = null
       // Same #426 hazard/fix as run() above — fail() is the path a gate-free entry point (e.g. Spotlight
       // Ref with no ref agent configured) uses to mount <Answer> for the very first time in a session.
-      updateAnswer(() => ({ id, text: '', streaming: false, completion: 'incomplete', error, prompt: '', label }))
+      cardsRef.current?.invalidate('fail')
+      updateAnswer(() => ({
+        id,
+        cardId: id,
+        revision: ++revisionRef.current,
+        text: '',
+        streaming: false,
+        completion: 'incomplete',
+        error,
+        prompt: '',
+        label
+      }))
       return id
     },
     [resetBuffer, updateAnswer]
@@ -433,6 +486,8 @@ export function useAsk(): {
     const id = idRef.current
     idRef.current = ''
     resetBuffer()
+    cardsRef.current?.invalidate('clear')
+    revisionRef.current += 1
     updateAnswer(() => null)
     if (id) void window.toto.cancel(id)
   }, [resetBuffer, updateAnswer])
