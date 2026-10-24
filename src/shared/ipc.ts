@@ -11,7 +11,6 @@ import { EntityKindSchema } from './brain'
 import { OPERATOR_LICENSE_MAX } from './operator-license'
 import { OPERATOR_TIERS } from './operator-entitlements'
 import { OPERATOR_REPORTING_SETTINGS_DEFAULTS, OperatorReportingSettingsShape } from './operator-reporting-settings'
-import { SCREEN_OBSERVATION_SETTINGS_DEFAULTS, ScreenObservationSettingsShape } from './screen-observation-settings'
 import { VOICE_SETTINGS_SHAPE, DEFAULT_VOICE_SETTINGS } from './voice-settings-composition'
 import { RECAP_STATUSES, recapStatusValidationError, type RecapStatus } from './recap-status'
 import { RENDERER_VIEWS } from './renderer-view'
@@ -799,6 +798,7 @@ export type ChatTurn = z.infer<typeof ChatTurnSchema>
 const AskStartBaseSchema = z.object({
   id: z.string(),
   mode: z.enum(['answer', 'vision', 'suggest', 'summary', 'recap']),
+  outputIntent: z.enum(['direct', 'ambient']).optional(),
   prompt: z.string().default(''),
   inputOrigin: z.enum(['user-typed', 'user-spoken-by-owner']).optional(), // provenance only; grants no authority
   /** base64 image (JPEG from screen capture; no data: prefix) for vision mode. Max ~5.5 MB base64. */
@@ -1459,7 +1459,6 @@ export const BaseSettingsSchema = z.object({
    *  (operator-entitlements.ts) treats this the same as "no snapshot at all". */
   operatorEntitlementsAt: z.number().default(0),
   ...OperatorReportingSettingsShape,
-  ...ScreenObservationSettingsShape,
   /** Main-owned Screen Recording history (M2-0429); see shared/screen-permission.ts. */
   permissionState: PermissionStateSchema.default(DEFAULT_PERMISSION_STATE)
 })
@@ -1739,7 +1738,6 @@ export const DEFAULT_SETTINGS: Settings = {
   operatorIntegrationsVersion: 0,
   operatorEntitlementsAt: 0,
   ...OPERATOR_REPORTING_SETTINGS_DEFAULTS,
-  ...SCREEN_OBSERVATION_SETTINGS_DEFAULTS,
   permissionState: DEFAULT_PERMISSION_STATE
 }
 

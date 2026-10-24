@@ -48,6 +48,8 @@ export interface AskGoal {
   readonly prompt?: string
   readonly kind?: string
   readonly depth?: string
+  /** Carried so the quiet gate sees an unsolicited ask; not part of the goal digest. */
+  readonly outputIntent?: 'direct' | 'ambient'
 }
 
 /** The goal of a turn: its mode, kind and words, whitespace-normalised. The deeper flag is not part of the goal. */

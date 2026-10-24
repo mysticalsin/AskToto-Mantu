@@ -20,6 +20,9 @@ import {
   type SystemSettingsPane
 } from '@shared/contracts/settings-os-state'
 import { countExpiredMeetings } from '../recall'
+import { configureQuietOutput, readQuietPolicy, submitQuietOutput, type QuietOutputDependencies } from '../quiet-output'
+import { QUIET_IPC } from '@shared/quiet-ipc'
+import { QuietOutputChannelSchema, type QuietAction, type QuietPolicy } from '@shared/quiet-mode-settings'
 
 type AssertMainWindow = (event: Electron.IpcMainInvokeEvent) => void
 
@@ -100,7 +103,7 @@ export function applyLoginItem(
   refreshLoginItem()
 }
 
-export interface SettingsSystemIpcDependencies {
+export interface SettingsSystemIpcDependencies extends QuietOutputDependencies {
   assertMainWindow: AssertMainWindow
   requireAuth: () => boolean
   /** index.ts's login-item cache refresh: reads the OS, updates the cache publicSettings uses, null on failure. */
@@ -115,6 +118,19 @@ export function registerSettingsSystemIpc(deps: SettingsSystemIpcDependencies): 
   const ipcMain = deps.ipcMain ?? electronIpcMain
   const os = deps.os ?? electronOs
   const countExpired = deps.countExpired ?? countExpiredMeetings
+  configureQuietOutput(deps)
+
+  ipcMain.handle(QUIET_IPC.policyGet, (e): QuietPolicy => {
+    assertMainWindow(e)
+    return readQuietPolicy()
+  })
+
+  ipcMain.handle(QUIET_IPC.outputOffer, (e, rawChannel: unknown): QuietAction => {
+    assertMainWindow(e)
+    const parsed = QuietOutputChannelSchema.safeParse(rawChannel)
+    if (!parsed.success) return 'drop'
+    return submitQuietOutput(parsed.data, false, () => {})
+  })
 
   ipcMain.handle(SETTINGS_OS_STATE_IPC.osState, (e): SettingsOsState => {
     assertMainWindow(e)

@@ -36,7 +36,7 @@ import { OverlayToasts } from './components/OverlayToasts'
 import { CloudSpeechConsentPrompt } from './components/CloudSpeechConsentPrompt'
 import { QuickActions, type QuickKind } from './components/QuickActions'
 import { ConfirmSheet } from './ui/ConfirmSheet'
-import { useAsk, useAutoResize, useSettings, useAuth, type AnswerState } from './state'
+import { useAsk, useAutoResize, useSettings, useAuth, useQuietRelease, type AnswerState } from './state'
 import { VoiceActionsLayer } from './components/voice/VoiceActionsLayer'
 import { useWindowDrag } from './lib/window-drag'
 import { noteCrashContext } from './lib/crash-context'
@@ -1297,8 +1297,8 @@ export function App(): JSX.Element {
     focusedAnswerRef.current = a.id
     setFocusSignal((x) => x + 1)
   }, [ask.answer, suggest.answer, view])
-
   useAppSoundCues(ask.answer, settings?.soundCues, settings?.uiSounds, cancelledRef)
+  useQuietRelease(listen.listening, settings, suggest)
 
   // auto-answer when the other person asks a question (debounce = suggestEverySec)
   onQuestionRef.current = (_line: TranscriptLine): void => {
@@ -1320,7 +1320,7 @@ export function App(): JSX.Element {
     // Prefer a finished shadow suggestion (zero LLM wait) — same adopt rule as the manual "What to say
     // next" button. Only hit the network when nothing speculative is ready for this transcript state.
     if (tryAdoptSpeculative()) return
-    suggest.run({ mode: 'suggest', context: fieldContext('conversation') })
+    suggest.run({ mode: 'suggest', outputIntent: 'ambient', context: fieldContext('conversation') })
   }
 
   // No-Decision Honk (innovation #5): once per meeting, when the conversation sounds like it's wrapping
@@ -1835,7 +1835,7 @@ export function App(): JSX.Element {
     if (ask.answer?.streaming || suggest.answer?.streaming || speculative.answer?.streaming) return
     const transcript = listen.text()
     const at = Date.now()
-    const runId = speculative.run({ mode: 'suggest', context: fieldContext('conversation') })
+    const runId = speculative.run({ mode: 'suggest', outputIntent: 'ambient', context: fieldContext('conversation') })
     specWatermarkRef.current = {
       lineCount: lines.length,
       at,

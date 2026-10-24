@@ -493,6 +493,22 @@ export function AudioTab({
       </Section>
       {tapControl}
       <Section title="In meetings" icon={Headphones}>
+        <label className="flex flex-col gap-1 px-1 py-2 text-[12px] text-[color:var(--cl-muted-foreground)]">
+          <span className="flex items-center gap-2 text-[13px] text-[color:var(--cl-foreground)]">
+            Quiet mode <ManagedChip keys={settings.managedKeys} k="quietMode" />
+          </span>
+          <span>Stay quiet during calls and screen sharing</span>
+          <select
+            value={settings.quietMode}
+            onChange={(e) => patch({ quietMode: e.target.value as PublicSettings['quietMode'] })}
+            disabled={settings.managedKeys.includes('quietMode')}
+            className={'w-full ' + ctl}
+          >
+            <option value="off">Off</option>
+            <option value="calls-and-screen-sharing">During calls and screen sharing</option>
+            <option value="always">Always</option>
+          </select>
+        </label>
         <ToggleRow
           label="Auto-answer"
           desc="Draft a reply the moment they ask a question."

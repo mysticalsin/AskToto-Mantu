@@ -196,6 +196,8 @@ import * as screenPerm from './capture-permissions/screen-permission-runtime'
 import { isOrphanScreenSourcesRejection } from './capture-permissions/loopback-grant'
 import { registerScreenPermissionIpc } from './ipc/screen-permission-ipc'
 import { applyLoginItem, registerSettingsSystemIpc } from './ipc/settings-system-ipc'
+import { notifyImportComplete, quietActionForAsk, showQuietNotification } from './quiet-output'
+import { QUIET_IPC } from '@shared/quiet-ipc'
 import { claimStartup } from './lifecycle/startup-gate'
 import { reconcileLoginItem } from './lifecycle/login-item-reconcile'
 import { registerHistoryTraceIpc } from './ipc/history-trace-ipc'
@@ -1697,16 +1699,7 @@ function publishImportJob(job: ImportJob): void {
   if (win && !win.isDestroyed()) win.webContents.send(IPC.importAudioProgress, { job: view })
   if (job.state === 'done' && !notifiedImportJobs.has(job.jobId) && Notification.isSupported()) {
     notifiedImportJobs.add(job.jobId)
-    const notification = new Notification({
-      title: 'Import complete',
-      body: job.recapError
-        ? `${job.title} transcript is ready. Summary needs a retry.`
-        : `${job.title} transcript and summary are ready.`
-    })
-    notification.on('click', () => {
-      reveal('notification-click', { focus: false })
-    })
-    notification.show()
+    notifyImportComplete(job, () => reveal('notification-click', { focus: false }))
   }
 }
 
@@ -5235,10 +5228,7 @@ function startMeetingNotifier(): void {
     fetchToday: calendarToday,
     notify: (title, body) => {
       try {
-        const alert = new Notification({ title, body })
-        // Reveals the overlay only: starting a meeting needs a user gesture (marked click or hotkey).
-        alert.on('click', () => reveal('notification-click', { focus: false }))
-        alert.show()
+        showQuietNotification({ title, body, onClick: () => reveal('notification-click', { focus: false }) })
       } catch {
         /* notifications may be blocked by the OS */
       }
@@ -5613,7 +5603,14 @@ function registerIpc(): void {
   })
   // Open the Privacy pane, and the M2-0429 Screen Recording Repair / "It's already on" / Show in Finder.
   registerScreenPermissionIpc(assertMainWindow)
-  registerSettingsSystemIpc({ assertMainWindow, requireAuth, refreshLoginItem: refreshLoginItemOpenAtLoginCache })
+  registerSettingsSystemIpc({
+    assertMainWindow,
+    requireAuth,
+    refreshLoginItem: refreshLoginItemOpenAtLoginCache,
+    getQuietMode: () => getSettings().quietMode,
+    isInCall: () => inputSessionAuthority.hasMeetingReservation,
+    onQuietReleased: (batch) => win?.webContents.send(QUIET_IPC.outputReleased, batch)
+  })
   registerRightEdgeIpc(assertMainWindow, rightEdgeSession, currentRightEdgeSurface)
   // OS permission prompts, only from a person's Continue on the row that explains them, never on scene entry
   // (Apple HIG, C26); `kind` limits it to that row's prompt (permissionAskTargets). Screen Recording has no prompt
@@ -6417,9 +6414,11 @@ function registerIpc(): void {
     completeDustOAuthLogin({ ...pendingDustLogin, workspaceId })
     pendingDustLogin = null
     pendingDustDeviceCode = null // consumed — a finished login must not leave a pollable code behind
-    if (Notification.isSupported()) {
-      new Notification({ title: 'Dust connected', body: 'Métis is linked to your Dust workspace.' }).show()
-    }
+    showQuietNotification({
+      title: 'Dust connected',
+      body: 'Métis is linked to your Dust workspace.',
+      directRequest: true
+    })
     return { ok: true }
   })
 
@@ -7433,7 +7432,8 @@ function registerIpc(): void {
     send: (channel, payload) => win?.webContents.send(channel, payload),
     streams,
     metrics: askMetrics,
-    observe: spokenRepliesWiring.runtime.observeAsk
+    observe: spokenRepliesWiring.runtime.observeAsk,
+    quietAction: quietActionForAsk
   })
   ipcMain.handle(IPC.askStart, async (e, raw) => {
     assertMainWindow(e)

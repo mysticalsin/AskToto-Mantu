@@ -11,6 +11,7 @@ import { BaseSettingsSchema, DEFAULT_SETTINGS } from './ipc'
 import { CLOUD_SPEECH_FEATURE } from './broker-speech-settings'
 import { OPERATOR_REPORTING_FEATURE } from './operator-reporting-settings'
 import { SCREEN_OBSERVATION_FEATURE } from './screen-observation-settings'
+import { QUIET_MODE_FEATURE } from './quiet-mode-settings'
 import type { SettingsFeatureModule } from './settings-feature-module'
 import { SPOKEN_REPLIES_FEATURE } from './spoken-replies-settings'
 import { VOICE_ACTIONS_FEATURE } from './voice-actions-settings'
@@ -39,6 +40,7 @@ export const SETTINGS_FEATURE_MODULES: readonly SettingsFeatureModule[] = [
   CLOUD_SPEECH_FEATURE,
   OPERATOR_REPORTING_FEATURE,
   SCREEN_OBSERVATION_FEATURE,
+  QUIET_MODE_FEATURE,
   SPOKEN_REPLIES_FEATURE,
   VOICE_ACTIONS_FEATURE
 ]

@@ -1,3 +1,4 @@
+import { useEffect, useRef, useState } from 'react'
 import { MeetingOpenErrorToast } from './MeetingOpenErrorToast'
 import { NewMeetingToast } from './NewMeetingToast'
 import { OperatorGateToast } from './OperatorGateToast'
@@ -7,6 +8,17 @@ import { ShortcutFailureToast, useShortcutFailureToast } from './ShortcutFailure
 import { UpdateReadyToast } from './UpdateReadyToast'
 import { VisibilityToast, type VisibilityToastState } from './VisibilityToast'
 import type { UpdateReadyState } from '../lib/update-ready'
+import type { QuietDeferredBatch, QuietPolicy } from '@shared/quiet-mode-settings'
+
+/** Contract-tested inventory of the overlay toasts that can arrive without a current owner request. */
+export const QUIET_TOAST_COMPONENTS = ['UpdateReadyToast', 'RecoveredDraftToast', 'ShortcutFailureToast'] as const
+export const DIRECT_TOAST_COMPONENTS = [
+  'NewMeetingToast',
+  'VisibilityToast',
+  'MeetingOpenErrorToast',
+  'OperatorGateToast',
+  'RecordingConsentReminder'
+] as const
 
 export interface OverlayToastsProps {
   /** The overlay is collapsed to the floating control pill. */
@@ -41,10 +53,60 @@ export interface OverlayToastsProps {
 export function OverlayToasts(props: OverlayToastsProps): JSX.Element {
   const { updateReady } = props
   const shortcutToast = useShortcutFailureToast()
+  const [quietPolicy, setQuietPolicy] = useState<QuietPolicy | null>(null)
+  const [deferredBatch, setDeferredBatch] = useState<QuietDeferredBatch | null>(null)
+  const offeredWhileQuiet = useRef(false)
+  useEffect(() => {
+    let live = true
+    const refresh = (): void => {
+      void window.toto
+        .getQuietPolicy()
+        .then((policy) => live && setQuietPolicy(policy))
+        .catch(() => {})
+    }
+    refresh()
+    const timer = setInterval(refresh, 1000)
+    const offSettings = window.toto.onSettingsChanged(refresh)
+    const offReleased = window.toto.onQuietOutputReleased((batch) => {
+      if (
+        live &&
+        batch.channels.includes('toast') &&
+        !batch.channels.some((channel) => channel === 'proactiveSuggestion' || channel === 'autoAnswerCard')
+      )
+        setDeferredBatch(batch)
+    })
+    return () => {
+      live = false
+      clearInterval(timer)
+      offSettings()
+      offReleased()
+    }
+  }, [])
+  const hasUnsolicited = updateReady.open || props.recoveredDraftCount > 0 || !!shortcutToast.message
+  const quiet = !quietPolicy || quietPolicy.toast !== 'allow'
+  useEffect(() => {
+    if (!hasUnsolicited) offeredWhileQuiet.current = false
+    else if (quiet && !offeredWhileQuiet.current) {
+      offeredWhileQuiet.current = true
+      void window.toto.quietOutputOffer('toast').catch(() => {})
+    }
+  }, [hasUnsolicited, quiet])
+  const nextQuietToast = !quiet
+    ? updateReady.open
+      ? 'update'
+      : props.recoveredDraftCount > 0
+        ? 'recovered'
+        : shortcutToast.message
+          ? 'shortcut'
+          : null
+    : null
+  useEffect(() => {
+    if (deferredBatch && hasUnsolicited) setDeferredBatch(null)
+  }, [deferredBatch, hasUnsolicited])
   const toasts = (
     <>
       <UpdateReadyToast
-        open={updateReady.open}
+        open={nextQuietToast === 'update'}
         version={updateReady.version}
         notes={updateReady.notes}
         percent={updateReady.percent}
@@ -53,7 +115,7 @@ export function OverlayToasts(props: OverlayToastsProps): JSX.Element {
       />
       <NewMeetingToast open={props.newMeetingToast} onDismiss={props.onDismissNewMeeting} />
       <RecoveredDraftToast
-        count={props.recoveredDraftCount}
+        count={nextQuietToast === 'recovered' ? props.recoveredDraftCount : 0}
         onOpenHistory={props.onOpenRecoveredHistory}
         onDismiss={props.onDismissRecoveredDrafts}
       />
@@ -61,7 +123,7 @@ export function OverlayToasts(props: OverlayToastsProps): JSX.Element {
       <MeetingOpenErrorToast message={props.openMeetingError} onDismiss={props.onDismissOpenMeetingError} />
       <OperatorGateToast message={props.operatorGateNotice} onDismiss={props.onDismissOperatorGate} />
       <ShortcutFailureToast
-        message={shortcutToast.message}
+        message={nextQuietToast === 'shortcut' ? shortcutToast.message : null}
         onOpenShortcuts={props.onOpenShortcuts}
         onDismiss={shortcutToast.dismiss}
       />
@@ -72,6 +134,18 @@ export function OverlayToasts(props: OverlayToastsProps): JSX.Element {
         onOpenChange={props.onConsentReminderOpenChange}
         onAck={props.onAckConsentReminder}
       />
+      {deferredBatch && !quiet && !hasUnsolicited && (
+        <div role="status" aria-live="polite" className="fade-up glass-strong rounded-[14px] px-3.5 py-2.5">
+          Métis held background updates while quiet. They are ready now.
+          <button
+            type="button"
+            onClick={() => setDeferredBatch(null)}
+            className="ml-3 text-[color:var(--color-accent-2)]"
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
     </>
   )
   // These toasts render even while minimized (the control pill is a separate, narrower window
@@ -90,7 +164,8 @@ export function OverlayToasts(props: OverlayToastsProps): JSX.Element {
   // bare-fragment render.
   const widen =
     props.minimized &&
-    (updateReady.open ||
+    (!!nextQuietToast ||
+      !!deferredBatch ||
       props.newMeetingToast ||
       props.recoveredDraftCount > 0 ||
       props.consentReminderOpen ||

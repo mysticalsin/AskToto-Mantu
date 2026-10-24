@@ -17,6 +17,8 @@ import type {
 import type { ProviderId } from '@shared/providers'
 import { reportDisplayReceiptWhenPainted } from './lib/display-receipt'
 import type { AskContextRequest } from '@shared/session-context-request'
+import { buildAskStart } from './lib/ask-start'
+export { useQuietRelease } from './lib/quiet-release'
 
 export function uid(): string {
   return Math.random().toString(36).slice(2) + Date.now().toString(36)
@@ -228,6 +230,7 @@ export interface AnswerState {
   // The badge above is already cleared by then; this is what lets the UI say WHY, instead of degrading
   // silently — the same contract the live capture path holds for a failed capture.
   screenMissed?: boolean
+  outputIntent?: 'direct' | 'ambient'
   // True only for AMBIENT auto-suggestions (req.mode === 'suggest'). Marks the card as auto-answer.
   // Ambient cards stay until Tony clicks or a new question replaces them. No TTL. Never auto-send.
   ephemeral?: boolean
@@ -239,6 +242,7 @@ export interface AnswerState {
 
 export interface AskRequest {
   mode: AskMode
+  outputIntent?: 'direct' | 'ambient'
   prompt?: string
   inputOrigin?: 'user-typed' | 'user-spoken-by-owner'
   label?: string
@@ -441,31 +445,15 @@ export function useAsk(): {
         prompt: req.prompt ?? '',
         label: req.label,
         kind: req.kind,
+        outputIntent: req.outputIntent ?? 'direct',
         usedScreen: req.mode === 'vision' || !!req.wantsScreenContext,
         ephemeral: req.mode === 'suggest'
       }))
-      void window.toto
-        .ask({
-          id,
-          mode: req.mode,
-          prompt: req.prompt ?? '',
-          inputOrigin: req.inputOrigin,
-          image: req.image,
-          transcript: req.transcript,
-          context: req.context,
-          depth: req.depth,
-          kind: req.kind,
-          redactPrompt: req.redactPrompt,
-          agentOverride: req.agentOverride,
-          providerOverride: req.providerOverride,
-          wantsScreenContext: req.wantsScreenContext,
-          history: req.history ?? []
-        })
-        .catch(() => {
-          // A rejected IPC start may have no stream event. Settle only its still-owned run, using local
-          // copy rather than exposing arbitrary transport details. Late rejections cannot undo success.
-          if (idRef.current === id) finishCurrent('incomplete', 'Could not start the response. Please try again.')
-        })
+      void window.toto.ask(buildAskStart(id, req)).catch(() => {
+        // A rejected IPC start may have no stream event. Settle only its still-owned run, using local
+        // copy rather than exposing arbitrary transport details. Late rejections cannot undo success.
+        if (idRef.current === id) finishCurrent('incomplete', 'Could not start the response. Please try again.')
+      })
       return id
     },
     [resetBuffer, updateAnswer, finishCurrent]

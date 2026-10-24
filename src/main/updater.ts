@@ -7,6 +7,7 @@ import { join } from 'node:path'
 // the electron-log singleton without loading logger.ts silently writes into the real user's log.
 import { mainLog as log } from './logger'
 import { IPC, type UpdateCheckResult } from '@shared/ipc'
+import { showQuietNotification } from './quiet-output'
 import { readTrustedAdminManaged } from './win-security'
 
 /** Enterprise governance: IT can freeze the version fleet-wide by deploying an admin managed-config with
@@ -410,12 +411,11 @@ export function initAutoUpdate(getWin: () => BrowserWindow | null): void {
         // The OS notification checkForUpdatesAndNotify used to raise (see check() below for why it is
         // gone). Skipped for a download the user started from Settings — they are already watching that
         // row, and the in-app UpdateReadyToast lands either way.
-        if (!downloadInFlight && Notification.isSupported()) {
-          new Notification({
+        if (!downloadInFlight && Notification.isSupported())
+          showQuietNotification({
             title: 'A new update is ready to install',
             body: `${app.name} version ${i?.version} has been downloaded and will be automatically installed on exit`
-          }).show()
-        }
+          })
       }
     )
     // Stream download progress to the renderer so the update UI can show a "Downloading… X%" state rather

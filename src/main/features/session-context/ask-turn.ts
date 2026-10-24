@@ -2,6 +2,7 @@ import { ContractError } from '@shared/kernel/contract-data'
 import { IPC } from '@shared/ipc'
 import { isModeSkillIntegrityError } from '@shared/mode-skills'
 import type { CounterMetricId } from '@shared/responsiveness-metrics'
+import type { QuietAction, QuietOutputChannel } from '@shared/quiet-mode-settings'
 import { anchorOf, createTurnLedger, type AskGoal, type HandoffPlan, type TurnLedger } from './ask-handoff'
 import type { AskJob, ContextHandle } from './meeting-context-registry'
 
@@ -76,11 +77,15 @@ export interface AskTurnsDeps {
   ledger?: TurnLedger
   /** Counts only (G12). A sink that throws never affects an ask. */
   metrics?: { increment(id: CounterMetricId): void }
+  /** Re-checks ambient output before work and before every stream event. Direct asks never call this. */
+  quietAction?: (channel: QuietOutputChannel) => QuietAction
 }
 
 export interface AskTurnRequest {
   readonly id: string
   readonly mode: string
+  /** `ambient` is reserved for unsolicited suggestions and wrap-up nudges. */
+  readonly outputIntent?: 'direct' | 'ambient'
   /** The meeting snapshot the prompt was built from, or null when the ask has no live meeting behind it. */
   readonly handle: ContextHandle | null
   /**
@@ -105,6 +110,8 @@ export interface AskTurns {
 
 interface Entry {
   readonly id: string
+  readonly outputIntent: 'direct' | 'ambient'
+  readonly quietChannel: QuietOutputChannel
   state: 'queued' | 'running' | 'ended'
   /** The terminal answer went out (G29: a delivered stage may be handed off). */
   delivered: boolean
@@ -160,6 +167,24 @@ export function createAskTurns(deps: AskTurnsDeps): AskTurns {
     }
   }
 
+  const quietChannelFor = (request: AskTurnRequest): QuietOutputChannel =>
+    request.mode === 'suggest' ? 'proactiveSuggestion' : 'autoAnswerCard'
+
+  const quietAction = (entry: Pick<Entry, 'outputIntent' | 'quietChannel'>): QuietAction =>
+    entry.outputIntent === 'direct' ? 'allow' : (deps.quietAction?.(entry.quietChannel) ?? 'allow')
+
+  const endQuietTurn = (entry: Entry): void => {
+    if (entry.state === 'ended') return
+    finish(entry)
+    try {
+      deps.streams.get(entry.id)?.abort()
+      deps.streams.delete(entry.id)
+    } catch {
+      // A quiet transition must still close the renderer turn if a provider cannot be aborted.
+    }
+    deps.send(IPC.streamDone, { id: entry.id })
+  }
+
   /**
    * Joins the ask to the turn ledger. A deeper ask that keeps a live fast stage's identity takes over that turn: the
    * fast stage is stopped silently (its slot freed before the deep stage queues) or, if it already delivered, its
@@ -189,6 +214,10 @@ export function createAskTurns(deps: AskTurnsDeps): AskTurns {
   const turnFor = (entry: Entry, job: AskJob, handle: ContextHandle): AskTurn => ({
     send(channel, payload) {
       if (entry.state !== 'running') return false
+      if (quietAction(entry) !== 'allow') {
+        endQuietTurn(entry)
+        return false
+      }
       if (job.check().state === 'stale') {
         stop(entry, 'stale')
         return false
@@ -207,22 +236,56 @@ export function createAskTurns(deps: AskTurnsDeps): AskTurns {
   return {
     begin(request) {
       const { id, mode, handle } = request
+      const outputIntent = request.outputIntent ?? request.ask?.outputIntent ?? 'direct'
+      const quietChannel = quietChannelFor(request)
+      if (outputIntent === 'ambient' && (deps.quietAction?.(quietChannel) ?? 'allow') !== 'allow') {
+        deps.send(IPC.streamDone, { id })
+        ledger.settle(id, 'ended')
+        return Promise.resolve(null)
+      }
       if (request.ask) joinTurn(request, request.ask)
       const previous = entries.get(id)
       if (previous) stop(previous, 'cancelled')
       observe({ type: 'begin', id, mode })
       if (!handle) {
+        let ended = false
         return Promise.resolve<AskTurn>({
           send(channel, payload) {
+            if (ended) return false
+            if (outputIntent === 'ambient' && (deps.quietAction?.(quietChannel) ?? 'allow') !== 'allow') {
+              ended = true
+              try {
+                deps.streams.get(id)?.abort()
+                deps.streams.delete(id)
+              } catch {
+                // Quiet output still needs to close even if the provider stream is already gone.
+              }
+              deps.send(IPC.streamDone, { id })
+              ledger.settle(id, 'ended')
+              return false
+            }
             publish(id, channel, payload)
-            if (channel === IPC.streamDone) ledger.settle(id, 'delivered')
-            else if (channel === IPC.streamError) ledger.settle(id, 'ended')
+            if (channel === IPC.streamDone) {
+              ended = true
+              ledger.settle(id, 'delivered')
+            } else if (channel === IPC.streamError) {
+              ended = true
+              ledger.settle(id, 'ended')
+            }
             return true
           }
         })
       }
       return new Promise<AskTurn | null>((settleBegin) => {
-        const entry: Entry = { id, state: 'queued', delivered: false, release: null, settleBegin }
+        const entry: Entry = {
+          id,
+          outputIntent,
+          quietChannel,
+          state: 'queued',
+          delivered: false,
+          release: null,
+          settleBegin
+        }
         entries.set(id, entry)
         handle
           .enqueue(
