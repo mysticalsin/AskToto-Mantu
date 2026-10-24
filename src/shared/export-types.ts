@@ -33,6 +33,28 @@ export interface DiagnosticsExportResult extends ExportChannelResult {
   /** How many files were copied. */
   files?: number
 }
+/** diagnostics:preview: exactly what an export would write, after the redaction gate. Nothing is uploaded. */
+export interface DiagnosticsPreviewFile {
+  name: string
+  bytes: number
+  /** SHA-256 (hex) of exactly the bytes an export would write. */
+  sha256: string
+  /** How many values the gate replaced in this file, by category. Never the values. */
+  redactions: {
+    total: number
+    secret: number
+    email: number
+    'home-path': number
+    'url-credential': number
+    'content-field': number
+  }
+  /** The file as it would be written, cut to a display cap. */
+  text: string
+  textTruncated: boolean
+}
+export type DiagnosticsPreviewResult =
+  | { ok: true; files: DiagnosticsPreviewFile[]; totalBytes: number; totalRedactions: number }
+  | { ok: false; error: string }
 /** export:reveal */
 export interface ExportRevealResult {
   ok: boolean

@@ -10,7 +10,9 @@
  * "inject everything Electron-specific" shape as stall-monitor.ts's test seams, so this module stays
  * importable and testable outside a real Electron process.
  */
+import { join } from 'node:path'
 import { performance } from 'node:perf_hooks'
+import { recordLaunchVersion, UPGRADE_RECEIPTS_FILE } from './upgrade-receipts'
 import { beginRunWatch, markAlive, markShutdownClean, type PriorShutdown } from '../../boot-sentinel'
 import type { AuditSink } from '../../logger'
 import type { BootStage, BootWindowVariant } from './projection'
@@ -49,6 +51,7 @@ export interface RunObservabilityOptions {
     beginRunWatch?: typeof beginRunWatch
     markAlive?: typeof markAlive
     markShutdownClean?: typeof markShutdownClean
+    recordLaunchVersion?: typeof recordLaunchVersion
     startStallMonitor?: (opts: StallMonitorOptions) => StallMonitor
     startStallSampler?: (opts: StallSamplerOptions) => StallSampler
     setIntervalFn?: (handler: () => void, ms: number) => Timer
@@ -108,6 +111,11 @@ export function startRunObservability(opts: RunObservabilityOptions): RunObserva
   const powerMonitor = opts.powerMonitor
 
   const { bootId, prior } = doBeginRunWatch(opts.userData)
+  // G84: one metadata-only receipt when this launch is a first run, upgrade or rollback. Never rejects.
+  void (deps.recordLaunchVersion ?? recordLaunchVersion)({
+    logPath: join(opts.userData, UPGRADE_RECEIPTS_FILE),
+    version: opts.version
+  })
   opts.audit('app.started', {
     version: opts.version,
     platform: opts.platform,
@@ -128,12 +136,12 @@ export function startRunObservability(opts: RunObservabilityOptions): RunObserva
   const startStallSamplerNow = (): void => {
     if (stopped || !opts.stallWatchCommand || stallSampler) return
     stallSampler = doStartStallSampler({
-        command: opts.stallWatchCommand,
-        userData: opts.userData,
-        bootId,
-        aliveIntervalMs: ALIVE_INTERVAL_MS,
-        audit: opts.audit
-      })
+      command: opts.stallWatchCommand,
+      userData: opts.userData,
+      bootId,
+      aliveIntervalMs: ALIVE_INTERVAL_MS,
+      audit: opts.audit
+    })
   }
   if (opts.stallWatchCommand) {
     if (opts.deferStallSamplerStart) opts.deferStallSamplerStart(startStallSamplerNow)

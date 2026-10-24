@@ -63,6 +63,20 @@ describe('diagnostics export — logs out, content never', () => {
     expect(indexSrc).toMatch(/registerExportIpc\(/)
   })
 
+  it('G84: the preview is gated, read-only and shares the export collector (no second code path)', () => {
+    const start = exportIpcSrc.indexOf('ipcMain.handle(IPC.diagnosticsPreview')
+    expect(start, 'diagnosticsPreview handler must exist').toBeGreaterThan(-1)
+    const body = exportIpcSrc.slice(start, exportIpcSrc.indexOf('ipcMain.handle(IPC.diagnosticsExport'))
+    expect(body).toMatch(/assertMainWindow\(e\)/)
+    expect(body).toMatch(/if \(!requireAuth\(\)\)/)
+    expect(body).toMatch(/collectDiagnosticsBundle\(/)
+    expect(body).not.toMatch(/exporter\.|audit\(|showSaveDialog|fetch\(/)
+  })
+
+  it('G84: every collected text file passes the redaction gate', () => {
+    expect(bundleSrc).toMatch(/redactDiagnosticsText\(/)
+  })
+
   it('is exposed to the renderer through the preload bridge', () => {
     expect(preloadSrc).toMatch(
       /diagnosticsExport: \(\): Promise<DiagnosticsExportResult> => ipcRenderer\.invoke\(IPC\.diagnosticsExport\)/

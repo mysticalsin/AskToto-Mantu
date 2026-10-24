@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Check, ExternalLink, RefreshCw } from 'lucide-react'
+import type { DiagnosticsPreviewResult } from '@shared/export-types'
 import type { DiagnosticsExportResult, UpdateCheckResult } from '@shared/ipc'
 import { ExportReceiptNotice } from '../export/ExportReceiptNotice'
 import { TextButton } from '../../components/ui'
@@ -12,6 +13,16 @@ import { AgentStatus } from '../../components/AgentStatus'
 export function SupportBundleSection(): JSX.Element {
   const [busy, setBusy] = useState(false)
   const [result, setResult] = useState<DiagnosticsExportResult | null>(null)
+  const [preview, setPreview] = useState<DiagnosticsPreviewResult | null>(null)
+  const [previewing, setPreviewing] = useState(false)
+  const previewBundle = async (): Promise<void> => {
+    setPreviewing(true)
+    try {
+      setPreview(await window.toto.diagnosticsPreview())
+    } finally {
+      setPreviewing(false)
+    }
+  }
   const exportBundle = async (): Promise<void> => {
     setBusy(true)
     try {
@@ -26,6 +37,29 @@ export function SupportBundleSection(): JSX.Element {
       desc="Export the app's logs for support. Never includes meetings, notes, or the knowledge graph."
     >
       <div className="flex flex-col items-center gap-2">
+        <TextButton onClick={() => void previewBundle()} disabled={previewing}>
+          {previewing ? 'Preparing preview…' : 'Preview what would be exported'}
+        </TextButton>
+        {preview?.ok && (
+          <div className="flex w-full flex-col gap-1.5 text-[12px] text-[color:var(--cl-muted-foreground)]">
+            <span>
+              {preview.files.length} files, {preview.totalBytes.toLocaleString()} bytes, {preview.totalRedactions}{' '}
+              values redacted. Nothing is uploaded; you choose where the folder is saved.
+            </span>
+            {preview.files.map((file) => (
+              <details key={file.name}>
+                <summary>
+                  {file.name} · {file.bytes.toLocaleString()} bytes · {file.redactions.total} redacted
+                </summary>
+                <pre className="max-h-48 overflow-auto whitespace-pre-wrap break-all text-[11px]">
+                  {file.text}
+                  {file.textTruncated ? '\n… (preview shortened; the export contains the full file)' : ''}
+                </pre>
+              </details>
+            ))}
+          </div>
+        )}
+        {preview && !preview.ok && <span className="text-[12px] text-[var(--color-danger)]">{preview.error}</span>}
         <TextButton onClick={() => void exportBundle()} disabled={busy}>
           {busy ? 'Exporting…' : 'Export diagnostics bundle'}
         </TextButton>
