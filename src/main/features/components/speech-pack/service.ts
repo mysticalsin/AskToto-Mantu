@@ -15,25 +15,29 @@ import {
   type SpeechPackProgress,
   type SpeechPackSnapshot
 } from '@shared/speech-pack'
-import type { SpeechPackEngine, SpeechPackState } from './engine'
+import type { SpeechPackEngine } from './engine'
 import { createSpeechPackEngine } from './engine'
+import type { SpeechPackEvictResult } from '../offload/evict-pack'
 import { speechPackEnabled } from './flag'
 import {
-  PARAKEET_TDT_V3_INT8,
   SPEECH_PACK_COMPONENTS,
   SELF_TEST_FIXTURE,
-  WHISPER_BASE_Q8,
   componentBytes,
   componentDownloadBytes,
-  isImmutableUrl,
   type SpeechPackComponent,
   type SpeechPackComponentId
 } from './manifest'
+import { finiteState, selectedId, sourceHost } from './service-helpers'
 import { componentManifestIdentity, resolveSpeechPack } from './resolver'
 import { runSpeechPackSelfTest } from './self-test'
 import type { PriorReadyMarker } from './activation-authority'
 import type { PackageRuntimeContract } from './package-contract'
-import { installedOptionalComponents, resolveOptionalComponents } from './optional-components'
+import {
+  installedOptionalComponents,
+  readLocalModelFacts,
+  resolveOptionalComponents,
+  type LocalModelFacts
+} from './optional-components'
 import { resolveOptionalRuntimeReadiness, runtimeIdsForEngine, runtimeIdsForLocalLlm } from './runtime-components'
 
 export interface SpeechPackServiceOptions {
@@ -67,6 +71,8 @@ export interface SpeechPackServiceOptions {
   /** Existing packaged model readiness, separate from a userData speech-pack activation. */
   engineModelReady?: (engine: 'whisper' | 'parakeet' | 'apple') => boolean | Promise<boolean>
   shutdownTimeoutMs?: number
+  /** Local LLM registry and runtime facts for the optional-component status (G87); a throw reads as unknown. */
+  localModelFacts?: () => LocalModelFacts | undefined
 }
 
 interface InstallPlanRecord {
@@ -82,25 +88,6 @@ interface InstallPlanRecord {
 }
 
 const INSTALL_PLAN_TTL_MS = 10 * 60 * 1000
-
-function selectedId(engine: 'whisper' | 'parakeet' | 'apple'): SpeechPackComponentId | null {
-  return engine === 'whisper' ? WHISPER_BASE_Q8.id : engine === 'parakeet' ? PARAKEET_TDT_V3_INT8.id : null
-}
-
-function finiteState(state: SpeechPackState): SpeechPackProgress['state'] {
-  return state.status === 'not-installed' ? 'paused' : state.status === 'error' ? 'error' : state.status
-}
-
-function sourceHost(component: SpeechPackComponent): string | null {
-  const url = component.source.kind === 'files' ? component.source.baseUrl : component.source.archive?.url
-  if (!url || !isImmutableUrl(url)) return null
-  try {
-    const parsed = new URL(url)
-    return parsed.protocol === 'https:' && parsed.hostname ? parsed.hostname : null
-  } catch {
-    return null
-  }
-}
 
 /** Explicit-consent-only service. Status is cheap and never creates the engine or touches the network. */
 export function createSpeechPackService(options: SpeechPackServiceOptions) {
@@ -312,6 +299,16 @@ export function createSpeechPackService(options: SpeechPackServiceOptions) {
     return engine
   }
 
+  // Offload (G87): busy while an install, repair or rollback owns the component; reviewed install plans are revoked.
+  const evictSpeechComponent = async (id: SpeechPackComponentId): Promise<SpeechPackEvictResult> => {
+    if (closing || pendingAdmissions.has(id) || activity.has(id) || rollbackAuthority.has(id))
+      return { ok: false, reason: 'busy' }
+    authorityRevision += 1
+    installPlans.clear()
+    repairVerified.delete(id)
+    return getEngine().evict(id)
+  }
+
   const snapshot = async (): Promise<SpeechPackSnapshot> => {
     const packageContract = await currentPackageContract()
     const profile = packageContract.profile
@@ -420,7 +417,9 @@ export function createSpeechPackService(options: SpeechPackServiceOptions) {
       components: rows,
       optionalComponents: resolveOptionalComponents({
         contract: packageContract,
-        installed: installedOptionalComponents(rows)
+        installed: installedOptionalComponents(rows),
+        speechRows: rows,
+        localModel: readLocalModelFacts(options.localModelFacts)
       }),
       progress: currentProgress
     })
@@ -718,6 +717,7 @@ export function createSpeechPackService(options: SpeechPackServiceOptions) {
     action,
     planPreview,
     installWithPlan,
+    evictSpeechComponent,
     subscribe(listener: (progress: SpeechPackProgress) => void): () => void {
       listeners.add(listener)
       return () => listeners.delete(listener)

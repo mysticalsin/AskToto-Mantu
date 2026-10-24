@@ -22,6 +22,8 @@ import {
   createSpeechPackService
 } from './features/components'
 import { registerSpeechPackIpc } from './ipc/speech-pack-ipc'
+import { localModelFactsFromMain, startComponentOffload } from './component-offload-bootstrap'
+import { join } from 'node:path'
 import { startSpeechPackPoll, waitForSpeechPackQuitFlush } from './infra/scheduler/speech-pack-poll'
 import type { QuitTrace } from './lifecycle/quit-trace'
 
@@ -119,6 +121,8 @@ export function startSpeechPackDesktopFromMain(options: {
   }
   return startSpeechPackDesktop({
     ...options,
+    localModelFacts: localModelFactsFromMain,
+    offload: { receiptsPath: join(app.getPath('userData'), 'component-offload-receipts.json') },
     selectedEngine: () => getSettings().asrEngine,
     selectionIdentity: getSpeechPackSelectionIdentity,
     policyAllowsTransfer,
@@ -181,6 +185,9 @@ export function startSpeechPackDesktop(options: {
   packageRuntimeContract?: Parameters<typeof createSpeechPackService>[0]['packageRuntimeContract']
   engineModelReady?: Parameters<typeof createSpeechPackService>[0]['engineModelReady']
   engineRuntimeReady?: Parameters<typeof createSpeechPackService>[0]['engineRuntimeReady']
+  localModelFacts?: Parameters<typeof createSpeechPackService>[0]['localModelFacts']
+  /** Optional-component offload (G87); absent in tests that only exercise the speech-pack surface. */
+  offload?: { receiptsPath: string }
   ipcMain: Parameters<typeof registerSpeechPackIpc>[0]['ipcMain']
   assertMainWindow: Parameters<typeof registerSpeechPackIpc>[0]['assertMainWindow']
   sendProgress: Parameters<typeof registerSpeechPackIpc>[0]['sendProgress']
@@ -223,7 +230,21 @@ export function startSpeechPackDesktop(options: {
     }
   }
   refresh()
-  const unregister = registerSpeechPackIpc({ ...options, service })
+  const unregisterSpeech = registerSpeechPackIpc({ ...options, service })
+  const offload = options.offload
+    ? startComponentOffload({
+        service,
+        rootDir: options.rootDir,
+        receiptsPath: options.offload.receiptsPath,
+        captureActive: options.captureActive,
+        ipcMain: options.ipcMain,
+        assertMainWindow: options.assertMainWindow
+      })
+    : null
+  const unregister = (): void => {
+    offload?.stop()
+    unregisterSpeech()
+  }
   const stopPoll = startSpeechPackPoll(refresh)
   const desktop = {
     refresh,

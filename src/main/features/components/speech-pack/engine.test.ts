@@ -25,7 +25,7 @@ import {
 } from './engine'
 import type { SpeechPackComponent, SpeechPackComponentId } from './manifest'
 import { rangeHandler, serve, sha256Hex, type FixtureServer } from './test-helpers/test-server.fixture'
-import { componentManifestIdentity } from './resolver'
+import { componentManifestIdentity, resolveSpeechPack } from './resolver'
 
 const WHISPER: SpeechPackComponentId = 'asr.whisper-base-q8'
 const PARAKEET: SpeechPackComponentId = 'asr.parakeet-tdt-0.6b-v3-int8'
@@ -1251,6 +1251,78 @@ describe('speech-pack engine', () => {
       await engine.whenIdle()
       expect(engine.getState(PARAKEET)).toMatchObject({ status: 'error', kind: 'http' })
     })
+  })
+})
+
+describe('speech-pack engine evict (G87)', () => {
+  it('evict removes only that component and the resolver reports not-installed', async () => {
+    server = await serveFiles()
+    const w = whisper(server.base)
+    const p = parakeetFiles(server.base)
+    const engine = make([w, p])
+    engine.enqueue([WHISPER, PARAKEET])
+    await engine.whenIdle()
+    const sibling = join(dir, 'meetings', 'note.txt')
+    mkdirSync(join(dir, 'meetings'), { recursive: true })
+    writeFileSync(sibling, 'keep')
+    const events: string[] = []
+    engine.subscribe(({ id, state }) => events.push(`${id}:${state.status}`))
+
+    const result = await engine.evict(WHISPER)
+
+    expect(result.ok).toBe(true)
+    // Measured from the files on disk: the pack files plus the marker, never less than the pinned weights.
+    expect(result.ok && result.bytesFreed).toBeGreaterThanOrEqual(total(w))
+    expect(existsSync(join(root, WHISPER))).toBe(false)
+    expect(existsSync(join(root, '.staging', WHISPER))).toBe(false)
+    expect((await resolveSpeechPack(root, w)).status).toBe('not-installed')
+    expect(engine.getState(WHISPER)).toEqual({ status: 'not-installed' })
+    expect(events).toContain(`${WHISPER}:not-installed`)
+    expect(packMatches(p, join(root, PARAKEET, '1'))).toBe(true)
+    expect((await resolveSpeechPack(root, p)).status).toBe('ready')
+    expect(readFileSync(sibling, 'utf8')).toBe('keep')
+  })
+
+  it('evict reports absent when nothing is installed', async () => {
+    server = await serveFiles()
+    const engine = make([whisper(server.base)])
+    expect(await engine.evict(WHISPER)).toEqual({ ok: false, reason: 'absent' })
+  })
+
+  it('evict refuses while the component is queued or downloading', async () => {
+    server = await serveFiles()
+    const w = whisper(server.base)
+    const engine = make([w])
+    engine.enqueue([WHISPER])
+    expect(await engine.evict(WHISPER)).toEqual({ ok: false, reason: 'busy' })
+    await engine.whenIdle()
+    expect(engine.getState(WHISPER)).toEqual({ status: 'ready' })
+    expect(packMatches(w, join(root, WHISPER, '1'))).toBe(true)
+  })
+
+  it('evict refuses a symlinked component directory instead of following it', async () => {
+    server = await serveFiles()
+    const w = whisper(server.base)
+    const engine = make([w])
+    const outside = join(dir, 'outside')
+    mkdirSync(outside, { recursive: true })
+    writeFileSync(join(outside, 'x.txt'), 'keep')
+    mkdirSync(root, { recursive: true })
+    symlinkSync(outside, join(root, WHISPER), 'dir')
+    expect(await engine.evict(WHISPER)).toEqual({ ok: false, reason: 'failed' })
+    expect(readFileSync(join(outside, 'x.txt'), 'utf8')).toBe('keep')
+  })
+
+  it('a crash after the rename leaves an evict-* entry that initialise sweeps', async () => {
+    server = await serveFiles()
+    const w = whisper(server.base)
+    const leftover = join(root, '.staging', WHISPER, 'evict-0123')
+    mkdirSync(leftover, { recursive: true })
+    writeFileSync(join(leftover, 'a.bin'), contents['a.bin'])
+    const engine = make([w])
+    await engine.initialise()
+    expect(existsSync(leftover)).toBe(false)
+    expect(engine.getState(WHISPER)).toEqual({ status: 'not-installed' })
   })
 })
 

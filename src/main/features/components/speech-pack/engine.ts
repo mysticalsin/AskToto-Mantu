@@ -67,6 +67,8 @@ import {
 } from './marker'
 import { createSpeechPackStateEvents, type SpeechPackState, type SpeechPackStateEvent } from './state-events'
 import { SpeechPackOperationQueue } from './operation-queue'
+import { evictGuarded, type SpeechPackEvictResult } from '../offload/evict-pack'
+import { sweepAside } from '../offload/fs-evict'
 
 export const DISK_HEADROOM_BYTES = 512 * 1024 * 1024
 export const EMIT_INTERVAL_MS = 250
@@ -145,6 +147,8 @@ export interface SpeechPackEngine {
   cancel(id: SpeechPackComponentId): void
   /** Resolves when nothing is queued or running. */
   whenIdle(): Promise<void>
+  /** Offload (G87): delete one component's files; refuses while it is queued or running. See evict-pack.ts. */
+  evict(id: SpeechPackComponentId): Promise<SpeechPackEvictResult>
 }
 
 /** The activation seam models process death, where JavaScript rollback code cannot run. */
@@ -178,6 +182,7 @@ export function createSpeechPackEngine(options: SpeechPackEngineOptions): Speech
   const forcedRepairs = new Set<SpeechPackComponentId>()
   const controllers = new Map<SpeechPackComponentId, AbortController>()
   const cleanups = new Map<SpeechPackComponentId, Promise<void>>()
+  const evicting = new Set<SpeechPackComponentId>()
   const jobs = new SpeechPackOperationQueue<SpeechPackComponentId>((job) => run(job, forcedRepairs.delete(job.id)))
 
   // --- paths ---
@@ -427,6 +432,18 @@ export function createSpeechPackEngine(options: SpeechPackEngineOptions): Speech
     await ensureOwnedDirectory(workDir(c), true)
   }
 
+  const evict = (id: SpeechPackComponentId): Promise<SpeechPackEvictResult> =>
+    evictGuarded({
+      rootDir,
+      id,
+      known: byId.has(id),
+      running:
+        jobs.isRunning(id) ||
+        ['queued', 'downloading', 'verifying', 'self-testing'].includes(states.get(id)?.status ?? ''),
+      inProgress: evicting,
+      onEvicted: () => set(id, { status: 'not-installed' })
+    })
+
   async function initialise(): Promise<void> {
     for (const c of components) {
       try {
@@ -434,6 +451,7 @@ export function createSpeechPackEngine(options: SpeechPackEngineOptions): Speech
       } catch {
         continue
       }
+      await sweepAside(join(rootDir, '.staging', c.id), 'evict-')
       const dir = finalDir(c)
       let marker = await readMarkerSnapshot(c, true)
       if (!(await exists(dir))) {
@@ -736,7 +754,7 @@ export function createSpeechPackEngine(options: SpeechPackEngineOptions): Speech
       for (const id of ordered) {
         const status = states.get(id)?.status
         // One install per component at a time; a pack that is ready or already moving is left alone.
-        if (!status || status === 'ready' || jobs.isRunning(id)) continue
+        if (!status || status === 'ready' || jobs.isRunning(id) || evicting.has(id)) continue
         if (status === 'queued' && id !== selected) continue
         jobs.remove(id)
         forcedRepairs.delete(id)
@@ -747,7 +765,7 @@ export function createSpeechPackEngine(options: SpeechPackEngineOptions): Speech
     },
     repair(id, transaction = Symbol('speech-pack-repair')) {
       const status = states.get(id)?.status
-      if (!status || jobs.isRunning(id) || status === 'queued') return
+      if (!status || jobs.isRunning(id) || status === 'queued' || evicting.has(id)) return
       jobs.remove(id)
       forcedRepairs.add(id)
       set(id, { status: 'queued' })
@@ -774,6 +792,7 @@ export function createSpeechPackEngine(options: SpeechPackEngineOptions): Speech
         if (job) options.onTransactionSettled?.(id, job.transaction)
       }
     },
-    whenIdle: () => jobs.whenIdle()
+    whenIdle: () => jobs.whenIdle(),
+    evict
   }
 }
