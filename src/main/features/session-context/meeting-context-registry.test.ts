@@ -196,6 +196,73 @@ describe('meeting context registry: renderer-committed local lines', () => {
   })
 })
 
+describe('meeting context registry: onUtterance (G73)', () => {
+  type Seen = { startedAt: number; state: string; revision: number; text: string; utteranceId: string }
+  const watched = (): { seen: Seen[]; over: Partial<MeetingContextRegistryDeps> } => {
+    const seen: Seen[] = []
+    return {
+      seen,
+      over: {
+        onUtterance: (_frame, startedAt, u) =>
+          seen.push({ startedAt, state: u.state, revision: u.revision, text: u.text, utteranceId: u.utteranceId })
+      }
+    }
+  }
+
+  it('onUtterance fires for applied finals and retractions only', () => {
+    const { seen, over } = watched()
+    const h = harness(over)
+    h.registry.ingestLocalLine(FRAME, { startedAt: STARTED, t: STARTED + 1_000, speaker: 'them', text: 'bonjour' })
+    expect(seen).toHaveLength(1)
+    expect(seen[0]).toMatchObject({ startedAt: STARTED, state: 'final', revision: 1, text: 'bonjour' })
+    h.registry.retractLocalLine(FRAME, { startedAt: STARTED, t: STARTED + 1_000 })
+    expect(seen).toHaveLength(2)
+    expect(seen[1]).toMatchObject({ state: 'retracted', text: '', utteranceId: seen[0].utteranceId })
+  })
+
+  it('reports a corrected delivered final as a higher revision of the same utterance', () => {
+    const { seen, over } = watched()
+    const h = harness(over)
+    h.registry.ingestDelivered(FRAME, STARTED, segment({ sequence: 1, index: 1, text: 'we ship on friday' }))
+    h.registry.ingestDelivered(
+      FRAME,
+      STARTED,
+      segment({ sequence: 2, index: 1, text: 'we ship on Monday', revision: 2 })
+    )
+    expect(seen.map((s) => [s.revision, s.text])).toEqual([
+      [1, 'we ship on friday'],
+      [2, 'we ship on Monday']
+    ])
+    expect(seen[0].utteranceId).toBe(seen[1].utteranceId)
+  })
+
+  it('not for partials, duplicates or stale revisions', () => {
+    const { seen, over } = watched()
+    const h = harness(over)
+    h.registry.ingestDelivered(FRAME, STARTED, segment({ sequence: 1, index: 1, text: 'half', final: false }))
+    expect(seen).toHaveLength(0)
+    const second = segment({ sequence: 3, index: 1, text: 'new text', revision: 2 })
+    h.registry.ingestDelivered(FRAME, STARTED, second)
+    h.registry.ingestDelivered(FRAME, STARTED, second)
+    h.registry.ingestDelivered(FRAME, STARTED, segment({ sequence: 4, index: 1, text: 'older', revision: 1 }))
+    expect(seen).toHaveLength(1)
+    expect(seen[0].revision).toBe(2)
+  })
+
+  it('a throwing listener never breaks ingest', () => {
+    const h = harness({
+      onUtterance: () => {
+        throw new Error('listener bug')
+      }
+    })
+    expect(
+      h.registry.ingestLocalLine(FRAME, { startedAt: STARTED, t: STARTED + 1_000, speaker: 'them', text: 'still here' })
+    ).toBe(true)
+    expect(text(h)).toBe('THEM: still here')
+    expect(h.degraded).not.toHaveBeenCalled()
+  })
+})
+
 describe('meeting context registry: ownership', () => {
   it('serves a meeting only to the frame that opened it', () => {
     const h = harness()

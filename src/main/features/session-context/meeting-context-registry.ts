@@ -36,6 +36,22 @@ export interface MeetingContextRegistryDeps {
    * request reads the corrected ledger on its own.
    */
   onOutputsStale?(frame: FrameKey, outputIds: readonly string[]): void
+  /**
+   * G73: an applied final (any revision) or retraction, after the ledger accepted it. Never fires for partials,
+   * duplicates or stale revisions. The text is meeting content: a listener must not log it. A throwing listener is contained.
+   */
+  onUtterance?(
+    frame: FrameKey,
+    meetingStartedAt: number,
+    utterance: {
+      scope: SessionScope
+      utteranceId: string
+      revision: number
+      state: 'final' | 'retracted'
+      text: string
+      lang?: string
+    }
+  ): void
   /** Monotonic milliseconds, injectable for tests. */
   now?(): number
 }
@@ -447,7 +463,25 @@ export function createMeetingContextRegistry(deps: MeetingContextRegistryDeps): 
   const apply = (context: MeetingContext, event: TranscriptLedgerEvent): boolean => {
     ensureStream(context, event.streamId, event.streamEpoch)
     const verdict = context.ledger.apply(event)
-    if (verdict.applied) publish(context)
+    if (verdict.applied) {
+      publish(context)
+      if (event.state === 'final' || event.state === 'retracted') {
+        try {
+          deps.onUtterance?.(context.frame, context.startedAt, {
+            scope: context.scope.scope,
+            utteranceId: event.utteranceId,
+            revision: event.revision,
+            state: event.state,
+            text: event.text,
+            ...(context.labels.get(event.utteranceId)?.lang
+              ? { lang: context.labels.get(event.utteranceId)?.lang }
+              : {})
+          })
+        } catch {
+          // a translation listener never changes the canonical transcript
+        }
+      }
+    }
     return verdict.applied || verdict.reason === 'duplicate-event' || verdict.reason === 'duplicate-revision'
   }
 

@@ -66,7 +66,8 @@ function wire() {
     ipcMain,
     assertMainWindow: vi.fn(),
     currentInputSessionContext: () => ({ authSessionGeneration: 1, contextRevision: 3 }),
-    privateView: () => false
+    privateView: () => false,
+    translationProviderDeps: () => ({}) as never
   })
   return { ipcMain, wiring }
 }
@@ -108,7 +109,8 @@ describe('owner session wiring', () => {
       ipcMain,
       assertMainWindow: vi.fn(),
       currentInputSessionContext: () => ({ authSessionGeneration: 1, contextRevision: 3 }),
-      privateView: () => false
+      privateView: () => false,
+      translationProviderDeps: () => ({}) as never
     })
     expect(bootedWith).toEqual([wiring.ownerSession])
     expect(ipcMain.handle).toHaveBeenCalled()
@@ -127,7 +129,8 @@ describe('owner session wiring', () => {
       ipcMain,
       assertMainWindow: vi.fn(),
       currentInputSessionContext: () => ({ authSessionGeneration: 1, contextRevision: 3 }),
-      privateView: () => false
+      privateView: () => false,
+      translationProviderDeps: () => ({}) as never
     })
     // Every handler (including owner session, connector accounts, ledger, journal and feature seams) follows policy setup.
     expect(installedAtFirstHandler).toEqual(
@@ -215,7 +218,8 @@ describe('owner session wiring', () => {
   it('closes the store, the meeting context and the live journal session when a meeting ends', () => {
     vi.mocked(onDraftMeetingFinalizing).mockClear()
     wire()
-    expect(onDraftMeetingFinalizing).toHaveBeenCalledTimes(3)
+    // store closure, meeting context, live journal, and the G73 translation channel
+    expect(onDraftMeetingFinalizing).toHaveBeenCalledTimes(4)
     expect(typeof vi.mocked(onDraftMeetingFinalizing).mock.calls[0][0]).toBe('function')
   })
 })

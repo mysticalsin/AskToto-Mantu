@@ -8,6 +8,7 @@ import { Markdown } from './Markdown'
 import { TextButton } from './ui'
 import { AgentStatus } from './AgentStatus'
 import { useFlash } from '../lib/useFlash'
+import { translationFor, useLiveTranslation, type TranslationEntry } from '../lib/live-translation'
 
 // Cap on how many transcript lines render live in the copilot panel — see the comment above transcriptRows.
 const TRANSCRIPT_RENDER_LIMIT = 150
@@ -22,10 +23,13 @@ const TRANSCRIPT_RENDER_LIMIT = 150
  *  attachSpeakerName, Whisper-engine only). */
 const TranscriptRow = memo(function TranscriptRow({
   line,
-  youLabel
+  youLabel,
+  translation
 }: {
   line: TranscriptLine
   youLabel?: string | null
+  /** G73: the translation of this exact revision of the line, a separate channel that never rewrites `line.text`. */
+  translation?: TranslationEntry | null
 }): JSX.Element {
   const label = transcriptDisplayName(line, { youLabel })
   return (
@@ -43,10 +47,14 @@ const TranscriptRow = memo(function TranscriptRow({
           line.provisional ? 'opacity-40' : ''
         ].join(' ')}
       >
-        <span className="mr-1.5 text-[10px] font-semibold uppercase text-[color:var(--color-ink-3)]">
-          {label}
-        </span>
+        <span className="mr-1.5 text-[10px] font-semibold uppercase text-[color:var(--color-ink-3)]">{label}</span>
         {line.text}
+        {translation && (
+          <div aria-label="Translation" className="mt-0.5 text-[12px] italic text-[color:var(--color-ink-3)]">
+            {translation.text}
+            {translation.lowConfidence && <span className="ml-1.5 not-italic">Low confidence</span>}
+          </div>
+        )}
       </div>
     </div>
   )
@@ -86,6 +94,7 @@ export const Copilot = memo(function Copilot({
 }): JSX.Element {
   const scroller = useRef<HTMLDivElement>(null)
   const [copied, flashCopied] = useFlash(1500)
+  const translations = useLiveTranslation()
 
   // The transcript only ever grows — remapping the WHOLE array to JSX on every render (a array-index key,
   // no memoization) meant every parent re-render (e.g. the old 1Hz `seconds` tick) re-diffed the entire
@@ -106,8 +115,15 @@ export const Copilot = memo(function Copilot({
     // row's key as the render-limit window slides forward, defeating TranscriptRow's memoization and
     // remounting the whole visible slice on every new line. `start + i` never changes for an
     // already-committed line, so React skips re-rendering every row whose `line` prop is unchanged.
-    return visible.map((l, i) => <TranscriptRow key={`${l.t}-${start + i}`} line={l} youLabel={youLabel} />)
-  }, [lines])
+    return visible.map((l, i) => (
+      <TranscriptRow
+        key={`${l.t}-${start + i}`}
+        line={l}
+        youLabel={youLabel}
+        translation={translationFor(translations, l)}
+      />
+    ))
+  }, [lines, translations])
 
   // Transcript is hidden during the call; the bar's "Transcript" button drives showTranscript on demand.
   const showTx = showTranscript
@@ -178,7 +194,9 @@ export const Copilot = memo(function Copilot({
           className="flex items-start gap-1.5 rounded-lg border border-[var(--color-danger)]/40 bg-[var(--color-danger)]/10 px-3 py-2 text-[12px] leading-snug text-[color:var(--color-danger)] break-words [overflow-wrap:anywhere]"
         >
           <AlertTriangle size={13} className="mt-0.5 shrink-0" />
-          <span>Autosave is failing. Recent minutes may not be saved. Check free disk space and folder permissions.</span>
+          <span>
+            Autosave is failing. Recent minutes may not be saved. Check free disk space and folder permissions.
+          </span>
         </div>
       )}
       {/* Suggestion card — neutral at rest; accent fill/border only when content is present */}
@@ -205,14 +223,9 @@ export const Copilot = memo(function Copilot({
               </div>
             )}
             <div className="flex items-center gap-1.5">
-              {suggestion?.text && suggestion?.streaming && (
-                <AgentStatus kind="working" size="inline" caption />
-              )}
+              {suggestion?.text && suggestion?.streaming && <AgentStatus kind="working" size="inline" caption />}
               {suggestion?.text && (
-                <TextButton
-                  ariaLabel={copied ? 'Copied' : 'Copy suggestion'}
-                  onClick={copyText}
-                >
+                <TextButton ariaLabel={copied ? 'Copied' : 'Copy suggestion'} onClick={copyText}>
                   {copied ? <Check size={11} className="text-[var(--color-success)]" /> : <Copy size={11} />}
                 </TextButton>
               )}
@@ -231,9 +244,8 @@ export const Copilot = memo(function Copilot({
               'Pick an action below, or type a question.'
             ) : (
               <>
-                Press the{' '}
-                <AudioLines size={12} className="inline-block align-middle" />{' '}
-                in the toolbar to start listening to your call.
+                Press the <AudioLines size={12} className="inline-block align-middle" /> in the toolbar to start
+                listening to your call.
               </>
             )}
           </div>
@@ -281,14 +293,7 @@ export const Copilot = memo(function Copilot({
           )}
         </div>
       )}
-      {loading && (
-        <AgentStatus
-          kind="loading-model"
-          size="inline"
-          caption
-          percent={loadingPct}
-        />
-      )}
+      {loading && <AgentStatus kind="loading-model" size="inline" caption percent={loadingPct} />}
       {/* Transcript — hidden during the call; shown only when the user opens it (bar → Transcript). */}
       {showTx && (
         <section>
@@ -300,10 +305,7 @@ export const Copilot = memo(function Copilot({
               Earlier lines are in the Review transcript
             </div>
           )}
-          <div
-            ref={scroller}
-            className="scroll-thin flex max-h-[240px] flex-col gap-1.5 overflow-y-auto pr-1"
-          >
+          <div ref={scroller} className="scroll-thin flex max-h-[240px] flex-col gap-1.5 overflow-y-auto pr-1">
             {lines.length === 0 ? (
               <div className="py-2 text-[13px] text-[color:var(--color-ink-2)]">
                 {listening ? 'Waiting for speech…' : 'No audio yet.'}

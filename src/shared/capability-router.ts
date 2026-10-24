@@ -29,7 +29,8 @@ export const ROUTER_CAPABILITIES = [
   'deep_answer',
   'vision',
   'command_intent',
-  'dictation_polish'
+  'dictation_polish',
+  'translate'
 ] as const
 export type RouterCapability = (typeof ROUTER_CAPABILITIES)[number]
 
@@ -53,7 +54,8 @@ export const ROUTER_DEADLINES_MS: Readonly<Record<RouterCapability, number>> = {
   deep_answer: 60_000,
   vision: 25_000,
   command_intent: 4_000,
-  dictation_polish: 3_000
+  dictation_polish: 3_000,
+  translate: 4_000
 }
 
 const CAPABILITY_LABELS: Record<RouterCapability, string> = {
@@ -62,7 +64,8 @@ const CAPABILITY_LABELS: Record<RouterCapability, string> = {
   deep_answer: 'deeper answers',
   vision: 'screen questions',
   command_intent: 'command understanding',
-  dictation_polish: 'dictation cleanup'
+  dictation_polish: 'dictation cleanup',
+  translate: 'live translation'
 }
 
 /**
@@ -92,6 +95,9 @@ export function policyCapabilityFor(capability: RouterCapability): ModelPolicyCa
       return 'commandAgent'
     case 'dictation_polish':
       return null
+    case 'translate':
+      // ASSUMED (G73): transcript processing shares the recap policy; the Operator schema has no translation entry yet.
+      return 'recap'
   }
 }
 

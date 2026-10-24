@@ -1,5 +1,7 @@
 import { app, webContents, webFrameMain, type IpcMain, type IpcMainInvokeEvent } from 'electron'
 import { createMainTranscriptRevision } from '../features/meetings/main-transcript-revision'
+import { bindLiveTranslation } from '../features/translation/wiring'
+import type { TranslationCallDeps } from '../features/translation/translation-call'
 import { bindMeetingContexts, type MeetingContexts } from '../features/session-context/wiring'
 import { bindTranscriptCheckpointStore } from '../features/meetings/transcript-checkpoint-binding'
 import { bindMeetingEndClosure, bindOwnerRevocationClosure } from '../features/meetings/session-closure'
@@ -38,6 +40,8 @@ export interface OwnerSessionWiringDeps {
   currentInputSessionContext(): { authSessionGeneration: number; contextRevision: number }
   /** The Private View switch (the single authority lives in index.ts); part of the context's permission set. */
   privateView(): boolean
+  /** G73: the provider seam live translation calls through (the same deps as the imported recap). */
+  translationProviderDeps(): TranslationCallDeps
 }
 
 export interface OwnerSessionWiring {
@@ -105,7 +109,20 @@ export function createOwnerSessionWiring(deps: OwnerSessionWiringDeps): OwnerSes
   bindMeetingSpeechInvalidation(ownerSession, meetingSpeech)
   bindTranscriptCheckpointStore(transcriptRevision.store)
   bindMeetingEndClosure(onDraftMeetingFinalizing, transcriptRevision.store)
+  // G73: the live translation channel follows the transcript registry; it ends with the meeting or the owner session.
+  const translation = bindLiveTranslation({
+    providerDeps: deps.translationProviderDeps,
+    readTarget: () => {
+      const published = getPublishedSettingsObservation()
+      return published?.readable ? published.settings.liveTranslationTarget : 'off'
+    },
+    frameFor: (processId, routingId) => webFrameMain.fromId(processId, routingId),
+    log: (code) => mainLog.warn(code)
+  })
+  onDraftMeetingFinalizing((startedAt) => translation.closeMeeting(startedAt))
+  ownerSession.onRevoked((ref) => translation.closeFrame(ref.frameOwner))
   const meetingContexts = bindMeetingContexts({
+    onUtterance: translation.onUtterance,
     ipcMain,
     authorizeSender,
     requireAuth: () => requireAuth(),

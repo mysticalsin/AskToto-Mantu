@@ -8,6 +8,7 @@ import {
   createMeetingContextRegistry,
   createMeetingScopeResolver,
   type MeetingContextRegistry,
+  type MeetingContextRegistryDeps,
   type QueueHealthSink
 } from './meeting-context-registry'
 
@@ -39,6 +40,8 @@ export interface MeetingContextsDeps {
    * Ids only, never text. A throwing sender is contained by the registry.
    */
   sendOutputsStale?(frame: { processId: number; routingId: number }, outputIds: readonly string[]): void
+  /** G73: an applied final or retraction, for the live translation channel. Text is meeting content; never log it. */
+  onUtterance?: MeetingContextRegistryDeps['onUtterance']
   /** G12 queue-health recorder (`queue_wait_ms`, `queue_depth_peak`). Typed seam: absent until G12 lands here. */
   queueHealth?: QueueHealthSink
 }
@@ -70,6 +73,7 @@ export function bindMeetingContexts(deps: MeetingContextsDeps): MeetingContexts 
     permissions: () => meetingPermissions(deps.privateView()),
     onDegraded: deps.onDegraded,
     queueHealth: deps.queueHealth,
+    onUtterance: deps.onUtterance,
     onOutputsStale: (frame, outputIds) => deps.sendOutputsStale?.(frame, outputIds)
   })
   deps.ownerSession.onRevoked((ref) => registry.closeFrame(ref.frameOwner))

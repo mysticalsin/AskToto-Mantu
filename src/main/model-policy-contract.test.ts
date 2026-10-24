@@ -359,7 +359,7 @@ describe('M2-0412 — every createStream( call site in src/main resolves through
       `${MAIN_INDEX}#runImportPolish`,
       'src/main/index.ts#askVisionForScreenCheck',
       'src/main/index.ts#registerIpc',
-      'src/main/import-recap.ts#runImportedRecap',
+      'src/main/import-recap.ts#runTranscriptCompletion',
       'src/main/brain/ingest.ts#runCompletionOnce'
     ]) {
       expect(found.has(expected), expected).toBe(true)

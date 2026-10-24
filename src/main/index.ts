@@ -2099,24 +2099,21 @@ async function runImportPolish(lines: TranscriptLine[]): Promise<TranscriptLine[
   return out
 }
 
+const transcriptProviderDeps = () => ({
+  getSettings,
+  getApiKey,
+  getAllowedProviders,
+  operatorFundedProviders,
+  operatorAskTransport,
+  providerBaseUrl,
+  redactSecrets,
+  createStream,
+  refreshDustAuth: makeRefreshDustAuth,
+  logWarn: (message: string) => mainLog.warn(message),
+  getPolicy: () => getActiveModelPolicy(getSettings())
+})
 async function runImportedRecap(job: ImportJob): Promise<string | undefined> {
-  return runImportedRecapJob(job, {
-    getSettings,
-    getApiKey,
-    getAllowedProviders,
-    operatorFundedProviders,
-    operatorAskTransport,
-    providerBaseUrl,
-    redactSecrets,
-    createStream,
-    refreshDustAuth: (s) =>
-      makeRefreshDustAuth({
-        dustSessionOrigin: s.dustSessionOrigin,
-        dustWorkspaceId: s.dustWorkspaceId,
-        dustBaseUrl: s.dustBaseUrl
-      }),
-    logWarn: (message) => mainLog.warn(message)
-  })
+  return runImportedRecapJob(job, transcriptProviderDeps())
 }
 
 function wireIntelligenceIndexWork(): void {
@@ -5512,7 +5509,8 @@ function registerIpc(): void {
     ipcMain,
     assertMainWindow,
     currentInputSessionContext,
-    privateView: privateViewOn
+    privateView: privateViewOn,
+    translationProviderDeps: transcriptProviderDeps
   })
   contextGrants = composeContextGrants({
     ipcMain,

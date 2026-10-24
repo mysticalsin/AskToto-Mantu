@@ -46,6 +46,11 @@ export interface AskPlan {
   unavailable: string | null
 }
 
+/** An organisation list that names the on-device model and nothing else is local-only. */
+export function isLocalOnlyOrg(orgAllowed: readonly string[] | null): boolean {
+  return orgAllowed !== null && orgAllowed.length > 0 && orgAllowed.every((p) => p === 'local')
+}
+
 export function planAsk(input: AskPlanInput): AskPlan {
   const { req, settings: s, allowed } = input
   const requestedTier = routeTier(req, s.thinkingMode)
@@ -62,8 +67,7 @@ export function planAsk(input: AskPlanInput): AskPlan {
     capability,
     requestedTier,
     costCeiling,
-    // An organisation list that names the on-device model and nothing else is local-only.
-    localOnly: input.orgAllowed !== null && input.orgAllowed.length > 0 && input.orgAllowed.every((p) => p === 'local'),
+    localOnly: isLocalOnlyOrg(input.orgAllowed),
     localFirstAt: (tier) => localPrimaryEligibleFor(req, s, tier, allowed),
     localLastResortAt: (tier) =>
       localFallbackEligibleFor(req, s, tier, allowed) || localAnswerFloorEligibleFor(req, s, allowed),
