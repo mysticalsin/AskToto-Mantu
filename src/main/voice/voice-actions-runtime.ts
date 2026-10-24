@@ -24,6 +24,7 @@ import {
   type VoiceStateSnapshot
 } from '@shared/voice/voice-turn'
 import type { CommandMicActivationAuthority, CommandMicActivationFrame } from '../command-mic-activation-authority'
+import type { DictationStatus } from '@shared/dictation-status'
 import { createDictationRuntime, type DictationHostPorts } from '../features/dictation'
 import type { InputSessionAuthority } from '../input-session-authority'
 import { auditLog } from '../logger'
@@ -102,6 +103,8 @@ export interface VoiceActionsRuntime {
   /** A verdict from the hold watcher (also the entry point a test or the QA FIFO source drives). */
   onChordEvent(event: ChordWatcherEvent): void
   snapshot(): VoiceStateSnapshot
+  /** G30: the read-only dictation status the renderer's activity pill shows. */
+  dictationStatus(): DictationStatus
   onHardStop(reason: InputSessionStopReason): void
   onMeetingReserved(): void
   onSpeechFinished(sessionId: string, result: CommandSpeechResult): void
@@ -276,6 +279,7 @@ export function createVoiceActionsRuntime(deps: VoiceActionsRuntimeDeps): VoiceA
       deps.spokenReplies?.refresh?.()
     },
     snapshot: () => session.snapshot(),
+    dictationStatus: () => dictation.status(),
     walkthrough: deps.turns?.walkthrough ?? null,
     onSignedIn() {
       chord.onSignedIn()

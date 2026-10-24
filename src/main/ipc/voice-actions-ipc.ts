@@ -1,11 +1,14 @@
 import type { IpcMain, IpcMainInvokeEvent } from 'electron'
 import { registerWalkthroughIpc, type WalkthroughIpcSurface } from './walkthrough-ipc'
+import { DICTATION_STATUS_IPC, type DictationStatus } from '@shared/dictation-status'
 import { VOICE_ACTIONS_IPC, type VoiceStateSnapshot } from '@shared/voice/voice-turn'
 
 interface VoiceActionsIpcRuntime {
   snapshot(): VoiceStateSnapshot
   report(raw: unknown): { ok: boolean }
   setChordRecorderActive(raw: unknown): { ok: boolean }
+  /** G30: the read-only dictation status for the activity pill. */
+  dictationStatus?(): DictationStatus
   walkthrough?: WalkthroughIpcSurface | null
 }
 
@@ -31,5 +34,12 @@ export function registerVoiceActionsIpc(
     assertMainWindow(event)
     return runtime.setChordRecorderActive(raw)
   })
+  if (runtime.dictationStatus) {
+    const status = runtime.dictationStatus.bind(runtime)
+    ipcMain.handle(DICTATION_STATUS_IPC.getState, (event) => {
+      assertMainWindow(event)
+      return status()
+    })
+  }
   if (runtime.walkthrough) registerWalkthroughIpc(ipcMain, assertMainWindow, runtime.walkthrough)
 }
