@@ -17,6 +17,7 @@ import { app, net, Notification, type BrowserWindow } from 'electron'
 import { IPC } from '@shared/ipc'
 import { readTrustedAdminManaged } from './win-security'
 import {
+  resetUpdateLifecycleForTests,
   blockedUpdateChannel,
   configDisablesAutoUpdate,
   configUpdateFeedUrl,
@@ -34,7 +35,16 @@ class FakeAutoUpdater extends EventEmitter {
   logger: unknown = null
   autoDownload = false
   autoInstallOnAppQuit = false
-  checkForUpdates = vi.fn(async (): Promise<{ downloadPromise?: Promise<unknown> | null } | null> => null)
+  checkForUpdates = vi.fn(
+    async (): Promise<{ downloadPromise?: Promise<unknown> | null; isUpdateAvailable?: boolean } | null> => null
+  )
+  downloadUpdate = vi.fn(async (): Promise<unknown> => null)
+  quitAndInstall = vi.fn()
+}
+
+/** Let the async staged verification settle (setImmediate stays real in the suites that call this). */
+async function flushAsync(): Promise<void> {
+  for (let i = 0; i < 3; i++) await new Promise((r) => setImmediate(r))
 }
 
 describe('configDisablesAutoUpdate — enterprise auto-update kill-switch', () => {
@@ -355,6 +365,7 @@ describe('startUpdateDownload — Settings "Update now" in-app download guard', 
   let restorePlatform: () => void
 
   beforeEach(() => {
+    resetUpdateLifecycleForTests()
     restorePlatform = pinPlatform('linux')
     vi.mocked(readTrustedAdminManaged).mockReturnValue(null)
     delete (process as unknown as { windowsStore?: boolean }).windowsStore
@@ -498,6 +509,7 @@ describe('MQA-164 — a failed update download reaches the renderer', () => {
     // Only the 6-hourly re-check interval is faked: setImmediate has to stay real for the
     // unhandled-rejection probe below (Node emits the event after the microtask queue drains).
     vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] })
+    resetUpdateLifecycleForTests()
     vi.mocked(readTrustedAdminManaged).mockReturnValue(null)
     Reflect.deleteProperty(proc, 'windowsStore')
     send.mockClear()
@@ -588,9 +600,16 @@ describe('MQA-164 — a failed update download reaches the renderer', () => {
 
   // Dropping checkForUpdatesAndNotify (it leaked the unhandled rejection above) must not cost the OS
   // notification it used to raise for a download the user never asked for.
-  it('MQA-164 — a background download still shows the OS "update ready" notification', () => {
-    initAutoUpdate(() => win)
-    fake.emit('update-downloaded', { version: '1.5.5', releaseNotes: 'Fixes the thing' })
+  it('MQA-164 — a background download still shows the OS "update ready" notification', async () => {
+    // G86: a download is staged and verified before it is announced, so it carries the feed's hash.
+    initAutoUpdate(() => win, { verify: { fileSize: async () => 10, sha512Base64: async () => 'h' } })
+    fake.emit('update-downloaded', {
+      version: '1.5.5',
+      releaseNotes: 'Fixes the thing',
+      downloadedFile: '/cache/Metis-1.5.5.zip',
+      files: [{ url: 'Metis-1.5.5.zip', sha512: 'h' }]
+    })
+    await flushAsync()
 
     expect(send).toHaveBeenCalledWith(IPC.updateDownloaded, { version: '1.5.5', notes: 'Fixes the thing' })
     expect(vi.mocked(Notification)).toHaveBeenCalledWith(

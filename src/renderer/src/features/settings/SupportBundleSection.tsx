@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { Check, ExternalLink, RefreshCw } from 'lucide-react'
 import type { DiagnosticsPreviewResult } from '@shared/export-types'
 import type { DiagnosticsExportResult, UpdateCheckResult } from '@shared/ipc'
+import { UPDATE_DEFERRED_COPY, UPDATE_QUARANTINE_COPY, type UpdateLifecycleState } from '@shared/update-lifecycle'
 import { ExportReceiptNotice } from '../export/ExportReceiptNotice'
 import { TextButton } from '../../components/ui'
 import { Section } from '../../ui/Section'
@@ -86,6 +87,12 @@ export function UpdatesSection(): JSX.Element {
   const [phase, setPhase] = useState<'idle' | 'downloading' | 'ready' | 'blocked'>('idle')
   const [percent, setPercent] = useState(0)
   const [downloadError, setDownloadError] = useState<string | null>(null)
+  // G86: the main-owned lifecycle says when an install is waiting on a meeting or task, or helpers failed their check.
+  const [lifecycle, setLifecycle] = useState<UpdateLifecycleState>({ phase: 'idle' })
+  useEffect(() => {
+    void window.toto.getUpdateState().then(setLifecycle)
+    return window.toto.onUpdateState(setLifecycle)
+  }, [])
 
   const check = useCallback((): void => {
     setChecking(true)
@@ -180,8 +187,21 @@ export function UpdatesSection(): JSX.Element {
             onClick={() => void window.toto.installUpdate()}
             className="no-drag focus-ring rounded-full bg-[color:var(--cl-primary)] px-3 py-1.5 text-[12px] font-medium text-[color:var(--cl-primary-foreground)] transition-colors hover:opacity-90"
           >
-            Restart &amp; install now
+            Install and relaunch
           </button>
+        )}
+
+        {lifecycle.phase === 'install-deferred' && (
+          <span className="text-[11px] text-[color:var(--cl-muted-foreground)]">{UPDATE_DEFERRED_COPY}</span>
+        )}
+
+        {lifecycle.phase === 'helpers-quarantined' && lifecycle.rollbackUrl && (
+          <span className="text-[11px] text-[color:var(--cl-muted-foreground)]">
+            {UPDATE_QUARANTINE_COPY}.{' '}
+            <a href={lifecycle.rollbackUrl} target="_blank" rel="noopener noreferrer" className="underline">
+              Reinstall {lifecycle.fromVersion}
+            </a>
+          </span>
         )}
 
         {/* Download-page fallback: a build that cannot self-install (portable / Store / managed / unsigned mac),

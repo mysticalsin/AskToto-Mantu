@@ -1,5 +1,6 @@
-import { Suspense, lazy, useState } from 'react'
+import { Suspense, lazy, useEffect, useState } from 'react'
 import { Download, X, ChevronDown } from 'lucide-react'
+import { UPDATE_DEFERRED_COPY } from '@shared/update-lifecycle'
 
 // MQA-270 (B2): lazy, because a static import here dragged streamdown + shiki/core + parse5 + marked +
 // micromark into the BOOT chunk — this toast is imported statically by App.tsx, so the overlay paid
@@ -28,6 +29,13 @@ export function UpdateReadyToast({
   onDismiss
 }: UpdateReadyToastProps): JSX.Element | null {
   const [showNotes, setShowNotes] = useState(false)
+  // G86: Install and relaunch waits while a meeting, dictation or task is running; say so instead of doing nothing.
+  const [deferred, setDeferred] = useState(false)
+  useEffect(() => {
+    const read = (s: { phase: string }): void => setDeferred(s.phase === 'install-deferred')
+    void window.toto.getUpdateState().then(read)
+    return window.toto.onUpdateState(read)
+  }, [])
   if (!open) return null
   const trimmed = notes?.trim()
   // While downloading (no version yet, a progress value present) show a progress state; the ready state
@@ -75,7 +83,9 @@ export function UpdateReadyToast({
             Update ready{version ? ` · v${version}` : ''}
           </div>
           <div className="flex items-center gap-1.5 text-[11px] leading-snug text-[color:var(--color-ink-2)]">
-            <span className="truncate">Your meetings are kept, restart to apply.</span>
+            <span className="truncate">
+              {deferred ? UPDATE_DEFERRED_COPY : 'Your meetings are kept, restart to apply.'}
+            </span>
             {trimmed && (
               <button
                 type="button"
@@ -95,7 +105,7 @@ export function UpdateReadyToast({
             onClick={onRestart}
             className="no-drag focus-ring h-[30px] shrink-0 rounded-full border border-white/10 bg-[var(--color-accent)] px-3.5 text-[12px] font-semibold text-white shadow-[0_2px_12px_var(--color-accent-glow)] transition-[filter] duration-[var(--duration-hover)] hover:brightness-110"
           >
-            Restart now
+            Install and relaunch
           </button>
           <button
             type="button"

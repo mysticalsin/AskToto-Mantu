@@ -17,6 +17,7 @@ import {
   type DesktopActionTaskBridgeDeps
 } from './desktop-action-task-bridge'
 import type { TaskCardRuntime } from '../ipc/task-card-ipc'
+import type { TaskStatus } from './task-contract'
 import { validateAdapterCapabilities } from '@shared/voice/adapter-capabilities'
 import { createEncryptedTaskFileStore } from './encrypted-task-file-store'
 import type { FocusRequestStep } from './focus-request'
@@ -141,6 +142,11 @@ export function desktopActionTaskDeps(): DesktopActionTaskDeps {
     }
   }
   return sharedDeps
+}
+
+/** Status of every task on the shared bridge (G86: an update install waits for live ones). Never creates the bridge. */
+export function desktopActionTaskStatuses(): TaskStatus[] {
+  return sharedBridge?.snapshot().map((s) => s.status) ?? []
 }
 
 /** The task cards of the same shared bridge, for the sidecar's IPC (G33). */

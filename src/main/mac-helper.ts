@@ -49,6 +49,7 @@ import { app } from 'electron'
 import { z } from 'zod'
 import { clampSpeechRate } from '@shared/spoken-replies-settings'
 import { mainLog } from './logger'
+import { isHelperQuarantined } from './update/helper-quarantine'
 
 const OCR_TIMEOUT_MS = 8_000
 /** Skip lines Vision itself doubts — low-confidence fragments add noise, not context. */
@@ -106,8 +107,10 @@ export function macHelperPath(): string {
   return join(findRepoRoot(__dirname), 'resources', 'mac-helper', 'metis-mac-helper')
 }
 
-export function macHelperPresent(platform: NodeJS.Platform = process.platform): boolean {
-  return platform === 'darwin' && existsSync(macHelperPath())
+/** G86: `underVerification` lets post-update re-verification use the helper while it is still held back. */
+export function macHelperPresent(platform: NodeJS.Platform = process.platform, underVerification = false): boolean {
+  // G86: helpers stay unspawned while post-update re-verification is pending or has failed.
+  return platform === 'darwin' && (underVerification || !isHelperQuarantined()) && existsSync(macHelperPath())
 }
 
 /** Spawn spec for the darwin foreground watcher, or null when the helper isn't available (the watcher
@@ -362,6 +365,18 @@ function runHelperOnce<T>(
 /** This app's signing identity (cdhash, teamId, adhoc), or null without a helper. */
 export function getCodeIdentity(path: string): Promise<HelperCodeIdentity | null> {
   return runHelperOnce(macCodeIdentitySpawnSpec(path), parseCodeIdentity, IDENTITY_TIMEOUT_MS)
+}
+
+/**
+ * G86 post-update re-verification only: the same read-only `code-identity` call, allowed while helpers are held
+ * back pending that very check (macHelperPresent() is false then). The caller has already passed
+ * `codesign --verify` on this binary before trusting its answer.
+ */
+export function getCodeIdentityUnderVerification(path: string): Promise<HelperCodeIdentity | null> {
+  const spec = macHelperPresent(process.platform, true)
+    ? { command: macHelperPath(), args: ['code-identity', path] }
+    : null
+  return runHelperOnce(spec, parseCodeIdentity, IDENTITY_TIMEOUT_MS)
 }
 
 /** Every installed copy of a bundle id, or null without a helper. */

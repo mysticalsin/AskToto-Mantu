@@ -883,7 +883,9 @@ import {
   isMeetingConfidentialOnDisk,
   sweepExpiredMeetings
 } from './recall'
-import { initAutoUpdate, checkForUpdateNow, startUpdateDownload } from './updater'
+import * as updater from './updater'
+import { registerUpdateIpc } from './ipc/update-ipc'
+import { createReconcileDeps, createUpdaterDeps } from './update/update-composition'
 import { runSelfTest, redirectSelfTestUserData } from './selftest'
 import { devEnv, devToolsEnabled } from './dev-env'
 import { importDustCliSession, refreshDustCliSession } from './dustcli'
@@ -2280,6 +2282,14 @@ function getImportJobs(): ImportJobManager {
   if (!importJobs) throw new Error('Audio import service is unavailable.')
   return importJobs
 }
+
+// An update never relaunches over a meeting, dictation, voice conversation, desktop task or audio import (G86).
+const updateDeps = createUpdaterDeps({
+  meetingReserved: () => inputSessionAuthority.hasMeetingReservation,
+  captureActive: captureActiveForWindowRestart,
+  leasePurpose: () => inputSessionAuthority.activeLease?.purpose ?? null,
+  importStates: () => importJobs?.list().map((job) => job.state) ?? []
+})
 
 /** Minimal .env loader (no dep) — dev convenience; prod uses in-app key. */
 function loadDotEnv(): void {
@@ -9029,32 +9039,8 @@ function registerIpc(): void {
     markQuitFlushDone,
     acknowledgeQuitFlush: () => quitLifecycle.acknowledgeQuitFlush()
   })
-  // --- Auto-update ---
-  // Manual check for Settings → About → Updates. Exists alongside electron-updater's silent flow so
-  // builds that cannot auto-install (unsigned macOS) still let the user DISCOVER a newer version and
-  // reach the download page. Never throws — failures come back as a short human-readable error.
-  ipcMain.handle(IPC.updateCheck, (e) => {
-    assertMainWindow(e)
-    if (!requireAuth()) return { ok: false, current: '', error: 'Not signed in.' }
-    return checkForUpdateNow()
-  })
-  // Settings "Update now" → kick the in-app download. Progress + ready then stream to the renderer via the
-  // listeners initAutoUpdate registered (IPC.updateProgress / IPC.updateDownloaded). Returns a reason when
-  // this build cannot self-install so the UI shows the download-page link instead of a stuck button.
-  ipcMain.handle(IPC.updateDownload, (e) => {
-    assertMainWindow(e)
-    if (!requireAuth()) return { started: false, reason: 'Not signed in.' }
-    return startUpdateDownload()
-  })
-  ipcMain.handle(IPC.updateInstall, (e) => {
-    assertMainWindow(e)
-    if (!requireAuth()) return
-    // Lazy-required (same pattern + rationale as updater.ts): a static import here put
-    // electron-updater's whole require tree (~46ms) on every boot for a once-per-update button.
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const { autoUpdater } = require('electron-updater') as typeof import('electron-updater')
-    autoUpdater.quitAndInstall()
-  })
+  // Auto-update: check, download, install (deferred while capture or a task runs) and the lifecycle push; see update-ipc.ts.
+  registerUpdateIpc({ ipcMain, assertMainWindow, requireAuth, getWindow: () => win, ...updater })
   // --- Mail draft ---
   // mailto: fallback for the follow-up draft (Phase 1) — opens the user's own default mail client with
   // a prefilled draft; sending stays entirely manual. No attachments possible via mailto (real Outlook
@@ -9606,7 +9592,9 @@ if (
       }
       runStep('resumeScreenRepair', screenPerm.resumeScreenRepairOnBoot) // M2-0429: the boot half of a Repair
       runStep('startMeetingNotifier', startMeetingNotifier)
-      runStep('initAutoUpdate', () => initAutoUpdate(() => win))
+      // Reconcile first: a just-installed update holds native helpers back until they re-verify.
+      runStep('reconcileAfterUpdate', () => void updater.reconcileAfterUpdate(createReconcileDeps()))
+      runStep('initAutoUpdate', () => updater.initAutoUpdate(() => win, updateDeps))
       // Resume durable live/backfill work and reconcile OneDrive-synced meeting files after first paint.
       // Directory scans, rather than fs.watch, are deliberate: Files On-Demand and Windows sync do not
       // reliably emit every watcher event. A one-minute cadence keeps Intelligence current without

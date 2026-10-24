@@ -307,7 +307,7 @@
     "src/shared/reset-time.test.ts": 2
   },
   "FF-09": {
-    "src/main/index.ts": 104
+    "src/main/index.ts": 101
   },
   "FF-10": {
     "src/main/apple-speech.ts": 1,

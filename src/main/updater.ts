@@ -1,6 +1,25 @@
 import { app, net, Notification, type BrowserWindow } from 'electron'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
+import type {
+  HelperVerdict,
+  UpdateBusyReason,
+  UpdateInstallResult,
+  UpdateLifecycleState
+} from '@shared/update-lifecycle'
+import { startUpdateIdlePoll } from './infra/scheduler/update-idle-poll'
+import { setHelperTrust } from './update/helper-quarantine'
+import { stagedFileSha512Base64, stagedFileSize } from './update/staged-file'
+import {
+  reconcileBootReceipt,
+  transition,
+  verifyStagedDownload,
+  type StagedDownloadInfo,
+  type StagedVerifyDeps,
+  type UpdateEvent
+} from './update/update-lifecycle'
+import { clearInstallReceipt, readInstallReceipt, writeInstallReceipt } from './update/update-receipt'
+import { isNewerVersion } from './update/version-compare'
 // Via logger.ts, never `electron-log` directly: logger.ts is where the app's logging policy lives,
 // including the redirect that keeps a non-app process (a vitest worker) out of the installed app's
 // %APPDATA%/asktoto/logs/main.log. That redirect is a module-load side effect, so a module that reaches
@@ -110,25 +129,12 @@ const ORG_FEED_MESSAGE = "Updates come from your organisation's update server."
 // electron-builder.yml's `publish` block (the public Metis-Releases feed).
 const RELEASES_API = 'https://api.github.com/repos/mysticalsin/Metis-Releases/releases/latest'
 const RELEASES_PAGE = 'https://github.com/mysticalsin/Metis-Releases/releases/latest'
+/** The guided-reinstall link for the previous version (G86 rollback): a tag page on the same public feed. */
+const RELEASES_TAG_BASE = 'https://github.com/mysticalsin/Metis-Releases/releases/tag/'
 const CHECK_TIMEOUT_MS = 8000
 
-/** Plain numeric semver compare ('1.10.0' > '1.9.2'), leading 'v' tolerated, missing parts = 0.
- *  Prerelease suffixes are ignored on purpose — the releases feed only ever carries plain x.y.z tags. */
-export function isNewerVersion(latest: string, current: string): boolean {
-  const norm = (v: string): number[] =>
-    v
-      .trim()
-      .replace(/^v/i, '')
-      .split('.')
-      .map((p) => Number.parseInt(p, 10) || 0)
-  const a = norm(latest)
-  const b = norm(current)
-  for (let i = 0; i < Math.max(a.length, b.length); i++) {
-    const d = (a[i] ?? 0) - (b[i] ?? 0)
-    if (d !== 0) return d > 0
-  }
-  return false
-}
+// Moved to update/version-compare.ts so the staged-download verifier can share it without an import cycle.
+export { isNewerVersion }
 
 /** Latest must be a published, non-prerelease tag. Draft / prerelease is not QA-approved. */
 export function latestReleaseIsOfferable(payload: unknown): boolean {
@@ -243,6 +249,201 @@ export async function checkForUpdateNow(): Promise<UpdateCheckResult> {
   }
 }
 
+// ── Update lifecycle (G86) ───────────────────────────────────────────────────────────────────────
+// Download and install are separate steps. Nothing here relaunches the app by itself: only requestInstall
+// (the user's "Install and relaunch" click) does, and it defers while capture or a task is running.
+
+/** What the updater needs from the app. Injected so the busy sources stay in index.ts and tests stay hermetic. */
+export interface UpdaterDeps {
+  /** Why an install must wait right now (meeting, dictation, conversation, task, import); empty when idle. */
+  busyReasons(): UpdateBusyReason[]
+  userDataDir(): string
+  verify: Pick<StagedVerifyDeps, 'fileSize' | 'sha512Base64'>
+  idlePollMs?: number
+}
+
+function defaultUpdaterDeps(): UpdaterDeps {
+  return {
+    busyReasons: () => [],
+    userDataDir: () => app.getPath('userData'),
+    verify: { fileSize: stagedFileSize, sha512Base64: stagedFileSha512Base64 }
+  }
+}
+
+let activeDeps: UpdaterDeps = defaultUpdaterDeps()
+let lifecycle: UpdateLifecycleState = { phase: 'idle' }
+const stateListeners = new Set<(state: UpdateLifecycleState) => void>()
+let offeredVersion: string | undefined
+let stopIdlePoll: (() => void) | null = null
+let activeDownload: Promise<unknown> | null = null
+let explicitDownloadRequested = false
+let updaterRef: { downloadUpdate(): Promise<unknown>; autoInstallOnAppQuit: boolean } | null = null
+
+/** Test-only: module state outlives a single test, so suites reset it between cases. */
+export function resetUpdateLifecycleForTests(): void {
+  stopIdlePoll?.()
+  stopIdlePoll = null
+  lifecycle = { phase: 'idle' }
+  stateListeners.clear()
+  offeredVersion = undefined
+  activeDownload = null
+  explicitDownloadRequested = false
+  updaterRef = null
+  downloadInFlight = false
+  activeDeps = defaultUpdaterDeps()
+  setHelperTrust('trusted')
+}
+
+export function getUpdateState(): UpdateLifecycleState {
+  return lifecycle
+}
+
+/** Subscribe to every lifecycle transition (the IPC layer pushes these to the main window). */
+export function onUpdateState(listener: (state: UpdateLifecycleState) => void): () => void {
+  stateListeners.add(listener)
+  return () => stateListeners.delete(listener)
+}
+
+function dispatch(event: UpdateEvent): void {
+  const next = transition(lifecycle, event)
+  if (next === lifecycle) return
+  lifecycle = next
+  log.info('[updater] phase', next.phase) // phase names only
+  syncIdlePoll()
+  for (const listener of stateListeners) {
+    try {
+      listener(lifecycle)
+    } catch {
+      /* a throwing subscriber must not break the updater */
+    }
+  }
+}
+
+function syncIdlePoll(): void {
+  const deferred = lifecycle.phase === 'install-deferred' || lifecycle.phase === 'available-deferred'
+  if (deferred && !stopIdlePoll) stopIdlePoll = startUpdateIdlePoll(idleTick, activeDeps.idlePollMs)
+  else if (!deferred && stopIdlePoll) {
+    stopIdlePoll()
+    stopIdlePoll = null
+  }
+}
+
+/** The app turned idle: re-offer a deferred install through the quiet gate, or start a deferred download. Never relaunches. */
+function idleTick(): void {
+  if (activeDeps.busyReasons().length > 0) return
+  const before = lifecycle.phase
+  dispatch({ type: 'idle' })
+  if (before === 'install-deferred') {
+    showQuietNotification({
+      title: 'Update ready to install',
+      body: `${app.name} can restart into version ${lifecycle.version ?? 'the new version'} now. Nothing was closed.`
+    })
+  } else if (before === 'available-deferred' && updaterRef) {
+    void beginDownload(updaterRef).catch(() => {
+      /* already logged by the 'error' listener */
+    })
+  }
+}
+
+function beginDownload(updater: NonNullable<typeof updaterRef>): Promise<unknown> {
+  if (activeDownload) return activeDownload
+  dispatch({ type: 'download-start' })
+  const p = Promise.resolve(updater.downloadUpdate())
+  activeDownload = p
+  const settle = (): void => {
+    if (activeDownload === p) activeDownload = null
+  }
+  void p.then(settle, settle)
+  return p
+}
+
+/** The user chose Install and relaunch. Defers (and says why) while capture or a task is running. */
+export async function requestInstall(
+  deps: Pick<UpdaterDeps, 'busyReasons' | 'userDataDir'> = activeDeps
+): Promise<UpdateInstallResult> {
+  const to = lifecycle.version
+  if ((lifecycle.phase !== 'ready' && lifecycle.phase !== 'install-deferred') || !to) {
+    return { installed: false, reason: 'not-ready' }
+  }
+  const busy = deps.busyReasons()
+  if (busy.length > 0) {
+    dispatch({ type: 'install', busy })
+    return { installed: false, deferred: busy }
+  }
+  const dir = deps.userDataDir()
+  try {
+    await writeInstallReceipt(dir, { schema: 1, fromVersion: app.getVersion(), toVersion: to, at: Date.now() })
+  } catch {
+    return { installed: false, reason: 'receipt-failed' }
+  }
+  // Capture can start while the receipt is written; look again immediately before the relaunch.
+  const again = deps.busyReasons()
+  if (again.length > 0) {
+    await clearInstallReceipt(dir)
+    dispatch({ type: 'install', busy: again })
+    return { installed: false, deferred: again }
+  }
+  dispatch({ type: 'install', busy: [] })
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    require('electron-updater').autoUpdater.quitAndInstall()
+    return { installed: true }
+  } catch {
+    await clearInstallReceipt(dir)
+    return { installed: false, reason: 'install-failed' }
+  }
+}
+
+export interface ReconcileDeps {
+  userDataDir(): string
+  currentVersion: string
+  reverify(): Promise<HelperVerdict[]>
+}
+
+/**
+ * Boot after an install. A receipt whose "from" is the running version means the installer did not replace the
+ * app (the prior app is intact). "to" means it did: re-verify native helpers, and quarantine them on any failure.
+ */
+export async function reconcileAfterUpdate(deps: ReconcileDeps): Promise<void> {
+  const dir = deps.userDataDir()
+  // Synchronous, before the first await: helpers are held back until the receipt says whether an update just
+  // installed. Released again below the moment we know nothing needs re-checking.
+  setHelperTrust('pending')
+  const receipt = await readInstallReceipt(dir)
+  const outcome = reconcileBootReceipt(receipt, deps.currentVersion)
+  if (!receipt || outcome !== 'post-verify') {
+    setHelperTrust('trusted')
+    if (receipt && outcome !== 'none') {
+      dispatch({ type: 'boot', outcome, fromVersion: receipt.fromVersion, toVersion: receipt.toVersion })
+      await clearInstallReceipt(dir)
+    }
+    return
+  }
+  dispatch({ type: 'boot', outcome, fromVersion: receipt.fromVersion, toVersion: receipt.toVersion })
+  let helpers: HelperVerdict[]
+  try {
+    helpers = await deps.reverify()
+  } catch {
+    helpers = [{ id: 'reverify', result: 'fail', reason: 'error' }]
+  }
+  const ok = !helpers.some((h) => h.result === 'fail')
+  setHelperTrust(ok ? 'trusted' : 'quarantined')
+  dispatch({
+    type: 'helpers',
+    ok,
+    helpers,
+    ...(ok ? {} : { rollbackUrl: `${RELEASES_TAG_BASE}v${receipt.fromVersion}` })
+  })
+  if (ok) {
+    await clearInstallReceipt(dir)
+    return
+  }
+  showQuietNotification({
+    title: 'Métis needs a closer look',
+    body: 'Helper check failed after update. Open Settings to reinstall the previous version.'
+  })
+}
+
 /** True only while a download THIS process started (Settings → "Download & install") is running.
  *  electron-updater emits one 'error' event for every failure — the silent boot / 6-hourly check
  *  included — and turning an untouched Settings row into a scary failure the user never asked for is
@@ -291,14 +492,24 @@ export async function startUpdateDownload(): Promise<UpdateDownloadStart> {
       return { started: false, reason: 'No QA-approved update is available.' }
     }
   }
+  if (['verifying', 'ready', 'install-deferred', 'installing'].includes(lifecycle.phase)) {
+    return { started: false, reason: 'The update is already downloaded. Choose Install and relaunch.' }
+  }
+  explicitDownloadRequested = true
   try {
     // eslint-disable-next-line @typescript-eslint/no-var-requires
     const { autoUpdater } = require('electron-updater')
     applyAdminUpdateFeed(autoUpdater)
-    // checkForUpdates() resolves as soon as the FEED answers — the download it kicked off is still
-    // running behind `downloadPromise`, so "started" can only mean "there is a download to watch".
-    const downloadPromise = (await autoUpdater.checkForUpdates())?.downloadPromise
+    // checkForUpdates() resolves as soon as the FEED answers. autoDownload is off (download and install are
+    // separate steps), so an explicit Download starts the download itself; "started" can only mean
+    // "there is a download to watch".
+    const checked = (await autoUpdater.checkForUpdates()) as {
+      downloadPromise?: Promise<unknown> | null
+      isUpdateAvailable?: boolean
+    } | null
+    const downloadPromise = checked?.downloadPromise ?? (checked?.isUpdateAvailable ? beginDownload(autoUpdater) : null)
     if (!downloadPromise) return { started: false, reason: 'No update is available to download right now.' }
+    dispatch({ type: 'download-start' })
     downloadInFlight = true
     // Own the promise electron-updater hands back. Its failure is reported to the renderer by the 'error'
     // listener in initAutoUpdate; left unheld it also reaches index.ts's unhandledRejection hook, which
@@ -310,7 +521,81 @@ export async function startUpdateDownload(): Promise<UpdateDownloadStart> {
     return { started: true }
   } catch (e) {
     return { started: false, reason: (e as Error)?.message || 'Could not start the update download.' }
+  } finally {
+    explicitDownloadRequested = false
   }
+}
+
+type DownloadedEvent = StagedDownloadInfo & {
+  releaseNotes?: string | Array<{ note?: string | null }> | null
+}
+
+/** A downloaded file is staged, not trusted: it reaches `ready` only after its hash and version check out. */
+async function onUpdateDownloaded(
+  i: DownloadedEvent,
+  autoUpdater: { autoInstallOnAppQuit: boolean },
+  getWin: () => BrowserWindow | null
+): Promise<void> {
+  log.info('[updater] downloaded', i?.version)
+  dispatch({ type: 'downloaded', version: typeof i?.version === 'string' ? i.version : '' })
+  let verdict: Awaited<ReturnType<typeof verifyStagedDownload>>
+  try {
+    verdict = await verifyStagedDownload(i ?? {}, {
+      currentVersion: app.getVersion(),
+      offeredVersion,
+      ...activeDeps.verify
+    })
+  } catch {
+    verdict = { ok: false, reason: 'no-file' }
+  }
+  dispatch({ type: 'verified', ok: verdict.ok })
+  if (!verdict.ok) {
+    autoUpdater.autoInstallOnAppQuit = false
+    log.warn('[updater] staged download rejected:', verdict.reason)
+    if (downloadInFlight) {
+      downloadInFlight = false
+      getWin()?.webContents.send(IPC.updateError, {
+        message:
+          'The downloaded update could not be verified, so it was not installed. Open the download page to install manually.'
+      })
+    }
+    return
+  }
+  autoUpdater.autoInstallOnAppQuit = true
+  // A verified update can now install on a quit the user chooses, a path that never reaches requestInstall. Leave
+  // the receipt now so the next boot can tell a finished install from one that never happened.
+  if (lifecycle.phase === 'ready' && lifecycle.version) {
+    void writeInstallReceipt(activeDeps.userDataDir(), {
+      schema: 1,
+      fromVersion: app.getVersion(),
+      toVersion: lifecycle.version,
+      at: Date.now()
+    }).catch(() => {
+      /* without a receipt the next boot simply skips post-update helper verification */
+    })
+  }
+  // Ship the release notes (the GitHub release body) with the version so the in-app UpdateReadyToast
+  // can show a "What's new" panel — the user sees what changed before choosing to restart & apply.
+  const raw = i?.releaseNotes
+  const notes =
+    typeof raw === 'string'
+      ? raw.trim() || undefined
+      : Array.isArray(raw)
+        ? raw
+            .map((x) => String(x?.note ?? ''))
+            .filter(Boolean)
+            .join('\n\n')
+            .trim() || undefined
+        : undefined
+  getWin()?.webContents.send(IPC.updateDownloaded, { version: i?.version, notes })
+  // The OS notification checkForUpdatesAndNotify used to raise (see check() below for why it is gone).
+  // Skipped for a download the user started from Settings — they are already watching that row, and the
+  // in-app UpdateReadyToast lands either way.
+  if (!downloadInFlight && Notification.isSupported())
+    showQuietNotification({
+      title: 'A new update is ready to install',
+      body: `${app.name} version ${i?.version} is downloaded and verified. It installs when you choose Install and relaunch, or when you quit.`
+    })
 }
 
 /** A 404 means the releases repo/feed doesn't exist (yet) — distinct from a transient network/server
@@ -323,7 +608,8 @@ const isNotFound = (e: unknown): boolean =>
  *  captured value would be permanently null even after ensureWindow() later self-heals and reassigns the
  *  module-level `win` — the update-downloaded toast would then be dead for the rest of the process life.
  *  Reading through the getter at send time always sees the live window. */
-export function initAutoUpdate(getWin: () => BrowserWindow | null): void {
+export function initAutoUpdate(getWin: () => BrowserWindow | null, deps?: Partial<UpdaterDeps>): void {
+  activeDeps = { ...defaultUpdaterDeps(), ...deps }
   const blocked = blockedUpdateChannel()
   if (blocked) {
     log.info(`[updater] ${BLOCKED_LOG[blocked]}`)
@@ -357,8 +643,11 @@ export function initAutoUpdate(getWin: () => BrowserWindow | null): void {
     applyAdminUpdateFeed(autoUpdater)
     autoUpdater.logger = log
     log.transports.file.level = 'info'
-    autoUpdater.autoDownload = true
-    autoUpdater.autoInstallOnAppQuit = true
+    updaterRef = autoUpdater
+    // Download and install are distinct steps: a background check only reaches 'available', the download
+    // starts below when idle (or when the user asks), and a quit installs only after staged verification.
+    autoUpdater.autoDownload = false
+    autoUpdater.autoInstallOnAppQuit = false
     // Latest is the only channel. A prerelease or draft must never be offered or installed, even if
     // someone uploaded latest.yml beside one. QA + Ultron stamp is what makes a tag Latest.
     autoUpdater.allowPrerelease = false
@@ -373,6 +662,7 @@ export function initAutoUpdate(getWin: () => BrowserWindow | null): void {
     // when there are NO listeners at all, and we always add one right after removing the default.
     autoUpdater.removeAllListeners('error')
     autoUpdater.on('error', (e: Error) => {
+      dispatch({ type: 'error' })
       if (isNotFound(e)) {
         log.warn('[updater] update feed not available (404)')
         return
@@ -389,35 +679,29 @@ export function initAutoUpdate(getWin: () => BrowserWindow | null): void {
       // Non-404: keep the same full-stack visibility the removed default listener used to provide.
       log.warn('[updater] error', e?.stack || e?.message || e)
     })
-    autoUpdater.on('update-available', (i: { version?: string }) => log.info('[updater] update-available', i?.version))
-    autoUpdater.on(
-      'update-downloaded',
-      (i: { version?: string; releaseNotes?: string | Array<{ note?: string | null }> | null }) => {
-        log.info('[updater] downloaded', i?.version)
-        // Ship the release notes (the GitHub release body) with the version so the in-app UpdateReadyToast
-        // can show a "What's new" panel — the user sees what changed before choosing to restart & apply.
-        const raw = i?.releaseNotes
-        const notes =
-          typeof raw === 'string'
-            ? raw.trim() || undefined
-            : Array.isArray(raw)
-              ? raw
-                  .map((x) => String(x?.note ?? ''))
-                  .filter(Boolean)
-                  .join('\n\n')
-                  .trim() || undefined
-              : undefined
-        getWin()?.webContents.send(IPC.updateDownloaded, { version: i?.version, notes })
-        // The OS notification checkForUpdatesAndNotify used to raise (see check() below for why it is
-        // gone). Skipped for a download the user started from Settings — they are already watching that
-        // row, and the in-app UpdateReadyToast lands either way.
-        if (!downloadInFlight && Notification.isSupported())
-          showQuietNotification({
-            title: 'A new update is ready to install',
-            body: `${app.name} version ${i?.version} has been downloaded and will be automatically installed on exit`
-          })
+    autoUpdater.on('update-available', (i: { version?: string }) => {
+      log.info('[updater] update-available', i?.version)
+      if (typeof i?.version !== 'string' || !i.version) return
+      offeredVersion = i.version
+      // An explicit Download works at any time; a background offer waits while capture or a task is running.
+      dispatch({
+        type: 'available',
+        version: i.version,
+        busy: explicitDownloadRequested ? [] : activeDeps.busyReasons()
+      })
+      if (!explicitDownloadRequested && lifecycle.phase === 'available') {
+        void beginDownload(autoUpdater).catch(() => {
+          /* already logged by the 'error' listener above */
+        })
       }
-    )
+    })
+    autoUpdater.on('update-downloaded', (i: DownloadedEvent) => {
+      void onUpdateDownloaded(i, autoUpdater, getWin)
+    })
+    app.on('will-quit', () => {
+      stopIdlePoll?.()
+      stopIdlePoll = null
+    })
     // Stream download progress to the renderer so the update UI can show a "Downloading… X%" state rather
     // than a silent wait before the ready toast appears.
     autoUpdater.on('download-progress', (p: { percent?: number }) => {
@@ -430,6 +714,7 @@ export function initAutoUpdate(getWin: () => BrowserWindow | null): void {
     // The 'error' listener already logs any failure (short for 404, full otherwise), so swallow the
     // duplicate rejection here.
     const check = (): void => {
+      dispatch({ type: 'check' })
       void autoUpdater
         .checkForUpdates()
         .then((r: { downloadPromise?: Promise<unknown> | null } | null) => {
