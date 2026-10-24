@@ -94,14 +94,19 @@ export async function acquireInteractiveMic(
   const result = options.conversationCaptureToken
     ? purpose === 'conversation' && source === 'push-to-talk'
       ? await (window.toto as typeof window.toto & ConversationAdmissionBridge).conversation.startCapture(
-          options.conversationCaptureToken, context
+          options.conversationCaptureToken,
+          context
         )
       : { ok: false as const, reason: 'invalid_request' as const }
     : await window.toto.startInputSession({ source, purpose, activation }, context)
   if (!result.ok) throw new Error(`Microphone admission denied: ${result.reason}`)
-  if (options.conversationCaptureToken &&
-      (result.lease.source !== 'push-to-talk' || result.lease.purpose !== 'conversation' ||
-       result.lease.activation !== 'explicit' || result.lease.actionAuthority)) {
+  if (
+    options.conversationCaptureToken &&
+    (result.lease.source !== 'push-to-talk' ||
+      result.lease.purpose !== 'conversation' ||
+      result.lease.activation !== 'explicit' ||
+      result.lease.actionAuthority)
+  ) {
     await window.toto.stopInputSession({ sessionId: result.lease.sessionId }, context).catch(() => undefined)
     throw new Error('Microphone admission denied: unauthorized')
   }

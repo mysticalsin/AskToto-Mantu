@@ -837,6 +837,8 @@ import {
 } from './speech-pack-bootstrap'
 import { getPackageRuntimeContract } from './features/components/speech-pack/package-runtime-state'
 import { registerAsrAssetsIpc } from './ipc/asr-assets-ipc'
+import { registerConversationIpc } from './ipc/conversation-ipc'
+import { fanOutAskObservers } from './features/session-context/ask-observers'
 import { registerParakeetAssetsIpc } from './ipc/parakeet-assets-ipc'
 import {
   ensureImportAsrAssets,
@@ -1507,8 +1509,6 @@ const spokenRepliesWiring = createSpokenRepliesWiring({
 })
 revokeSpokenReplies = spokenRepliesWiring.onOwnerRevoked
 conversationRuntime = createConversationRuntime({
-  ipcMain,
-  assertMainWindow,
   frameFromEvent: activationFrameFromEvent,
   mainFrame: currentMainActivationFrame,
   currentContext: currentInputSessionContext,
@@ -7429,18 +7429,7 @@ function registerIpc(): void {
     send: (channel, payload) => win?.webContents.send(channel, payload),
     streams,
     metrics: askMetrics,
-    observe: (event) => {
-      try {
-        spokenRepliesWiring.runtime.observeAsk(event)
-      } catch {
-        /* one observer cannot block the other */
-      }
-      try {
-        conversationRuntime?.observeAsk(event)
-      } catch {
-        /* lifecycle observation is best effort */
-      }
-    },
+    observe: fanOutAskObservers(spokenRepliesWiring.runtime.observeAsk, (e) => conversationRuntime?.observeAsk(e)),
     quietAction: quietActionForAsk
   })
   conversationAskTurns = askTurns
@@ -7454,18 +7443,11 @@ function registerIpc(): void {
       })
       return
     }
-    const failAskStart = (err: unknown): void => {
-      askTurns.fail(id, askStartFailureMessage(err))
-      conversationRuntime?.failAsk(id)
-    }
+    const failAskStart = (err: unknown): void => askTurns.fail(id, askStartFailureMessage(err))
     try {
       const req = AskStartSchema.parse(raw)
-      if (!conversationRuntime?.authorizeAsk(e, req)) {
-        askTurns.fail(req.id, 'Could not start the answer.')
-        conversationRuntime?.failAsk(req.id)
-        return
-      }
       askTiming.start(req.id, req.mode)
+      if (!conversationRuntime?.authorizeAsk(e, req)) return askTurns.fail(req.id, 'Could not start the answer.')
       // Brain context is main-only. Clear renderer input before any early return or mode gate so a
       // replay/fact-check/unavailable local store can never smuggle stale context into a provider prompt.
       req.brainContext = undefined
@@ -7477,7 +7459,7 @@ function registerIpc(): void {
         streams,
         onError: failAskStart,
         gate: contextGate,
-        onRefused: (message) => failAskStart(message),
+        onRefused: (message) => askTurns.fail(req.id, message),
         onApplied: (text, sources) => contextGrants?.manifests.setMemory(req.id, text, sources)
       })
       // MQA-182: Private View means Métis does not look at OR SEND your screen, and an already-captured frame is
@@ -7486,7 +7468,8 @@ function registerIpc(): void {
       // this handler is the trust boundary. Keyed on the payload, not the mode: an image may ride any mode.
       if (req.image && privateViewOn()) {
         auditLog('capture.blocked', { reason: 'private_view', at: 'ask' })
-        failAskStart(new Error(PRIVATE_VIEW_BLOCKED_MESSAGE))
+        conversationRuntime?.failAsk(req.id)
+        win?.webContents.send(IPC.streamError, { id: req.id, message: PRIVATE_VIEW_BLOCKED_MESSAGE })
         return
       }
       // G16: a frame captured before access to the screen was withdrawn (sign-out, lock, a revoked grant, the
@@ -7495,7 +7478,8 @@ function registerIpc(): void {
         const verdict = screenObservation.checkSend(req.image)
         if (!verdict.ok) {
           auditLog('capture.dropped', { reason: 'stale_generation', at: 'ask' })
-          failAskStart(new Error(verdict.message))
+          conversationRuntime?.failAsk(req.id)
+          win?.webContents.send(IPC.streamError, { id: req.id, message: verdict.message })
           return
         }
       }
@@ -7506,7 +7490,8 @@ function registerIpc(): void {
         const gate = operatorGate('recap')
         if (!gate.allowed) {
           auditLog('operator.gate.blocked', { feature: 'recap' })
-          failAskStart(new Error(gate.reason || 'Recap is not available.'))
+          conversationRuntime?.failAsk(req.id)
+          win?.webContents.send(IPC.streamError, { id: req.id, message: gate.reason || 'Recap is not available.' })
           return
         }
       }
@@ -7548,7 +7533,8 @@ function registerIpc(): void {
         { registry: owners.meetingContexts, frame: e.senderFrame, redact: s.redactSensitive, manifest },
         contextGate
       )
-      if (contextRefusal) return void failAskStart(new Error(contextRefusal))
+      if (contextRefusal) conversationRuntime?.failAsk(req.id)
+      if (contextRefusal) return void win?.webContents.send(IPC.streamError, { id: req.id, message: contextRefusal })
       // G14: a live-meeting ask takes its turn on the meeting's SessionQueue; `turn.send` drops stale output.
       const turn = await askTurns.begin({ id: req.id, mode: req.mode, handle: contextGate.handle(), ask: req })
       if (!turn) return
@@ -7613,7 +7599,7 @@ function registerIpc(): void {
       // refuses (with copy) what nothing may serve. Hedge, failover order and Private View read its result unchanged.
       const orgAllowed = getAllowedProviders()
       const route = planAsk({ req, settings: s, allowed, orgAllowed, policy: getActiveModelPolicy(s) })
-      if (route.unavailable) return failAskStart(new Error(route.unavailable))
+      if (route.unavailable) return askTurns.fail(req.id, route.unavailable)
 
       // Screen-vision capability. Static per provider, EXCEPT Dust: its ability to read a screenshot depends
       // on the selected agent's underlying model (it uploads the shot as a content fragment), so consult the
@@ -8903,7 +8889,8 @@ function registerIpc(): void {
       commandSpeechCancel: CommandSpeechCancelSchema
     }
   })
-  conversationRuntime?.registerIpc()
+  if (conversationRuntime)
+    registerConversationIpc({ ipcMain, assertMainWindow, handlers: conversationRuntime.handlers })
   if (voiceActions) registerVoiceActionsIpc(ipcMain, assertMainWindow, voiceActions)
   spokenRepliesWiring.registerIpc(ipcMain, assertMainWindow)
   registerCommandConfirmIpc(ipcMain, assertMainWindow, commandConfirm, () => win)

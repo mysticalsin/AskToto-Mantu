@@ -2,7 +2,15 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { acquireInteractiveMic, type InputMicAdmission } from './input-mic-admission'
 import { COMMAND_SPEECH_MAX_SECONDS } from '@shared/command-speech'
 import { COMMAND_SPEECH_WORKLET_SRC } from './command-speech-worklet-src'
-import { ConversationCaptureBeginSchema, ConversationCaptureFailureSchema, type ConversationAsk, type ConversationCaptureBegin, type ConversationCaptureBinding, type ConversationCaptureFailure, type ConversationSnapshot } from '@shared/conversation/conversation-session'
+import {
+  ConversationCaptureBeginSchema,
+  ConversationCaptureFailureSchema,
+  type ConversationAsk,
+  type ConversationCaptureBegin,
+  type ConversationCaptureBinding,
+  type ConversationCaptureFailure,
+  type ConversationSnapshot
+} from '@shared/conversation/conversation-session'
 import type { InputSessionContext, InputSessionResult } from '@shared/input-session'
 
 export type CommandMicStatus = 'idle' | 'starting' | 'listening' | 'finalizing' | 'done' | 'error'
@@ -29,15 +37,22 @@ export type CommandMicStartOptions = {
   /** An exact, main-issued listening window. This cannot be minted by the renderer. */
   conversation?: ConversationCaptureBegin
 }
-export type ConversationMicResult =
-  | { ok: true }
-  | { ok: false; reason: ConversationCaptureFailure['reason'] }
+export type ConversationMicResult = { ok: true } | { ok: false; reason: ConversationCaptureFailure['reason'] }
 /** Main's latest snapshot must still own the text and generation before a renderer ask is started. */
-export function conversationAskMatchesSnapshot(message: ConversationAsk, snapshot: ConversationSnapshot | null): boolean {
-  return !!snapshot?.active && snapshot.sessionId === message.sessionId &&
+export function conversationAskMatchesSnapshot(
+  message: ConversationAsk,
+  snapshot: ConversationSnapshot | null
+): boolean {
+  return (
+    !!snapshot?.active &&
+    snapshot.sessionId === message.sessionId &&
     snapshot.replyGeneration === message.replyGeneration
+  )
 }
-export function conversationCaptureMatches(begin: ConversationCaptureBegin, binding: ConversationCaptureBinding): boolean {
+export function conversationCaptureMatches(
+  begin: ConversationCaptureBegin,
+  binding: ConversationCaptureBinding
+): boolean {
   return begin.sessionId === binding.sessionId && begin.captureToken === binding.captureToken
 }
 type ConversationBridge = {
@@ -51,20 +66,32 @@ type ConversationBridge = {
 function conversationBridge(): ConversationBridge {
   return (window.toto as typeof window.toto & { conversation: ConversationBridge }).conversation
 }
-const conversationBinding = (begin: ConversationCaptureBegin): ConversationCaptureBinding =>
-  ({ sessionId: begin.sessionId, captureToken: begin.captureToken })
+const conversationBinding = (begin: ConversationCaptureBegin): ConversationCaptureBinding => ({
+  sessionId: begin.sessionId,
+  captureToken: begin.captureToken
+})
 function captureFailureReason(reason: CommandMicStopReason): ConversationCaptureFailure['reason'] {
-  if (reason === 'device_missing' || reason === 'device_lost' || reason === 'device_busy' ||
-      reason === 'policy_blocked' || reason === 'no_speech' || reason === 'recognition_unavailable' ||
-      reason === 'microphone_unavailable') return reason
+  if (
+    reason === 'device_missing' ||
+    reason === 'device_lost' ||
+    reason === 'device_busy' ||
+    reason === 'policy_blocked' ||
+    reason === 'no_speech' ||
+    reason === 'recognition_unavailable' ||
+    reason === 'microphone_unavailable'
+  )
+    return reason
   return reason === 'unsupported_engine' ? 'speech_unavailable' : 'not_ready'
 }
 function conversationResult(raw: unknown): ConversationMicResult {
   if (raw && typeof raw === 'object') {
     const value = raw as { ok?: unknown; reason?: unknown }
     if (value.ok === true && Object.keys(value).length === 1) return { ok: true }
-    if (value.ok === false && Object.keys(value).length === 2 &&
-        ConversationCaptureFailureSchema.shape.reason.safeParse(value.reason).success)
+    if (
+      value.ok === false &&
+      Object.keys(value).length === 2 &&
+      ConversationCaptureFailureSchema.shape.reason.safeParse(value.reason).success
+    )
       return { ok: false, reason: value.reason as ConversationCaptureFailure['reason'] }
   }
   return { ok: false, reason: 'recognition_unavailable' }
@@ -154,7 +181,11 @@ export class CommandMicController {
 
   async start(startOptions: CommandMicStartOptions = {}): Promise<void> {
     const begin = startOptions.conversation
-    if (begin && (!ConversationCaptureBeginSchema.safeParse(begin).success || startOptions.source || startOptions.purpose)) return
+    if (
+      begin &&
+      (!ConversationCaptureBeginSchema.safeParse(begin).success || startOptions.source || startOptions.purpose)
+    )
+      return
     const inputSource = begin ? 'push-to-talk' : (startOptions.source ?? 'deliberate-talk')
     const purpose = begin ? 'conversation' : (startOptions.purpose ?? 'command')
     if (this.disposed || this.active || this.snapshot.status === 'starting') return
@@ -211,7 +242,9 @@ export class CommandMicController {
       if (track.readyState === 'ended') throw new Error('device_lost')
       // Build the full audio graph before starting Main's bounded capture deadline. Keep it
       // disconnected until Main accepts the exact lease so no first PCM frame can be lost.
-      const start: unknown = begin ? await conversationBridge().captureStart(begin) : await window.toto.commandSpeechStart(sessionId)
+      const start: unknown = begin
+        ? await conversationBridge().captureStart(begin)
+        : await window.toto.commandSpeechStart(sessionId)
       if (!start || typeof start !== 'object' || (start as { ok?: unknown }).ok !== true)
         throw new Error((start as { reason?: string } | null)?.reason ?? 'recognition_unavailable')
       startedInMain = true
@@ -231,9 +264,12 @@ export class CommandMicController {
         source,
         node,
         mute,
-        timeout: setTimeout(() => {
-          void this.finish(generation)
-        }, begin ? Math.min(COMMAND_MIC_HARD_MAX_DURATION_MS, begin.maxMs) : this.maxDurationMs),
+        timeout: setTimeout(
+          () => {
+            void this.finish(generation)
+          },
+          begin ? Math.min(COMMAND_MIC_HARD_MAX_DURATION_MS, begin.maxMs) : this.maxDurationMs
+        ),
         generation,
         frameCount: 0,
         frameQueue: Promise.resolve(),
@@ -275,7 +311,10 @@ export class CommandMicController {
         micFailureReason(error) ??
         (reason === 'device_lost' || reason === 'device_missing' ? (reason as CommandMicStopReason) : null)
       if (startedInMain && sessionId) {
-        if (begin) void conversationBridge().captureCancel(conversationBinding(begin)).catch(() => {})
+        if (begin)
+          void conversationBridge()
+            .captureCancel(conversationBinding(begin))
+            .catch(() => {})
         else void window.toto.commandSpeechCancel(sessionId).catch(() => {})
       }
       const active = this.active
@@ -319,7 +358,10 @@ export class CommandMicController {
                 ? 'recognition_unavailable'
                 : (deviceReason ?? 'microphone_unavailable')
       this.publish({ status: 'error', reason: mapped })
-      if (begin) void conversationBridge().reportCaptureFailure({ ...conversationBinding(begin), reason: captureFailureReason(mapped) }).catch(() => {})
+      if (begin)
+        void conversationBridge()
+          .reportCaptureFailure({ ...conversationBinding(begin), reason: captureFailureReason(mapped) })
+          .catch(() => {})
     }
   }
 
@@ -363,13 +405,17 @@ export class CommandMicController {
     await this.teardownMedia(active)
     if (this.active !== active || active.admission.revoked) return
     const rawResult: unknown = active.conversation
-      ? await conversationBridge().captureFinish(active.conversation, active.frameCount).catch(() => ({ ok: false, reason: 'recognition_unavailable' }))
+      ? await conversationBridge()
+          .captureFinish(active.conversation, active.frameCount)
+          .catch(() => ({ ok: false, reason: 'recognition_unavailable' }))
       : await window.toto.commandSpeechFinish(active.sessionId, active.frameCount).catch(() => ({
           ok: false as const,
           reason: 'recognition_unavailable' as const
         }))
     if (this.active !== active) return
-    const result = active.conversation ? conversationResult(rawResult) : rawResult as Awaited<ReturnType<typeof window.toto.commandSpeechFinish>>
+    const result = active.conversation
+      ? conversationResult(rawResult)
+      : (rawResult as Awaited<ReturnType<typeof window.toto.commandSpeechFinish>>)
     this.release(active)
     if (!result.ok) {
       const completedGeneration = this.generation
@@ -383,15 +429,25 @@ export class CommandMicController {
               : 'recognition_unavailable'
       this.publish({ status: 'error', reason })
       if (active.conversation && !this.disposed && this.generation === completedGeneration) {
-        try { this.options.onConversationResult?.(active.conversation, { ok: false, reason: captureFailureReason(reason) }) } catch { /* owner callback cannot prevent cleanup */ }
-        void conversationBridge().reportCaptureFailure({ ...active.conversation, reason: captureFailureReason(reason) }).catch(() => {})
+        try {
+          this.options.onConversationResult?.(active.conversation, { ok: false, reason: captureFailureReason(reason) })
+        } catch {
+          /* owner callback cannot prevent cleanup */
+        }
+        void conversationBridge()
+          .reportCaptureFailure({ ...active.conversation, reason: captureFailureReason(reason) })
+          .catch(() => {})
       }
       return
     }
     const generation = ++this.generation
     this.publish({ status: 'done' })
     if (active.conversation && !this.disposed && this.generation === generation) {
-      try { this.options.onConversationResult?.(active.conversation, result as ConversationMicResult) } catch { /* owner callback cannot prevent idle cleanup */ }
+      try {
+        this.options.onConversationResult?.(active.conversation, result as ConversationMicResult)
+      } catch {
+        /* owner callback cannot prevent idle cleanup */
+      }
     }
     setTimeout(() => {
       if (!this.disposed && this.generation === generation) this.publish({ status: 'idle' })
@@ -404,7 +460,10 @@ export class CommandMicController {
     this.admissionAbort = null
     const active = this.active
     if (active) {
-      if (active.conversation) void conversationBridge().captureCancel(active.conversation).catch(() => {})
+      if (active.conversation)
+        void conversationBridge()
+          .captureCancel(active.conversation)
+          .catch(() => {})
       else void window.toto.commandSpeechCancel(active.sessionId).catch(() => {})
       this.release(active)
     }
@@ -419,7 +478,10 @@ export class CommandMicController {
     this.admissionAbort = null
     const active = this.active
     if (active) {
-      if (active.conversation) void conversationBridge().captureCancel(active.conversation).catch(() => {})
+      if (active.conversation)
+        void conversationBridge()
+          .captureCancel(active.conversation)
+          .catch(() => {})
       else void window.toto.commandSpeechCancel(active.sessionId).catch(() => {})
       this.release(active)
     }
@@ -446,11 +508,15 @@ export class CommandMicController {
         const result: unknown = active.conversation
           ? await conversationBridge().captureFrame(active.conversation, sequence, data.samples as Float32Array)
           : await window.toto.commandSpeechFrame(active.sessionId, sequence, data.samples as Float32Array)
-        if (!result || typeof result !== 'object' || (result as { ok?: unknown }).ok !== true) throw new Error('recognition_unavailable')
+        if (!result || typeof result !== 'object' || (result as { ok?: unknown }).ok !== true)
+          throw new Error('recognition_unavailable')
       })
       .catch(() => {
         active.failed = true
-        if (active.conversation) void conversationBridge().captureCancel(active.conversation).catch(() => {})
+        if (active.conversation)
+          void conversationBridge()
+            .captureCancel(active.conversation)
+            .catch(() => {})
         else void window.toto.commandSpeechCancel(active.sessionId).catch(() => {})
       })
   }
@@ -459,8 +525,12 @@ export class CommandMicController {
     const active = this.active
     if (active && active.generation === generation) {
       if (active.conversation) {
-        void conversationBridge().captureCancel(active.conversation).catch(() => {})
-        void conversationBridge().reportCaptureFailure({ ...active.conversation, reason: captureFailureReason(reason) }).catch(() => {})
+        void conversationBridge()
+          .captureCancel(active.conversation)
+          .catch(() => {})
+        void conversationBridge()
+          .reportCaptureFailure({ ...active.conversation, reason: captureFailureReason(reason) })
+          .catch(() => {})
       } else void window.toto.commandSpeechCancel(active.sessionId).catch(() => {})
       this.release(active)
     }

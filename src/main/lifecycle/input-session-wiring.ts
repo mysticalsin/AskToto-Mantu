@@ -14,11 +14,14 @@ interface OwnerWindowLike {
 
 export interface MainInputSessionWiringDeps {
   voiceActions(): Pick<VoiceActionsRuntime, 'onHardStop' | 'onMeetingReserved'> | null | undefined
-  conversation?(): {
-    onHardStop(reason: InputSessionStopReason): void
-    onMeetingReserved(): void
-    onInputLeaseRevoked(owner: TrustedInputOwner, lease: InputSessionLease, reason: InputSessionStopReason): void
-  } | null | undefined
+  conversation?():
+    | {
+        onHardStop(reason: InputSessionStopReason): void
+        onMeetingReserved(): void
+        onInputLeaseRevoked(owner: TrustedInputOwner, lease: InputSessionLease, reason: InputSessionStopReason): void
+      }
+    | null
+    | undefined
   revokeSpokenReplies(): void
   commandMicActivationLeaseId(): string | null
   clearCommandMicActivationLeaseId(): void

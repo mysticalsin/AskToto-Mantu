@@ -20,13 +20,39 @@ function harness() {
   })
   const ipc = {
     invoke,
-    on: vi.fn((channel: string, cb: (e: unknown, p: unknown) => void) => { handlers.set(channel, cb) }),
-    removeListener: vi.fn((channel: string) => { handlers.delete(channel) })
+    on: vi.fn((channel: string, cb: (e: unknown, p: unknown) => void) => {
+      handlers.set(channel, cb)
+    }),
+    removeListener: vi.fn((channel: string) => {
+      handlers.delete(channel)
+    })
   }
-  const button = { tagName: 'BUTTON', type: 'button', disabled: false, isConnected: true, hasAttribute: (name: string) => name === 'data-metis-conversation-start', getClientRects: () => ({ length: 1 }) }
+  const button = {
+    tagName: 'BUTTON',
+    type: 'button',
+    disabled: false,
+    isConnected: true,
+    hasAttribute: (name: string) => name === 'data-metis-conversation-start',
+    getClientRects: () => ({ length: 1 })
+  }
   let click: ((event: { isTrusted: boolean; composedPath(): unknown[] }) => void) | undefined
-  const doc = { addEventListener: (_type: 'click', cb: (event: { isTrusted: boolean; composedPath(): unknown[] }) => void, _capture: boolean) => { click = cb }, querySelectorAll: () => ({ length: 1 }) }
-  return { api: createConversationPreloadApi(ipc as never, doc), invoke, handlers, ipc, click: (isTrusted = true) => click?.({ isTrusted, composedPath: () => [button] }) }
+  const doc = {
+    addEventListener: (
+      _type: 'click',
+      cb: (event: { isTrusted: boolean; composedPath(): unknown[] }) => void,
+      _capture: boolean
+    ) => {
+      click = cb
+    },
+    querySelectorAll: () => ({ length: 1 })
+  }
+  return {
+    api: createConversationPreloadApi(ipc as never, doc),
+    invoke,
+    handlers,
+    ipc,
+    click: (isTrusted = true) => click?.({ isTrusted, composedPath: () => [button] })
+  }
 }
 
 describe('conversation preload bridge', () => {
@@ -45,17 +71,30 @@ describe('conversation preload bridge', () => {
     await h.api.conversation.startCapture('1:1', { authSessionGeneration: 2, contextRevision: 3 })
     expect(h.invoke).toHaveBeenCalledWith(IPC.inputSessionStart, {
       input: { source: 'push-to-talk', purpose: 'conversation', activation: 'explicit' },
-      context: { authSessionGeneration: 2, contextRevision: 3 }, conversationCaptureToken: '1:1'
+      context: { authSessionGeneration: 2, contextRevision: 3 },
+      conversationCaptureToken: '1:1'
     })
   })
 
   it('carries the dispatched window and bounds its start by command capture limits', () => {
-    expect(ConversationCaptureBeginSchema.safeParse({ sessionId: 's1', captureToken: '1:2', maxMs: 10_000 }).success).toBe(true)
-    expect(ConversationCaptureBeginSchema.safeParse({ sessionId: 's1', captureToken: '1:2', maxMs: 15_001 }).success).toBe(false)
-    expect(ConversationCaptureStartSchema.safeParse({ sessionId: 's1', captureToken: '1:2', maxSeconds: 10 }).success).toBe(true)
-    expect(ConversationCaptureStartSchema.safeParse({ sessionId: 's1', captureToken: '1:2', maxSeconds: 16 }).success).toBe(false)
-    expect(ConversationCaptureFailureSchema.safeParse({ sessionId: 's1', captureToken: '1:2', reason: 'no_speech' }).success).toBe(true)
-    expect(ConversationCaptureFailureSchema.safeParse({ sessionId: 's1', captureToken: '1:2', reason: 'busy' }).success).toBe(false)
+    expect(
+      ConversationCaptureBeginSchema.safeParse({ sessionId: 's1', captureToken: '1:2', maxMs: 10_000 }).success
+    ).toBe(true)
+    expect(
+      ConversationCaptureBeginSchema.safeParse({ sessionId: 's1', captureToken: '1:2', maxMs: 15_001 }).success
+    ).toBe(false)
+    expect(
+      ConversationCaptureStartSchema.safeParse({ sessionId: 's1', captureToken: '1:2', maxSeconds: 10 }).success
+    ).toBe(true)
+    expect(
+      ConversationCaptureStartSchema.safeParse({ sessionId: 's1', captureToken: '1:2', maxSeconds: 16 }).success
+    ).toBe(false)
+    expect(
+      ConversationCaptureFailureSchema.safeParse({ sessionId: 's1', captureToken: '1:2', reason: 'no_speech' }).success
+    ).toBe(true)
+    expect(
+      ConversationCaptureFailureSchema.safeParse({ sessionId: 's1', captureToken: '1:2', reason: 'busy' }).success
+    ).toBe(false)
   })
 
   it('validates snapshots and ask payloads, and removes the exact listener on unsubscribe', () => {
@@ -63,9 +102,19 @@ describe('conversation preload bridge', () => {
     const state = vi.fn()
     const unsub = h.api.conversation.onState(state)
     const snapshot = {
-      revision: 1, state: 'idle', active: false, stopAvailable: false, sessionId: null,
-      startedAt: null, idleExpiresAt: null, maxExpiresAt: null, replyGeneration: 0,
-      limits: { idleMs: 300_000, maxMs: 1_800_000, status: 'PROPOSED' }, reason: null, message: null, enabled: true
+      revision: 1,
+      state: 'idle',
+      active: false,
+      stopAvailable: false,
+      sessionId: null,
+      startedAt: null,
+      idleExpiresAt: null,
+      maxExpiresAt: null,
+      replyGeneration: 0,
+      limits: { idleMs: 300_000, maxMs: 1_800_000, status: 'PROPOSED' },
+      reason: null,
+      message: null,
+      enabled: true
     }
     expect(ConversationSnapshotSchema.safeParse(snapshot).success).toBe(true)
     h.handlers.get(CONVERSATION_IPC.state)?.({}, snapshot)
@@ -92,21 +141,32 @@ describe('conversation preload bridge', () => {
     await expect(h.api.conversation.captureFinish(binding, 2)).resolves.toEqual({ ok: true })
     expect(h.invoke).toHaveBeenCalledWith(CONVERSATION_IPC.captureFinish, { ...binding, frameCount: 2 })
     h.invoke.mockResolvedValueOnce({ ok: true, transcript: 'private utterance' })
-    await expect(h.api.conversation.captureFinish(binding, 2)).resolves.toEqual({ ok: false, reason: 'recognition_unavailable' })
+    await expect(h.api.conversation.captureFinish(binding, 2)).resolves.toEqual({
+      ok: false,
+      reason: 'recognition_unavailable'
+    })
     const before = h.invoke.mock.calls.length
-    await expect(h.api.conversation.captureFinish(binding, -1)).resolves.toEqual({ ok: false, reason: 'recognition_unavailable' })
+    await expect(h.api.conversation.captureFinish(binding, -1)).resolves.toEqual({
+      ok: false,
+      reason: 'recognition_unavailable'
+    })
     expect(h.invoke).toHaveBeenCalledTimes(before)
   })
 
   it('returns parsed input-session results and rejects malformed input context before IPC', async () => {
     const h = harness()
-    await expect(h.api.conversation.startCapture('1:1', { authSessionGeneration: 2, contextRevision: 3 })).resolves.toEqual({ ok: false, reason: 'busy' })
+    await expect(
+      h.api.conversation.startCapture('1:1', { authSessionGeneration: 2, contextRevision: 3 })
+    ).resolves.toEqual({ ok: false, reason: 'busy' })
     expect(h.invoke).toHaveBeenCalledWith(IPC.inputSessionStart, {
       input: { source: 'push-to-talk', purpose: 'conversation', activation: 'explicit' },
-      context: { authSessionGeneration: 2, contextRevision: 3 }, conversationCaptureToken: '1:1'
+      context: { authSessionGeneration: 2, contextRevision: 3 },
+      conversationCaptureToken: '1:1'
     })
     const before = h.invoke.mock.calls.length
-    await expect(h.api.conversation.startCapture('', { authSessionGeneration: -1, contextRevision: 3 })).resolves.toEqual({ ok: false, reason: 'invalid_request' })
+    await expect(
+      h.api.conversation.startCapture('', { authSessionGeneration: -1, contextRevision: 3 })
+    ).resolves.toEqual({ ok: false, reason: 'invalid_request' })
     expect(h.invoke).toHaveBeenCalledTimes(before)
   })
 })

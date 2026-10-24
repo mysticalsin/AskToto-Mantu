@@ -1,11 +1,20 @@
 import type { IpcMainInvokeEvent } from 'electron'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { CONVERSATION_IPC, type ConversationCaptureBegin, type ConversationAsk } from '@shared/conversation/conversation-session'
+import {
+  CONVERSATION_IPC,
+  type ConversationCaptureBegin,
+  type ConversationAsk
+} from '@shared/conversation/conversation-session'
 import { AskStartSchema, IPC } from '@shared/ipc'
 import { InputSessionAuthority } from '../../input-session-authority'
 import { commandMicOwner, type CommandMicActivationFrame } from '../../command-mic-activation-authority'
 import { createConversationRuntime } from './conversation-runtime'
-import { COMMAND_SPEECH_FINALIZATION_GRACE_MS, COMMAND_SPEECH_MAX_FRAME_SAMPLES, COMMAND_SPEECH_SAMPLE_RATE } from '../../command-speech-capture'
+import { registerConversationIpc } from '../../ipc/conversation-ipc'
+import {
+  COMMAND_SPEECH_FINALIZATION_GRACE_MS,
+  COMMAND_SPEECH_MAX_FRAME_SAMPLES,
+  COMMAND_SPEECH_SAMPLE_RATE
+} from '../../command-speech-capture'
 
 type Handler = (event: IpcMainInvokeEvent, payload?: unknown) => unknown
 
@@ -29,16 +38,16 @@ function harness() {
   let currentContext = context
   const authority = new InputSessionAuthority({ token: () => 'a'.repeat(48), now: () => 1_000_000 })
   const runtime = createConversationRuntime({
-    ipcMain: { handle: (channel, handler) => { handlers.set(channel, handler as Handler) } },
-    assertMainWindow: () => {},
     frameFromEvent: (rawEvent) => {
       const senderFrame = rawEvent.senderFrame
-      return senderFrame ? {
-        webContentsId: rawEvent.sender.id,
-        frameId: `${senderFrame.processId}:${senderFrame.routingId}`,
-        isTopFrame: senderFrame.parent === null,
-        url: senderFrame.url
-      } : null
+      return senderFrame
+        ? {
+            webContentsId: rawEvent.sender.id,
+            frameId: `${senderFrame.processId}:${senderFrame.routingId}`,
+            isTopFrame: senderFrame.parent === null,
+            url: senderFrame.url
+          }
+        : null
     },
     mainFrame: () => ownerFrame,
     currentContext: () => currentContext,
@@ -59,13 +68,30 @@ function harness() {
     transcribe: vi.fn(async () => 'recognized phrase'),
     cancelAsk
   })
-  runtime.registerIpc()
+  registerConversationIpc({
+    ipcMain: {
+      handle: (channel, handler) => {
+        handlers.set(channel, handler as Handler)
+      }
+    },
+    assertMainWindow: () => {},
+    handlers: runtime.handlers
+  })
   const invoke = async (channel: string, payload?: unknown): Promise<unknown> => {
     const handler = handlers.get(channel)
     if (!handler) throw new Error(`missing IPC handler: ${channel}`)
     return handler(event, payload)
   }
-  return { runtime, authority, sent, cancelAsk, invoke, setContext: (value: typeof context) => { currentContext = value } }
+  return {
+    runtime,
+    authority,
+    sent,
+    cancelAsk,
+    invoke,
+    setContext: (value: typeof context) => {
+      currentContext = value
+    }
+  }
 }
 
 async function beginCapture(h: ReturnType<typeof harness>): Promise<{
@@ -78,7 +104,11 @@ async function beginCapture(h: ReturnType<typeof harness>): Promise<{
   expect(beginMessage).toBeDefined()
   const begin = beginMessage!.payload as ConversationCaptureBegin
   expect(h.runtime.authorizeInputStart(event, owner, begin.captureToken)).toBe(true)
-  const admission = h.authority.start(owner, { source: 'push-to-talk', purpose: 'conversation', activation: 'explicit' })
+  const admission = h.authority.start(owner, {
+    source: 'push-to-talk',
+    purpose: 'conversation',
+    activation: 'explicit'
+  })
   expect(admission.ok).toBe(true)
   if (!admission.ok) throw new Error('conversation input lease was refused')
   expect(h.runtime.bindInputLease(owner, begin.captureToken, admission.lease)).toBe(true)
@@ -97,9 +127,13 @@ async function sendFullSampleBudget(
   let sent = 0
   while (sent < maxSamples) {
     const size = Math.min(COMMAND_SPEECH_MAX_FRAME_SAMPLES, maxSamples - sent)
-    expect(await h.invoke(CONVERSATION_IPC.captureFrame, {
-      ...binding, sequence, samples: new Float32Array(size)
-    })).toMatchObject({ ok: true })
+    expect(
+      await h.invoke(CONVERSATION_IPC.captureFrame, {
+        ...binding,
+        sequence,
+        samples: new Float32Array(size)
+      })
+    ).toMatchObject({ ok: true })
     sequence++
     sent += size
   }
@@ -109,8 +143,9 @@ async function sendFullSampleBudget(
 async function captureOneUtterance(h: ReturnType<typeof harness>): Promise<ConversationAsk> {
   const { binding } = await beginCapture(h)
   expect(await h.invoke(CONVERSATION_IPC.captureStart, { ...binding, maxSeconds: 10 })).toMatchObject({ ok: true })
-  expect(await h.invoke(CONVERSATION_IPC.captureFrame, { ...binding, sequence: 0, samples: new Float32Array([0.25]) }))
-    .toMatchObject({ ok: true })
+  expect(
+    await h.invoke(CONVERSATION_IPC.captureFrame, { ...binding, sequence: 0, samples: new Float32Array([0.25]) })
+  ).toMatchObject({ ok: true })
   expect(await h.invoke(CONVERSATION_IPC.captureFinish, { ...binding, frameCount: 1 })).toMatchObject({ ok: true })
   const ask = h.sent.find((message) => message.channel === CONVERSATION_IPC.ask)?.payload
   if (!ask) throw new Error('recognized capture did not produce a main-issued Ask')
@@ -156,9 +191,13 @@ describe('G28 main capture and Ask binding', () => {
 
     vi.advanceTimersByTime(10_750)
 
-    expect(await h.invoke(CONVERSATION_IPC.captureFrame, {
-      ...binding, sequence: frameCount, samples: new Float32Array([0.25])
-    })).toMatchObject({ ok: false })
+    expect(
+      await h.invoke(CONVERSATION_IPC.captureFrame, {
+        ...binding,
+        sequence: frameCount,
+        samples: new Float32Array([0.25])
+      })
+    ).toMatchObject({ ok: false })
     expect(h.authority.activeLease).toBeNull()
     expect(h.sent.filter((message) => message.channel === CONVERSATION_IPC.captureCancel)).toHaveLength(1)
   })
@@ -183,10 +222,14 @@ describe('G28 main capture and Ask binding', () => {
     expect(await h.invoke(CONVERSATION_IPC.captureStart, { ...binding, maxSeconds: 10 })).toMatchObject({ ok: true })
     const samples = new Float32Array(2_048)
     for (let sequence = 0; sequence < 78; sequence++) {
-      expect(await h.invoke(CONVERSATION_IPC.captureFrame, { ...binding, sequence, samples })).toMatchObject({ ok: true })
+      expect(await h.invoke(CONVERSATION_IPC.captureFrame, { ...binding, sequence, samples })).toMatchObject({
+        ok: true
+      })
     }
 
-    expect(await h.invoke(CONVERSATION_IPC.captureFrame, { ...binding, sequence: 78, samples })).toMatchObject({ ok: false })
+    expect(await h.invoke(CONVERSATION_IPC.captureFrame, { ...binding, sequence: 78, samples })).toMatchObject({
+      ok: false
+    })
     expect(h.authority.activeLease).toBeNull()
     expect(h.sent.filter((message) => message.channel === CONVERSATION_IPC.captureCancel)).toHaveLength(1)
   })
@@ -202,7 +245,10 @@ describe('G28 main capture and Ask binding', () => {
     expect(h.runtime.session.snapshot().state).toBe('listening')
     expect(h.sent.filter((message) => message.channel === CONVERSATION_IPC.captureBegin)).toHaveLength(2)
     const late = AskStartSchema.parse({
-      id: 'late-spoken-ask', mode: 'answer', prompt: ask.text, inputOrigin: 'user-spoken-by-owner',
+      id: 'late-spoken-ask',
+      mode: 'answer',
+      prompt: ask.text,
+      inputOrigin: 'user-spoken-by-owner',
       conversationReply: { sessionId: ask.sessionId, replyGeneration: ask.replyGeneration }
     })
     expect(h.runtime.authorizeAsk(event, late)).toBe(false)
@@ -211,13 +257,17 @@ describe('G28 main capture and Ask binding', () => {
     const h = harness()
     const ask = await captureOneUtterance(h)
     const forged = AskStartSchema.parse({
-      id: 'spoken-ask-1', mode: 'answer', prompt: 'renderer substituted text', inputOrigin: 'user-spoken-by-owner',
+      id: 'spoken-ask-1',
+      mode: 'answer',
+      prompt: 'renderer substituted text',
+      inputOrigin: 'user-spoken-by-owner',
       conversationReply: { sessionId: ask.sessionId, replyGeneration: ask.replyGeneration }
     })
     expect(h.runtime.authorizeAsk(event, forged)).toBe(false)
 
     const exact = AskStartSchema.parse({
-      ...forged, prompt: ask.text
+      ...forged,
+      prompt: ask.text
     })
     expect(h.runtime.authorizeAsk(event, exact)).toBe(true)
     expect(h.runtime.authorizeAsk(event, exact)).toBe(false)
@@ -228,7 +278,10 @@ describe('G28 main capture and Ask binding', () => {
     const h = harness()
     const ask = await captureOneUtterance(h)
     const request = AskStartSchema.parse({
-      id: 'spoken-ask-delayed-reply', mode: 'answer', prompt: ask.text, inputOrigin: 'user-spoken-by-owner',
+      id: 'spoken-ask-delayed-reply',
+      mode: 'answer',
+      prompt: ask.text,
+      inputOrigin: 'user-spoken-by-owner',
       conversationReply: { sessionId: ask.sessionId, replyGeneration: ask.replyGeneration }
     })
     expect(h.runtime.authorizeAsk(event, request)).toBe(true)
@@ -245,14 +298,18 @@ describe('G28 main capture and Ask binding', () => {
     const h = harness()
     const ask = await captureOneUtterance(h)
     const request = AskStartSchema.parse({
-      id: 'spoken-ask-fails-before-handoff-deadline', mode: 'answer', prompt: ask.text,
+      id: 'spoken-ask-fails-before-handoff-deadline',
+      mode: 'answer',
+      prompt: ask.text,
       inputOrigin: 'user-spoken-by-owner',
       conversationReply: { sessionId: ask.sessionId, replyGeneration: ask.replyGeneration }
     })
     expect(h.runtime.authorizeAsk(event, request)).toBe(true)
 
     h.runtime.observeAsk({
-      type: 'event', id: request.id, channel: IPC.streamError,
+      type: 'event',
+      id: request.id,
+      channel: IPC.streamError,
       payload: { id: request.id, message: 'The answer could not be generated.' }
     })
     vi.advanceTimersByTime(5_000)
@@ -265,7 +322,9 @@ describe('G28 main capture and Ask binding', () => {
     const h = harness()
     const ask = await captureOneUtterance(h)
     const staleRequest = AskStartSchema.parse({
-      id: 'spoken-ask-from-stale-owner', mode: 'answer', prompt: ask.text,
+      id: 'spoken-ask-from-stale-owner',
+      mode: 'answer',
+      prompt: ask.text,
       inputOrigin: 'user-spoken-by-owner',
       conversationReply: { sessionId: ask.sessionId, replyGeneration: ask.replyGeneration }
     })
@@ -276,11 +335,16 @@ describe('G28 main capture and Ask binding', () => {
     expect(h.runtime.authorizeAsk(event, staleRequest)).toBe(false)
     expect(h.runtime.session.snapshot()).toMatchObject({ active: false, state: 'ended', reason: 'renderer_reset' })
     h.runtime.onReplyLifecycle({
-      phase: 'started', askId: staleRequest.id, generation: ask.replyGeneration
+      phase: 'started',
+      askId: staleRequest.id,
+      generation: ask.replyGeneration
     })
     expect(h.runtime.session.snapshot()).toMatchObject({ active: false, state: 'ended', reason: 'renderer_reset' })
     h.runtime.onReplyLifecycle({
-      phase: 'settled', askId: staleRequest.id, generation: ask.replyGeneration, outcome: 'finished'
+      phase: 'settled',
+      askId: staleRequest.id,
+      generation: ask.replyGeneration,
+      outcome: 'finished'
     })
     expect(h.runtime.session.snapshot()).toMatchObject({ active: false, state: 'ended', reason: 'renderer_reset' })
     vi.advanceTimersByTime(5_000)
@@ -293,7 +357,10 @@ describe('G28 main capture and Ask binding', () => {
     const h = harness()
     const ask = await captureOneUtterance(h)
     const request = AskStartSchema.parse({
-      id: 'spoken-ask-2', mode: 'answer', prompt: ask.text, inputOrigin: 'user-spoken-by-owner',
+      id: 'spoken-ask-2',
+      mode: 'answer',
+      prompt: ask.text,
+      inputOrigin: 'user-spoken-by-owner',
       conversationReply: { sessionId: ask.sessionId, replyGeneration: ask.replyGeneration }
     })
     expect(h.runtime.authorizeAsk(event, request)).toBe(true)
@@ -302,7 +369,12 @@ describe('G28 main capture and Ask binding', () => {
     vi.advanceTimersByTime(2_000)
     expect(h.sent.filter((message) => message.channel === CONVERSATION_IPC.captureBegin)).toHaveLength(1)
 
-    h.runtime.onReplyLifecycle({ phase: 'settled', askId: request.id, generation: ask.replyGeneration, outcome: 'finished' })
+    h.runtime.onReplyLifecycle({
+      phase: 'settled',
+      askId: request.id,
+      generation: ask.replyGeneration,
+      outcome: 'finished'
+    })
     vi.advanceTimersByTime(400)
     expect(h.sent.filter((message) => message.channel === CONVERSATION_IPC.captureBegin)).toHaveLength(2)
     expect(h.runtime.session.snapshot().state).toBe('listening')
@@ -312,7 +384,10 @@ describe('G28 main capture and Ask binding', () => {
     const h = harness()
     const ask = await captureOneUtterance(h)
     const request = AskStartSchema.parse({
-      id: 'spoken-ask-3', mode: 'answer', prompt: ask.text, inputOrigin: 'user-spoken-by-owner',
+      id: 'spoken-ask-3',
+      mode: 'answer',
+      prompt: ask.text,
+      inputOrigin: 'user-spoken-by-owner',
       conversationReply: { sessionId: ask.sessionId, replyGeneration: ask.replyGeneration }
     })
     expect(h.runtime.authorizeAsk(event, request)).toBe(true)

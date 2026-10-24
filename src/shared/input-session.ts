@@ -80,8 +80,17 @@ export const InputSessionStartRequestSchema = z
   })
   .strict()
   .superRefine((request, context) => {
-    if (request.conversationCaptureToken && (request.input.source !== 'push-to-talk' || request.input.purpose !== 'conversation' || request.input.activation !== 'explicit')) {
-      context.addIssue({ code: z.ZodIssueCode.custom, path: ['conversationCaptureToken'], message: 'Conversation capture tokens require explicit conversation push-to-talk.' })
+    if (
+      request.conversationCaptureToken &&
+      (request.input.source !== 'push-to-talk' ||
+        request.input.purpose !== 'conversation' ||
+        request.input.activation !== 'explicit')
+    ) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['conversationCaptureToken'],
+        message: 'Conversation capture tokens require explicit conversation push-to-talk.'
+      })
     }
   })
 export type InputSessionStartRequest = z.infer<typeof InputSessionStartRequestSchema>

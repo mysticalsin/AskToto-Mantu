@@ -34,14 +34,40 @@ export const CONVERSATION_IPC = {
 
 const Id = z.string().min(1).max(64)
 const CaptureBinding = { sessionId: Id, captureToken: z.string().min(1).max(64) }
-export const ConversationCaptureBeginSchema = z.object({ ...CaptureBinding, maxMs: z.number().int().positive().max(COMMAND_SPEECH_MAX_SECONDS * 1_000) }).strict()
+export const ConversationCaptureBeginSchema = z
+  .object({
+    ...CaptureBinding,
+    maxMs: z
+      .number()
+      .int()
+      .positive()
+      .max(COMMAND_SPEECH_MAX_SECONDS * 1_000)
+  })
+  .strict()
 export const ConversationCaptureCancelSchema = z.object(CaptureBinding).strict()
-export const ConversationCaptureStartSchema = z.object({ ...CaptureBinding, maxSeconds: z.number().int().positive().max(COMMAND_SPEECH_MAX_SECONDS) }).strict()
+export const ConversationCaptureStartSchema = z
+  .object({ ...CaptureBinding, maxSeconds: z.number().int().positive().max(COMMAND_SPEECH_MAX_SECONDS) })
+  .strict()
 export const CONVERSATION_CAPTURE_MAX_FRAME_SAMPLES = 2_048
 export const CONVERSATION_CAPTURE_MAX_SAMPLES = 16_000 * COMMAND_SPEECH_MAX_SECONDS
-export const CONVERSATION_CAPTURE_MAX_FRAMES = Math.ceil(CONVERSATION_CAPTURE_MAX_SAMPLES / CONVERSATION_CAPTURE_MAX_FRAME_SAMPLES)
-export const ConversationCaptureFrameSchema = z.object({ ...CaptureBinding, sequence: z.number().int().nonnegative().max(CONVERSATION_CAPTURE_MAX_FRAMES - 1).safe(), samples: z.instanceof(Float32Array).refine((frame) => frame.length <= CONVERSATION_CAPTURE_MAX_FRAME_SAMPLES) }).strict()
-export const ConversationCaptureFinishSchema = z.object({ ...CaptureBinding, frameCount: z.number().int().nonnegative().max(CONVERSATION_CAPTURE_MAX_FRAMES).safe() }).strict()
+export const CONVERSATION_CAPTURE_MAX_FRAMES = Math.ceil(
+  CONVERSATION_CAPTURE_MAX_SAMPLES / CONVERSATION_CAPTURE_MAX_FRAME_SAMPLES
+)
+export const ConversationCaptureFrameSchema = z
+  .object({
+    ...CaptureBinding,
+    sequence: z
+      .number()
+      .int()
+      .nonnegative()
+      .max(CONVERSATION_CAPTURE_MAX_FRAMES - 1)
+      .safe(),
+    samples: z.instanceof(Float32Array).refine((frame) => frame.length <= CONVERSATION_CAPTURE_MAX_FRAME_SAMPLES)
+  })
+  .strict()
+export const ConversationCaptureFinishSchema = z
+  .object({ ...CaptureBinding, frameCount: z.number().int().nonnegative().max(CONVERSATION_CAPTURE_MAX_FRAMES).safe() })
+  .strict()
 const CONVERSATION_CAPTURE_FAILURE_REASONS = [
   'microphone_unavailable',
   'device_missing',
@@ -53,10 +79,18 @@ const CONVERSATION_CAPTURE_FAILURE_REASONS = [
   'no_speech',
   'recognition_unavailable'
 ] as const satisfies readonly ConversationReason[]
-export const ConversationCaptureFailureSchema = z.object({ ...CaptureBinding, reason: z.enum(CONVERSATION_CAPTURE_FAILURE_REASONS) }).strict()
+export const ConversationCaptureFailureSchema = z
+  .object({ ...CaptureBinding, reason: z.enum(CONVERSATION_CAPTURE_FAILURE_REASONS) })
+  .strict()
 export const ConversationTranscriptSchema = z.string().max(2000)
-export const ConversationAskSchema = z.object({ sessionId: Id, replyGeneration: z.number().int().nonnegative().safe(), text: ConversationTranscriptSchema }).strict()
-export const ConversationReplyCompleteSchema = z.object({ sessionId: Id, replyGeneration: z.number().int().nonnegative().safe() }).strict()
+export const ConversationAskSchema = z
+  .object({ sessionId: Id, replyGeneration: z.number().int().nonnegative().safe(), text: ConversationTranscriptSchema })
+  .strict()
+/** Exact main-owned conversation reply token carried by an Ask; ordinary asks omit it. */
+export const ConversationReplySchema = z
+  .object({ sessionId: Id, replyGeneration: z.number().int().nonnegative().safe() })
+  .strict()
+export const ConversationReplyCompleteSchema = ConversationReplySchema
 export type ConversationCaptureBegin = z.infer<typeof ConversationCaptureBeginSchema>
 export type ConversationCaptureBinding = z.infer<typeof ConversationCaptureCancelSchema>
 export type ConversationCaptureFrame = z.infer<typeof ConversationCaptureFrameSchema>

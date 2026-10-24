@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { ConversationReplySchema } from './conversation/conversation-session'
 export { MetisCommandCancellationSchema, MetisCommandConfirmationSchema } from './metis-command-contract'
 export type { MetisCommandCancellation, MetisCommandConfirmation, MetisCommandState } from './metis-command-contract'
 import { AttachmentSendFieldsSchema } from './attachments'
@@ -458,8 +459,7 @@ export const BUILTIN_MODE_LABELS: Record<BuiltinMode, string> = {
   'cold-call': 'Cold Calling'
 }
 
-/** A user-created custom mode (id + display label). Its prompt lives in settings.modePrompts[id] and its
- *  context files in settings.contextDocs[id]. Built-in modes are never stored here. */
+/** A user-created custom mode (id + label). Prompt: settings.modePrompts[id]; context files: settings.contextDocs[id]. Never built-ins. */
 export interface CustomMode {
   id: string
   label: string
@@ -785,8 +785,7 @@ export const RecapExportSchema = z.object({
 export type RecapExport = z.infer<typeof RecapExportSchema>
 
 /** Opted-in follow-up memory expires after this much ask inactivity. Shared so the renderer's screen-ask
- *  fast path (which relies on history carrying the prior screen description) and main's fresh-question
- *  gate (which wipes stale history) can never disagree about what "still fresh" means. */
+ *  fast path and main's fresh-question gate (which wipes stale history) agree on what "still fresh" means. */
 export const ASK_MEMORY_IDLE_MS = 10 * 60 * 1000
 
 export const ChatTurnSchema = z.object({
@@ -802,11 +801,7 @@ const AskStartBaseSchema = z.object({
   outputIntent: z.enum(['direct', 'ambient']).optional(),
   prompt: z.string().default(''),
   inputOrigin: z.enum(['user-typed', 'user-spoken-by-owner']).optional(), // provenance only; grants no authority
-  /** Exact main-owned conversation reply; ordinary asks omit it. */
-  conversationReply: z.object({
-    sessionId: z.string().min(1).max(64),
-    replyGeneration: z.number().int().nonnegative().safe()
-  }).strict().optional(),
+  conversationReply: ConversationReplySchema.optional(),
   /** base64 image (JPEG from screen capture; no data: prefix) for vision mode. Max ~5.5 MB base64. */
   image: z
     .string()

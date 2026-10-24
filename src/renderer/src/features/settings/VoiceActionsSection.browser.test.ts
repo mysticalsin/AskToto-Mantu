@@ -235,11 +235,18 @@ describe('Settings › Speech › Voice actions (V06)', () => {
     expect(await conversationStart().isDisabled()).toBe(false)
     expect((await inspect()).callArgs.some((call) => call.name === 'conversation.start')).toBe(false)
     await conversationStart().click()
-    await expect.poll(async () => (await inspect()).callArgs.some((call) => call.name === 'conversation.start')).toBe(true)
+    await expect
+      .poll(async () => (await inspect()).callArgs.some((call) => call.name === 'conversation.start'))
+      .toBe(true)
     expect(await page.locator('[data-metis-conversation-start]').count()).toBe(1)
     await page.close()
     page = await browser.newPage()
-    await mount({ settings: { voiceActions: { enabled: true, conversation: { enabled: true } }, enterpriseLive: { managed: true, inferenceMode: 'cloud-only', summaryOnly: false } } })
+    await mount({
+      settings: {
+        voiceActions: { enabled: true, conversation: { enabled: true } },
+        enterpriseLive: { managed: true, inferenceMode: 'cloud-only', summaryOnly: false }
+      }
+    })
     await conversationToggle().waitFor()
     expect(await conversationStart().isDisabled()).toBe(true)
   })

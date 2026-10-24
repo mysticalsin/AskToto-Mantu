@@ -1,5 +1,5 @@
 /** Main-process composition for G28 continuous conversation. The renderer transports PCM only; main recognizes it. */
-import type { IpcMain, IpcMainInvokeEvent } from 'electron'
+import type { IpcMainInvokeEvent } from 'electron'
 import { randomUUID } from 'node:crypto'
 import {
   CONVERSATION_IPC,
@@ -34,11 +34,19 @@ import {
   COMMAND_SPEECH_SAMPLE_RATE,
   type CommandSpeechResult
 } from '../../command-speech-capture'
-import { CommandMicActivationAuthority, commandMicOwner, type CommandMicActivationFrame } from '../../command-mic-activation-authority'
+import {
+  CommandMicActivationAuthority,
+  commandMicOwner,
+  type CommandMicActivationFrame
+} from '../../command-mic-activation-authority'
 import type { InputSessionAuthority } from '../../input-session-authority'
-import type { ReplyLifecycleEvent } from '../spoken-replies/spoken-replies-service'
-import type { AskTurnObservation } from '../session-context/ask-turn'
-import { ConversationSession, type ConversationReplyToken, type ConversationUtteranceDispatch } from './conversation-session'
+import type { ReplyLifecycleEvent } from '../spoken-replies'
+import type { AskTurnObservation } from '../session-context'
+import {
+  ConversationSession,
+  type ConversationReplyToken,
+  type ConversationUtteranceDispatch
+} from './conversation-session'
 
 interface WindowLike {
   isDestroyed(): boolean
@@ -68,15 +76,16 @@ const PENDING_ASK_TIMEOUT_MS = 4_000
 
 function sameOwner(left: TrustedInputOwner, right: TrustedInputOwner | null | undefined): boolean {
   return Boolean(
-    right && left.webContentsId === right.webContentsId && left.frameId === right.frameId &&
-    left.isTopFrame === right.isTopFrame && left.authSessionGeneration === right.authSessionGeneration &&
-    left.contextRevision === right.contextRevision
+    right &&
+      left.webContentsId === right.webContentsId &&
+      left.frameId === right.frameId &&
+      left.isTopFrame === right.isTopFrame &&
+      left.authSessionGeneration === right.authSessionGeneration &&
+      left.contextRevision === right.contextRevision
   )
 }
 
 export interface ConversationRuntimeDeps {
-  ipcMain: Pick<IpcMain, 'handle'>
-  assertMainWindow(event: IpcMainInvokeEvent): void
   frameFromEvent(event: IpcMainInvokeEvent): CommandMicActivationFrame | null
   mainFrame(): CommandMicActivationFrame | null
   currentContext(): InputSessionContext
@@ -109,8 +118,10 @@ export function createConversationRuntime(deps: ConversationRuntimeDeps) {
 
   const enabled = (): boolean => {
     const stored = deps.getSettings().voiceActions
-    return resolveVoiceActionsEnabled(stored, { qaIdentity: deps.qaIdentity }) &&
+    return (
+      resolveVoiceActionsEnabled(stored, { qaIdentity: deps.qaIdentity }) &&
       resolveConversationEnabled(stored?.conversation, { qaIdentity: deps.qaIdentity })
+    )
   }
   const ownerNow = (): TrustedInputOwner | null => {
     const frame = deps.mainFrame()
@@ -119,8 +130,15 @@ export function createConversationRuntime(deps: ConversationRuntimeDeps) {
   const ownerFromEvent = (event: IpcMainInvokeEvent): TrustedInputOwner | null => {
     const frame = deps.frameFromEvent(event)
     const current = deps.mainFrame()
-    if (!frame || !current || frame.webContentsId !== current.webContentsId || frame.frameId !== current.frameId ||
-        frame.url !== current.url || !frame.isTopFrame) return null
+    if (
+      !frame ||
+      !current ||
+      frame.webContentsId !== current.webContentsId ||
+      frame.frameId !== current.frameId ||
+      frame.url !== current.url ||
+      !frame.isTopFrame
+    )
+      return null
     return commandMicOwner(frame, deps.currentContext())
   }
   const currentWindow = (): WindowLike | null => {
@@ -129,17 +147,29 @@ export function createConversationRuntime(deps: ConversationRuntimeDeps) {
   }
   const currentDispatch = (owner: TrustedInputOwner, binding: ConversationCaptureBinding): CaptureWindow | null => {
     const record = windows.get(binding.captureToken)
-    if (!record || record.dispatch.sessionId !== binding.sessionId || !sameOwner(record.dispatch.owner, owner) ||
-        !sameOwner(owner, ownerNow()) || !session.isCurrentCapture(owner, binding.sessionId, binding.captureToken)) return null
+    if (
+      !record ||
+      record.dispatch.sessionId !== binding.sessionId ||
+      !sameOwner(record.dispatch.owner, owner) ||
+      !sameOwner(owner, ownerNow()) ||
+      !session.isCurrentCapture(owner, binding.sessionId, binding.captureToken)
+    )
+      return null
     return record
   }
   const captureLeaseCurrent = (owner: TrustedInputOwner, record: CaptureWindow): boolean => {
     const leaseId = record.leaseId
     const lease = deps.authority.activeLease
     return Boolean(
-      leaseId && lease && lease.sessionId === leaseId && lease.purpose === 'conversation' &&
-      lease.source === 'push-to-talk' && lease.activation === 'explicit' && !lease.actionAuthority &&
-      sameOwner(owner, record.dispatch.owner) && deps.authority.isEstablishedLease(owner, leaseId, 'conversation')
+      leaseId &&
+        lease &&
+        lease.sessionId === leaseId &&
+        lease.purpose === 'conversation' &&
+        lease.source === 'push-to-talk' &&
+        lease.activation === 'explicit' &&
+        !lease.actionAuthority &&
+        sameOwner(owner, record.dispatch.owner) &&
+        deps.authority.isEstablishedLease(owner, leaseId, 'conversation')
     )
   }
   const forgetWindow = (record: CaptureWindow): void => {
@@ -201,7 +231,11 @@ export function createConversationRuntime(deps: ConversationRuntimeDeps) {
     if (askId) {
       tokenAsks.delete(key)
       askTokens.delete(askId)
-      try { deps.cancelAsk(askId) } catch { /* only this exact conversation ask is cancelled */ }
+      try {
+        deps.cancelAsk(askId)
+      } catch {
+        /* only this exact conversation ask is cancelled */
+      }
     }
     if (session.isCurrentReply(pending.owner, pending.token)) session.replyFinished(pending.token)
   }
@@ -212,9 +246,12 @@ export function createConversationRuntime(deps: ConversationRuntimeDeps) {
       const win = currentWindow()
       const available = deps.availability()
       return Boolean(
-        record && win?.isVisible() && deps.requireAuth() && available.ok &&
-        captureLeaseCurrent(owner, record) &&
-        session.isCurrentCapture(owner, record.dispatch.sessionId, record.dispatch.captureToken)
+        record &&
+          win?.isVisible() &&
+          deps.requireAuth() &&
+          available.ok &&
+          captureLeaseCurrent(owner, record) &&
+          session.isCurrentCapture(owner, record.dispatch.sessionId, record.dispatch.captureToken)
       )
     },
     transcribe: async (samples) => {
@@ -245,7 +282,10 @@ export function createConversationRuntime(deps: ConversationRuntimeDeps) {
       if (!record) return
       if (!result.ok) {
         releaseLease(record)
-        endWindow(record, result.reason === 'no_speech' ? { kind: 'silent' } : { kind: 'failed', reason: 'recognition_unavailable' })
+        endWindow(
+          record,
+          result.reason === 'no_speech' ? { kind: 'silent' } : { kind: 'failed', reason: 'recognition_unavailable' }
+        )
         return
       }
       const text = record.transcript
@@ -270,7 +310,11 @@ export function createConversationRuntime(deps: ConversationRuntimeDeps) {
         return
       }
       try {
-        win.webContents.send(CONVERSATION_IPC.ask, { sessionId: token.sessionId, replyGeneration: token.generation, text })
+        win.webContents.send(CONVERSATION_IPC.ask, {
+          sessionId: token.sessionId,
+          replyGeneration: token.generation,
+          text
+        })
       } catch {
         clearPendingReply(key)
         session.replyFinished(token)
@@ -296,9 +340,16 @@ export function createConversationRuntime(deps: ConversationRuntimeDeps) {
 
   const allowedToStart = (): boolean => {
     const win = currentWindow()
-    return enabled() && deps.requireAuth() && !deps.isClosing() && !deps.meetingReserved() &&
-      !deps.onboardingActive() && Boolean(win?.isVisible()) && deps.authority.activeLease === null &&
+    return (
+      enabled() &&
+      deps.requireAuth() &&
+      !deps.isClosing() &&
+      !deps.meetingReserved() &&
+      !deps.onboardingActive() &&
+      Boolean(win?.isVisible()) &&
+      deps.authority.activeLease === null &&
       deps.availability().ok
+    )
   }
 
   session = new ConversationSession({
@@ -320,7 +371,15 @@ export function createConversationRuntime(deps: ConversationRuntimeDeps) {
         const win = currentWindow()
         if (!win?.isVisible()) return { ok: false, reason: 'window_hidden' }
         if (windows.size > 0) return { ok: false, reason: 'capture_busy' }
-      const record: CaptureWindow = { dispatch, leaseId: null, transcript: null, finalizing: false, acceptedMaxSeconds: null, acceptedSamples: 0, timer: null }
+        const record: CaptureWindow = {
+          dispatch,
+          leaseId: null,
+          transcript: null,
+          finalizing: false,
+          acceptedMaxSeconds: null,
+          acceptedSamples: 0,
+          timer: null
+        }
         windows.set(dispatch.captureToken, record)
         try {
           win.webContents.send(CONVERSATION_IPC.captureBegin, {
@@ -354,7 +413,11 @@ export function createConversationRuntime(deps: ConversationRuntimeDeps) {
         const parsed = ConversationSnapshotSchema.safeParse(snapshot)
         const win = currentWindow()
         if (!parsed.success || !win) return
-        try { win.webContents.send(CONVERSATION_IPC.state, parsed.data) } catch { /* getState recovers state */ }
+        try {
+          win.webContents.send(CONVERSATION_IPC.state, parsed.data)
+        } catch {
+          /* getState recovers state */
+        }
       }
     },
     newSessionId: randomUUID,
@@ -384,19 +447,31 @@ export function createConversationRuntime(deps: ConversationRuntimeDeps) {
       maxMs: record?.dispatch.maxMs
     })
     return Boolean(
-      parsed.success && eventOwner && sameOwner(owner, eventOwner) &&
-      sameOwner(owner, record?.dispatch.owner as TrustedInputOwner) && record?.leaseId === null &&
-      allowedToStart() && session.isCurrentCapture(owner, parsed.data.sessionId, captureToken)
+      parsed.success &&
+        eventOwner &&
+        sameOwner(owner, eventOwner) &&
+        sameOwner(owner, record?.dispatch.owner as TrustedInputOwner) &&
+        record?.leaseId === null &&
+        allowedToStart() &&
+        session.isCurrentCapture(owner, parsed.data.sessionId, captureToken)
     )
   }
 
   function bindInputLease(owner: TrustedInputOwner, captureToken: string, lease: InputSessionLease): boolean {
     const record = windows.get(captureToken)
-    if (!record || record.leaseId !== null || !sameOwner(owner, record.dispatch.owner as TrustedInputOwner) ||
-        !session.isCurrentCapture(owner, record.dispatch.sessionId, captureToken) ||
-        lease.purpose !== 'conversation' || lease.source !== 'push-to-talk' || lease.activation !== 'explicit' ||
-        lease.actionAuthority || lease.authSessionGeneration !== owner.authSessionGeneration ||
-        lease.contextRevision !== owner.contextRevision) return false
+    if (
+      !record ||
+      record.leaseId !== null ||
+      !sameOwner(owner, record.dispatch.owner as TrustedInputOwner) ||
+      !session.isCurrentCapture(owner, record.dispatch.sessionId, captureToken) ||
+      lease.purpose !== 'conversation' ||
+      lease.source !== 'push-to-talk' ||
+      lease.activation !== 'explicit' ||
+      lease.actionAuthority ||
+      lease.authSessionGeneration !== owner.authSessionGeneration ||
+      lease.contextRevision !== owner.contextRevision
+    )
+      return false
     record.leaseId = lease.sessionId
     byLease.set(lease.sessionId, record)
     return true
@@ -410,55 +485,53 @@ export function createConversationRuntime(deps: ConversationRuntimeDeps) {
     endWindow(record, { kind: 'cancelled' })
   }
 
-  function currentCapture(event: IpcMainInvokeEvent, binding: ConversationCaptureBinding): { owner: TrustedInputOwner; record: CaptureWindow } | null {
+  function currentCapture(
+    event: IpcMainInvokeEvent,
+    binding: ConversationCaptureBinding
+  ): { owner: TrustedInputOwner; record: CaptureWindow } | null {
     const owner = ownerFromEvent(event)
     const record = owner ? currentDispatch(owner, binding) : null
     return owner && record && captureLeaseCurrent(owner, record) ? { owner, record } : null
   }
 
-  function registerIpc(): void {
-    const { ipcMain } = deps
-    ipcMain.handle(CONVERSATION_IPC.startActivationObserved, (event) => {
-      deps.assertMainWindow(event)
+  // IPC registration lives in src/main/ipc/conversation-ipc.ts; each handler runs after assertMainWindow.
+  const handlers = {
+    startActivationObserved(event: IpcMainInvokeEvent) {
       const frame = deps.frameFromEvent(event)
       if (!frame || !allowedToStart()) return false
       return activation.mint(frame)
-    })
-    ipcMain.handle(CONVERSATION_IPC.startActivationCancel, (event) => {
-      deps.assertMainWindow(event)
+    },
+    startActivationCancel(_event: IpcMainInvokeEvent) {
       activation.revokeAll()
       return true
-    })
-    ipcMain.handle(CONVERSATION_IPC.start, (event) => {
-      deps.assertMainWindow(event)
+    },
+    start(event: IpcMainInvokeEvent) {
       const frame = deps.frameFromEvent(event)
       const owner = ownerFromEvent(event)
       const current = ownerNow()
       if (!frame || !owner || !sameOwner(owner, current) || !activation.consume(frame))
         return { ok: false, reason: 'policy_blocked' }
       return ConversationStartResultSchema.parse(session.start())
-    })
-    ipcMain.handle(CONVERSATION_IPC.stop, (event) => {
-      deps.assertMainWindow(event)
+    },
+    stop(event: IpcMainInvokeEvent) {
       const owner = ownerFromEvent(event)
       if (!owner || !sameOwner(owner, ownerNow())) return { ok: false }
       return ConversationStopResultSchema.parse(session.stop())
-    })
-    ipcMain.handle(CONVERSATION_IPC.getState, (event) => {
-      deps.assertMainWindow(event)
+    },
+    getState(event: IpcMainInvokeEvent) {
       const owner = ownerFromEvent(event)
       if (!owner || !sameOwner(owner, ownerNow())) return null
       session.refresh()
       return ConversationSnapshotSchema.parse(session.snapshot())
-    })
-    ipcMain.handle(CONVERSATION_IPC.captureStart, (event, raw: unknown) => {
-      deps.assertMainWindow(event)
+    },
+    captureStart(event: IpcMainInvokeEvent, raw: unknown) {
       const parsed = ConversationCaptureStartSchema.safeParse(raw)
       if (!parsed.success) return { ok: false, reason: 'not_ready' }
       const current = currentCapture(event, parsed.data)
       if (!current) return { ok: false, reason: 'not_ready' }
       const availability = deps.availability()
-      if (!availability.ok) return { ok: false, reason: availability.reason === 'unauthorized' ? 'not_ready' : availability.reason }
+      if (!availability.ok)
+        return { ok: false, reason: availability.reason === 'unauthorized' ? 'not_ready' : availability.reason }
       const record = current.record
       if (parsed.data.maxSeconds * 1_000 > record.dispatch.maxMs || record.acceptedMaxSeconds !== null) {
         closeWindow(record, { kind: 'cancelled' }, true, true)
@@ -474,9 +547,8 @@ export function createConversationRuntime(deps: ConversationRuntimeDeps) {
         )
       }
       return result
-    })
-    ipcMain.handle(CONVERSATION_IPC.captureFrame, (event, raw: unknown) => {
-      deps.assertMainWindow(event)
+    },
+    captureFrame(event: IpcMainInvokeEvent, raw: unknown) {
       const parsed = ConversationCaptureFrameSchema.safeParse(raw)
       if (!parsed.success) return { ok: false, reason: 'not_ready' }
       const current = currentCapture(event, parsed.data)
@@ -490,9 +562,8 @@ export function createConversationRuntime(deps: ConversationRuntimeDeps) {
       const result = capture.frame(current.owner, record.leaseId!, parsed.data.sequence, parsed.data.samples)
       if (result.ok) record.acceptedSamples += parsed.data.samples.length
       return result
-    })
-    ipcMain.handle(CONVERSATION_IPC.captureFinish, async (event, raw: unknown) => {
-      deps.assertMainWindow(event)
+    },
+    async captureFinish(event: IpcMainInvokeEvent, raw: unknown) {
       const parsed = ConversationCaptureFinishSchema.safeParse(raw)
       if (!parsed.success) return { ok: false, reason: 'not_ready' }
       const current = currentCapture(event, parsed.data)
@@ -501,9 +572,8 @@ export function createConversationRuntime(deps: ConversationRuntimeDeps) {
       current.record.timer = null
       current.record.finalizing = true
       return capture.finish(current.owner, current.record.leaseId!, parsed.data.frameCount)
-    })
-    ipcMain.handle(CONVERSATION_IPC.captureCancelRequest, (event, raw: unknown) => {
-      deps.assertMainWindow(event)
+    },
+    captureCancelRequest(event: IpcMainInvokeEvent, raw: unknown) {
       const parsed = ConversationCaptureCancelSchema.safeParse(raw)
       if (!parsed.success) return { ok: false, reason: 'not_ready' }
       const current = currentCapture(event, parsed.data)
@@ -513,9 +583,8 @@ export function createConversationRuntime(deps: ConversationRuntimeDeps) {
       notifyCaptureCancel(current.record)
       endWindow(current.record, { kind: 'cancelled' })
       return result
-    })
-    ipcMain.handle(CONVERSATION_IPC.captureFailure, (event, raw: unknown) => {
-      deps.assertMainWindow(event)
+    },
+    captureFailure(event: IpcMainInvokeEvent, raw: unknown) {
       const parsed = ConversationCaptureFailureSchema.safeParse(raw)
       if (!parsed.success) return false
       const owner = ownerFromEvent(event)
@@ -523,9 +592,8 @@ export function createConversationRuntime(deps: ConversationRuntimeDeps) {
       if (!record || !sameOwner(owner!, record.dispatch.owner as TrustedInputOwner)) return false
       closeWindow(record, { kind: 'failed', reason: parsed.data.reason }, true, true)
       return true
-    })
-    ipcMain.handle(CONVERSATION_IPC.replyFinished, (event, raw: unknown) => {
-      deps.assertMainWindow(event)
+    },
+    replyFinished(event: IpcMainInvokeEvent, raw: unknown) {
       const parsed = ConversationReplyCompleteSchema.safeParse(raw)
       const owner = ownerFromEvent(event)
       if (!parsed.success || !owner) return false
@@ -534,7 +602,7 @@ export function createConversationRuntime(deps: ConversationRuntimeDeps) {
       session.replyFinished(token)
       clearPendingReply(tokenKey(token))
       return true
-    })
+    }
   }
 
   function authorizeAsk(event: IpcMainInvokeEvent, request: AskStart): boolean {
@@ -548,10 +616,21 @@ export function createConversationRuntime(deps: ConversationRuntimeDeps) {
     }
     const key = tokenKey(token)
     const pending = pendingReplies.get(key)
-    if (!pending || duplicate || !sameOwner(pending.owner, owner) || !session.isCurrentReply(owner, token) ||
-        request.mode !== 'answer' || request.inputOrigin !== 'user-spoken-by-owner' || request.prompt !== pending.text ||
-        request.image !== undefined || request.transcript !== undefined || request.wantsScreenContext ||
-        request.screenContext !== undefined || request.agentOverride !== undefined || request.providerOverride !== undefined)
+    if (
+      !pending ||
+      duplicate ||
+      !sameOwner(pending.owner, owner) ||
+      !session.isCurrentReply(owner, token) ||
+      request.mode !== 'answer' ||
+      request.inputOrigin !== 'user-spoken-by-owner' ||
+      request.prompt !== pending.text ||
+      request.image !== undefined ||
+      request.transcript !== undefined ||
+      request.wantsScreenContext ||
+      request.screenContext !== undefined ||
+      request.agentOverride !== undefined ||
+      request.providerOverride !== undefined
+    )
       return false
     askTokens.set(request.id, token)
     tokenAsks.set(key, request.id)
@@ -583,8 +662,7 @@ export function createConversationRuntime(deps: ConversationRuntimeDeps) {
     if (event.phase === 'started') {
       clearPendingReply(tokenKey(token))
       session.replyStarted(token)
-    }
-    else if (event.phase === 'settled') {
+    } else if (event.phase === 'settled') {
       askTokens.delete(event.askId)
       tokenAsks.delete(tokenKey(token))
       clearPendingReply(tokenKey(token))
@@ -592,9 +670,17 @@ export function createConversationRuntime(deps: ConversationRuntimeDeps) {
     }
   }
 
-  function onHardStop(reason: InputSessionStopReason): void { session.onHardStop(reason) }
-  function onMeetingReserved(): void { session.onMeetingReserved() }
-  function onInputLeaseRevoked(owner: TrustedInputOwner, lease: InputSessionLease, _reason: InputSessionStopReason): void {
+  function onHardStop(reason: InputSessionStopReason): void {
+    session.onHardStop(reason)
+  }
+  function onMeetingReserved(): void {
+    session.onMeetingReserved()
+  }
+  function onInputLeaseRevoked(
+    owner: TrustedInputOwner,
+    lease: InputSessionLease,
+    _reason: InputSessionStopReason
+  ): void {
     if (lease.purpose !== 'conversation') return
     const record = byLease.get(lease.sessionId)
     if (!record || !sameOwner(owner, record.dispatch.owner as TrustedInputOwner)) return
@@ -602,7 +688,9 @@ export function createConversationRuntime(deps: ConversationRuntimeDeps) {
     notifyCaptureCancel(record)
     endWindow(record, { kind: 'cancelled' })
   }
-  function refresh(): void { session.refresh() }
+  function refresh(): void {
+    session.refresh()
+  }
   function dispose(): void {
     session.dispose()
     capture.cancelAll()
@@ -615,7 +703,7 @@ export function createConversationRuntime(deps: ConversationRuntimeDeps) {
   }
 
   return {
-    registerIpc,
+    handlers,
     session,
     capture,
     activation,
@@ -634,3 +722,5 @@ export function createConversationRuntime(deps: ConversationRuntimeDeps) {
     stopInputLease
   }
 }
+
+export type ConversationIpcHandlers = ReturnType<typeof createConversationRuntime>['handlers']

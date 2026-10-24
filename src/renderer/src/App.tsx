@@ -37,15 +37,7 @@ import { CloudSpeechConsentPrompt } from './components/CloudSpeechConsentPrompt'
 import { QuickActions, type QuickKind } from './components/QuickActions'
 import { ConfirmSheet } from './ui/ConfirmSheet'
 import { useAsk, useAutoResize, useSettings, useAuth, useQuietRelease, type AnswerState } from './state'
-import { CommandMicController, conversationAskMatchesSnapshot, conversationCaptureMatches } from './lib/use-command-mic'
-import {
-  ConversationAskSchema,
-  ConversationCaptureBeginSchema,
-  type ConversationAsk,
-  type ConversationCaptureBegin,
-  type ConversationCaptureBinding,
-  type ConversationSnapshot
-} from '@shared/conversation/conversation-session'
+import { useConversationBridge } from './lib/use-conversation-bridge'
 import { VoiceActionsLayer } from './components/voice/VoiceActionsLayer'
 import { useWindowDrag } from './lib/window-drag'
 import { noteCrashContext } from './lib/crash-context'
@@ -546,109 +538,11 @@ export function App(): JSX.Element {
   const mode: ConversationMode = settings?.mode ?? 'general'
   const historyRef = useRef<ChatTurn[]>([]) // multi-turn memory for plain Ask follow-ups
   const copilotHistoryRef = useRef<ChatTurn[]>([]) // multi-turn memory for Copilot follow-ups during Listen
-  // When the last Ask turn completed — the renderer half of main's fresh-question staleness check. The
-  // screen-ask fast path (submit's priorAnswerOk branch) relies on history carrying the prior screen
-  // description; once main would wipe that history as stale, the fast path must re-capture instead.
+  // When the last Ask turn completed — the renderer half of main's fresh-question staleness check. The screen-ask
+  // fast path (priorAnswerOk branch) relies on history carrying the prior screen description; once main would wipe it as stale, re-capture.
   const lastTurnAtRef = useRef(0)
   const pendingUserRef = useRef<{ id: string; q: string } | null>(null)
-  // Main owns the conversation and issues each exact capture token. The renderer only holds the current
-  // token long enough to run its bounded microphone window; speech text arrives separately as onAsk.
-  const conversationActionsRef = useRef({ run: ask.run, currentId: ask.currentId, cancel: ask.cancel, setView })
-  conversationActionsRef.current = { run: ask.run, currentId: ask.currentId, cancel: ask.cancel, setView }
-  useEffect(() => {
-    type ConversationEvents = {
-      onCaptureBegin(cb: (begin: ConversationCaptureBegin) => void): () => void
-      onCaptureCancel(cb: (binding: ConversationCaptureBinding) => void): () => void
-      onAsk(cb: (message: ConversationAsk) => void): () => void
-      onState(cb: (snapshot: ConversationSnapshot) => void): () => void
-      getState(): Promise<ConversationSnapshot | null>
-    }
-    const conversation = (window.toto as typeof window.toto & { conversation?: ConversationEvents }).conversation
-    if (!conversation) return
-    let mounted = true
-    let capture: { begin: ConversationCaptureBegin; controller: CommandMicController } | null = null
-    let pendingAsk: string | null = null
-    let acceptedAsk: { sessionId: string; replyGeneration: number; runId: string } | null = null
-    const disposeCapture = (): void => {
-      const owned = capture
-      capture = null
-      owned?.controller.dispose()
-    }
-    const onBegin = (raw: ConversationCaptureBegin): void => {
-      const parsed = ConversationCaptureBeginSchema.safeParse(raw)
-      if (!mounted || !parsed.success) return
-      const begin = parsed.data
-      if (capture?.begin.sessionId === begin.sessionId && capture.begin.captureToken === begin.captureToken) return
-      disposeCapture()
-      const controller = new CommandMicController()
-      capture = { begin, controller }
-      void controller.start({ conversation: begin })
-    }
-    const onCancel = (binding: ConversationCaptureBinding): void => {
-      if (!capture || !conversationCaptureMatches(capture.begin, binding)) return
-      disposeCapture()
-    }
-    const onState = (snapshot: ConversationSnapshot): void => {
-      if (capture && (!snapshot.active || snapshot.sessionId !== capture.begin.sessionId)) disposeCapture()
-      if (acceptedAsk && (!snapshot.active || snapshot.sessionId !== acceptedAsk.sessionId)) {
-        if (conversationActionsRef.current.currentId() === acceptedAsk.runId) conversationActionsRef.current.cancel()
-        acceptedAsk = null
-      }
-      if (!snapshot.active) pendingAsk = null
-    }
-    const onAsk = (raw: ConversationAsk): void => {
-      const parsed = ConversationAskSchema.safeParse(raw)
-      if (!mounted || !parsed.success) return
-      const message = parsed.data
-      const key = `${message.sessionId}\u0000${message.replyGeneration}`
-      if (
-        pendingAsk === key ||
-        (acceptedAsk?.sessionId === message.sessionId && acceptedAsk.replyGeneration >= message.replyGeneration)
-      )
-        return
-      const current = conversationActionsRef.current.currentId()
-      if (current && current !== acceptedAsk?.runId) return // a deliberate user ask owns the stream
-      pendingAsk = key
-      void conversation
-        .getState()
-        .then((snapshot) => {
-          if (!mounted || pendingAsk !== key) return
-          pendingAsk = null
-          if (!conversationAskMatchesSnapshot(message, snapshot)) return
-          const actions = conversationActionsRef.current
-          const owned = actions.currentId()
-          if (owned && owned !== acceptedAsk?.runId) return
-          if (acceptedAsk?.sessionId === message.sessionId && acceptedAsk.replyGeneration >= message.replyGeneration)
-            return
-          actions.setView('answer')
-          setCollapsed(false)
-          const id = actions.run({
-            mode: 'answer',
-            prompt: message.text,
-            inputOrigin: 'user-spoken-by-owner',
-            conversationReply: { sessionId: message.sessionId, replyGeneration: message.replyGeneration },
-            history: historyRef.current
-          })
-          acceptedAsk = { sessionId: message.sessionId, replyGeneration: message.replyGeneration, runId: id }
-          pendingUserRef.current = { id, q: message.text }
-        })
-        .catch(() => {
-          if (pendingAsk === key) pendingAsk = null
-        })
-    }
-    const offBegin = conversation.onCaptureBegin(onBegin)
-    const offCancel = conversation.onCaptureCancel(onCancel)
-    const offAsk = conversation.onAsk(onAsk)
-    const offState = conversation.onState(onState)
-    return () => {
-      mounted = false
-      offBegin()
-      offCancel()
-      offAsk()
-      offState()
-      disposeCapture()
-    }
-  }, [])
+  useConversationBridge({ ask, setView, setCollapsed, historyRef, pendingUserRef })
   const meetingStartRef = useRef(0)
   const interventionGate = useInterventionGate({
     lines: listen.lines,
@@ -657,8 +551,7 @@ export function App(): JSX.Element {
     signedIn: !!auth.status?.signedIn
   })
   const meetingPauseRef = useRef(freshMeetingPauseClock())
-  // Exact live-recap ownership. The answer hook deliberately carries old visible text until a new run's
-  // first token; only a run id paired with this meeting start may turn that state into saved notes.
+  // Exact live-recap ownership: only a run id paired with this meeting start may turn the carried-over answer text into saved notes.
   const liveRecapTargetRef = useRef<RecapPersistTarget | null>(null)
   // One renderer-session coordinator for live retries and saved-meeting generations. It serializes only
   // writes to the SAME meeting file, allowing unrelated files to remain independent.

@@ -1,6 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { InputSessionContext, InputSessionLease, InputSessionRevoked } from '@shared/ipc'
-import type { ConversationAsk, ConversationCaptureBegin, ConversationCaptureBinding, ConversationSnapshot } from '@shared/conversation/conversation-session'
+import type {
+  ConversationAsk,
+  ConversationCaptureBegin,
+  ConversationCaptureBinding,
+  ConversationSnapshot
+} from '@shared/conversation/conversation-session'
 import { AskStartSchema } from '@shared/ipc'
 import type { ConversationMicResult } from './use-command-mic'
 
@@ -25,7 +30,11 @@ type TrackFixture = MediaStreamTrack & {
   stop: ReturnType<typeof vi.fn>
 }
 type TestController = {
-  start(options?: { source?: 'push-to-talk' | 'deliberate-talk'; purpose?: 'command' | 'dictation'; conversation?: ConversationCaptureBegin }): Promise<void>
+  start(options?: {
+    source?: 'push-to-talk' | 'deliberate-talk'
+    purpose?: 'command' | 'dictation'
+    conversation?: ConversationCaptureBegin
+  }): Promise<void>
   finish(expectedGeneration?: number): Promise<void>
   cancel(): Promise<void>
   dispose(): void
@@ -82,7 +91,11 @@ function deferred<T>(fallback: T): Deferred<T> {
 
 function start(
   controller: TestController,
-  options?: { source?: 'push-to-talk' | 'deliberate-talk'; purpose?: 'command' | 'dictation'; conversation?: ConversationCaptureBegin }
+  options?: {
+    source?: 'push-to-talk' | 'deliberate-talk'
+    purpose?: 'command' | 'dictation'
+    conversation?: ConversationCaptureBegin
+  }
 ): Promise<void> {
   return controller.start(options)
 }
@@ -243,30 +256,58 @@ function createHarness(options: HarnessOptions = {}) {
   )
   const conversation = {
     startCapture: vi.fn((token: string, owner: InputSessionContext) =>
-      trackBoundaryTask((async () => {
-        order.push(`conversation.lease:${token}`)
-        if (!conversationLeaseValid) return { ok: false as const, reason: 'stale_session' as const }
-        const sessionId = (++nextInputSession).toString(16).padStart(48, '0')
-        ids.push(sessionId)
-        const lease: InputSessionLease = {
-          sessionId, source: 'push-to-talk', purpose: 'conversation', activation: 'explicit',
-          authSessionGeneration: owner.authSessionGeneration, contextRevision: owner.contextRevision,
-          revision: 1, startedAt: 1234, actionAuthority: false
-        }
-        return { ok: true as const, lease }
-      })())
+      trackBoundaryTask(
+        (async () => {
+          order.push(`conversation.lease:${token}`)
+          if (!conversationLeaseValid) return { ok: false as const, reason: 'stale_session' as const }
+          const sessionId = (++nextInputSession).toString(16).padStart(48, '0')
+          ids.push(sessionId)
+          const lease: InputSessionLease = {
+            sessionId,
+            source: 'push-to-talk',
+            purpose: 'conversation',
+            activation: 'explicit',
+            authSessionGeneration: owner.authSessionGeneration,
+            contextRevision: owner.contextRevision,
+            revision: 1,
+            startedAt: 1234,
+            actionAuthority: false
+          }
+          return { ok: true as const, lease }
+        })()
+      )
     ),
     captureStart: vi.fn((begin: ConversationCaptureBegin) =>
-      trackBoundaryTask((async () => { order.push(`conversation.start:${begin.captureToken}`); return { ok: true } })())
+      trackBoundaryTask(
+        (async () => {
+          order.push(`conversation.start:${begin.captureToken}`)
+          return { ok: true }
+        })()
+      )
     ),
     captureFrame: vi.fn((binding: ConversationCaptureBinding, sequence: number, _samples: Float32Array) =>
-      trackBoundaryTask((async () => { order.push(`conversation.frame:${binding.captureToken}:${sequence}`); return { ok: true } })())
+      trackBoundaryTask(
+        (async () => {
+          order.push(`conversation.frame:${binding.captureToken}:${sequence}`)
+          return { ok: true }
+        })()
+      )
     ),
     captureFinish: vi.fn((binding: ConversationCaptureBinding, frameCount: number) =>
-      trackBoundaryTask((async () => { order.push(`conversation.finish:${binding.captureToken}:${frameCount}`); return conversationFinishResult })())
+      trackBoundaryTask(
+        (async () => {
+          order.push(`conversation.finish:${binding.captureToken}:${frameCount}`)
+          return conversationFinishResult
+        })()
+      )
     ),
     captureCancel: vi.fn((binding: ConversationCaptureBinding) =>
-      trackBoundaryTask((async () => { order.push(`conversation.cancel:${binding.captureToken}`); return { ok: true } })())
+      trackBoundaryTask(
+        (async () => {
+          order.push(`conversation.cancel:${binding.captureToken}`)
+          return { ok: true }
+        })()
+      )
     ),
     reportCaptureFailure: vi.fn((_failure: ConversationCaptureBinding & { reason: string }) =>
       trackBoundaryTask((async () => ({ ok: true }))())
@@ -500,7 +541,13 @@ function createHarness(options: HarnessOptions = {}) {
         else listener.handleEvent(new Event('devicechange'))
       }
     },
-    async createController(maxDurationMs = 8_000, extra: { onDeviceLostWithAudio?: () => Promise<unknown>; onConversationResult?: (binding: ConversationCaptureBinding, result: ConversationMicResult) => void } = {}) {
+    async createController(
+      maxDurationMs = 8_000,
+      extra: {
+        onDeviceLostWithAudio?: () => Promise<unknown>
+        onConversationResult?: (binding: ConversationCaptureBinding, result: ConversationMicResult) => void
+      } = {}
+    ) {
       vi.resetModules()
       const { CommandMicController } = await import('./use-command-mic')
       const controller = new CommandMicController({ maxDurationMs, ...extra }) as TestController
@@ -1182,12 +1229,17 @@ describe('accepted speech survives a device change (G18)', () => {
       expect(env.conversation.captureFinish).not.toHaveBeenCalled()
       await vi.advanceTimersByTimeAsync(1)
       expect(env.conversation.captureFrame).toHaveBeenCalledExactlyOnceWith(
-        { sessionId: begin.sessionId, captureToken: begin.captureToken }, 0, expect.any(Float32Array)
+        { sessionId: begin.sessionId, captureToken: begin.captureToken },
+        0,
+        expect.any(Float32Array)
       )
       expect(env.conversation.captureFinish).toHaveBeenCalledExactlyOnceWith(
-        { sessionId: begin.sessionId, captureToken: begin.captureToken }, 1
+        { sessionId: begin.sessionId, captureToken: begin.captureToken },
+        1
       )
-      expect(received).toEqual([{ binding: { sessionId: begin.sessionId, captureToken: begin.captureToken }, result: { ok: true } }])
+      expect(received).toEqual([
+        { binding: { sessionId: begin.sessionId, captureToken: begin.captureToken }, result: { ok: true } }
+      ])
       expect(env.commandSpeechFinish).not.toHaveBeenCalled()
     })
 
@@ -1197,7 +1249,10 @@ describe('accepted speech survives a device change (G18)', () => {
       const controller = await env.createController(8_000, { onConversationResult: received })
       await start(controller, { conversation: begin })
       await controller.cancel()
-      expect(env.conversation.captureCancel).toHaveBeenCalledExactlyOnceWith({ sessionId: begin.sessionId, captureToken: begin.captureToken })
+      expect(env.conversation.captureCancel).toHaveBeenCalledExactlyOnceWith({
+        sessionId: begin.sessionId,
+        captureToken: begin.captureToken
+      })
       expect(env.commandSpeechCancel).not.toHaveBeenCalled()
       expect(received).not.toHaveBeenCalled()
       await start(controller, { conversation: { ...begin, captureToken: 'main-token-2' } })
@@ -1218,7 +1273,9 @@ describe('accepted speech survives a device change (G18)', () => {
         { ok: false, reason: 'no_speech' }
       )
       expect(env.conversation.reportCaptureFailure).toHaveBeenCalledExactlyOnceWith({
-        sessionId: begin.sessionId, captureToken: begin.captureToken, reason: 'no_speech'
+        sessionId: begin.sessionId,
+        captureToken: begin.captureToken,
+        reason: 'no_speech'
       })
       expect(env.commandSpeechFinish).not.toHaveBeenCalled()
     })
@@ -1228,9 +1285,18 @@ describe('accepted speech survives a device change (G18)', () => {
       const controller = await env.createController()
       await start(controller, { conversation: begin })
       env.revokeInput()
-      await vi.waitFor(() => expect(controller.getSnapshot()).toEqual({ status: 'error', reason: 'microphone_unavailable' }))
-      expect(env.conversation.captureCancel).toHaveBeenCalledExactlyOnceWith({ sessionId: begin.sessionId, captureToken: begin.captureToken })
-      expect(env.conversation.reportCaptureFailure).toHaveBeenCalledExactlyOnceWith({ sessionId: begin.sessionId, captureToken: begin.captureToken, reason: 'microphone_unavailable' })
+      await vi.waitFor(() =>
+        expect(controller.getSnapshot()).toEqual({ status: 'error', reason: 'microphone_unavailable' })
+      )
+      expect(env.conversation.captureCancel).toHaveBeenCalledExactlyOnceWith({
+        sessionId: begin.sessionId,
+        captureToken: begin.captureToken
+      })
+      expect(env.conversation.reportCaptureFailure).toHaveBeenCalledExactlyOnceWith({
+        sessionId: begin.sessionId,
+        captureToken: begin.captureToken,
+        reason: 'microphone_unavailable'
+      })
       expect(env.commandSpeechCancel).not.toHaveBeenCalled()
     })
 
@@ -1239,7 +1305,9 @@ describe('accepted speech survives a device change (G18)', () => {
       const received = vi.fn()
       const controller = await env.createController(8_000, { onConversationResult: received })
       let resolveFinish!: (result: unknown) => void
-      const pendingFinish = new Promise<unknown>((resolve) => { resolveFinish = resolve })
+      const pendingFinish = new Promise<unknown>((resolve) => {
+        resolveFinish = resolve
+      })
       env.conversation.captureFinish.mockImplementationOnce(() => trackBoundaryTask(pendingFinish))
       await start(controller, { conversation: begin })
       const finishing = controller.finish()
@@ -1248,7 +1316,10 @@ describe('accepted speech survives a device change (G18)', () => {
       resolveFinish({ ok: true })
       await finishing
       expect(received).not.toHaveBeenCalled()
-      expect(env.conversation.captureCancel).toHaveBeenCalledExactlyOnceWith({ sessionId: begin.sessionId, captureToken: begin.captureToken })
+      expect(env.conversation.captureCancel).toHaveBeenCalledExactlyOnceWith({
+        sessionId: begin.sessionId,
+        captureToken: begin.captureToken
+      })
     })
   })
 
@@ -1273,9 +1344,22 @@ describe('accepted speech survives a device change (G18)', () => {
 
   it('accepts only a strict bounded conversation reply correlation on asks', () => {
     const base = { id: 'ask-1', mode: 'answer', prompt: 'Exact speech', inputOrigin: 'user-spoken-by-owner' }
-    expect(AskStartSchema.safeParse({ ...base, conversationReply: { sessionId: 'conversation-1', replyGeneration: 2 } }).success).toBe(true)
-    expect(AskStartSchema.safeParse({ ...base, conversationReply: { sessionId: 'conversation-1', replyGeneration: 2, captureToken: 'extra' } }).success).toBe(false)
-    expect(AskStartSchema.safeParse({ ...base, conversationReply: { sessionId: '', replyGeneration: 2 } }).success).toBe(false)
-    expect(AskStartSchema.safeParse({ ...base, conversationReply: { sessionId: 'conversation-1', replyGeneration: -1 } }).success).toBe(false)
+    expect(
+      AskStartSchema.safeParse({ ...base, conversationReply: { sessionId: 'conversation-1', replyGeneration: 2 } })
+        .success
+    ).toBe(true)
+    expect(
+      AskStartSchema.safeParse({
+        ...base,
+        conversationReply: { sessionId: 'conversation-1', replyGeneration: 2, captureToken: 'extra' }
+      }).success
+    ).toBe(false)
+    expect(
+      AskStartSchema.safeParse({ ...base, conversationReply: { sessionId: '', replyGeneration: 2 } }).success
+    ).toBe(false)
+    expect(
+      AskStartSchema.safeParse({ ...base, conversationReply: { sessionId: 'conversation-1', replyGeneration: -1 } })
+        .success
+    ).toBe(false)
   })
 })
