@@ -14,6 +14,7 @@ import { SCREEN_OBSERVATION_FEATURE } from './screen-observation-settings'
 import { QUIET_MODE_FEATURE } from './quiet-mode-settings'
 import type { SettingsFeatureModule } from './settings-feature-module'
 import { SPOKEN_REPLIES_FEATURE } from './spoken-replies-settings'
+import { SUGGESTIONS_FEATURE } from './suggestions-settings'
 import { VOICE_ACTIONS_FEATURE } from './voice-actions-settings'
 
 export type SettingKind = 'boolean' | 'number' | 'string' | 'enum' | 'array' | 'record' | 'object' | 'union' | 'unknown'
@@ -42,6 +43,7 @@ export const SETTINGS_FEATURE_MODULES: readonly SettingsFeatureModule[] = [
   SCREEN_OBSERVATION_FEATURE,
   QUIET_MODE_FEATURE,
   SPOKEN_REPLIES_FEATURE,
+  SUGGESTIONS_FEATURE,
   VOICE_ACTIONS_FEATURE
 ]
 

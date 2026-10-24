@@ -70,6 +70,11 @@ const registeredAccounts: AccountResolver = {
   observe: async (kind, ref, signal) => accountRuntime?.registry.observe(kind, ref, signal) ?? false
 }
 
+/** Whether the account is currently usable for a plain read (G60/G61 readiness). The read-only research pipeline asks again at accept time. */
+export function connectorReadReady(kind: ConnectorKind, ref: AccountRef): boolean {
+  return registeredAccounts.isReady(kind, ref, 'read')
+}
+
 let executor: ConnectorExecutor | null = null
 export function connectorExecutor(): ConnectorExecutor {
   executor ??= createConnectorExecutor({

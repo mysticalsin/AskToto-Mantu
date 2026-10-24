@@ -22,6 +22,9 @@ import type { RendererResetSource } from '../features/meetings/session-closure'
 import { bootstrapAssistants } from './assistants-wiring'
 import { bootstrapDictationMemory } from './dictation-memory-wiring'
 import { bootstrapUserMemory } from './user-memory-wiring'
+import { bootstrapSuggestions } from './suggestions-wiring'
+import { defaultResearchSources } from '../features/suggestions/default-sources'
+import { showQuietNotification } from '../quiet-output'
 import { bootstrapLiveMeetingJournal } from './live-meeting-journal-wiring'
 import { bindMeetingSpeechInvalidation, bootstrapMeetingSpeech } from './meeting-speech-persistence-wiring'
 import { bootMainMemoryPartitions } from './memory-partition-wiring'
@@ -172,6 +175,20 @@ export function createOwnerSessionWiring(deps: OwnerSessionWiringDeps): OwnerSes
     requireAuth: () => requireAuth(),
     userDataPath: () => app.getPath('userData'),
     audit: (record) => auditLog('user.memory', { ...record })
+  })
+  // G67 suggestions: read-only research over already-granted sources; off until the owner turns it on, nudges only through the quiet gate.
+  bootstrapSuggestions({
+    ipcMain,
+    authorizeSender,
+    requireAuth: () => requireAuth(),
+    ownerSession,
+    userDataPath: () => app.getPath('userData'),
+    seal: encryptSecret,
+    open: decryptSecret,
+    sources: defaultResearchSources(),
+    enabled: () => getPublishedSettingsObservation()?.settings.suggestionsEnabled === true,
+    notify: showQuietNotification,
+    audit: (record) => auditLog('suggestion.research', { ...record })
   })
   return {
     ownerSession,
