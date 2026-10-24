@@ -5,6 +5,7 @@
 
 import { resolveOperatorBaseUrl } from '@shared/operator'
 import { operatorManagedCredential } from './operator-seat'
+import { commandJevEnabled } from './operator-decision-providers-state'
 import { createMetisCommandRuntime, type MetisCommandRuntime } from './metis-command-runtime'
 import type { PublicSettings } from '@shared/ipc'
 import type { CommandControl } from './command-control'
@@ -21,7 +22,7 @@ export function ensureMetisCommandRuntime(opts: {
     | { operatorUrl?: string; operatorLicenseToken?: string; operatorIngestSecret?: string }
   commandControl?: CommandControl
   getCommandOwner?: () => { webContentsId: number } | null
-  /** Optional: decisionProviders.jev from last heartbeat (Cap1). Default false = deterministic only. */
+  /** Optional override. Default: decisionProviders.jev from the last managed heartbeat (fail closed, off until the Operator emits it). */
   jevEnabled?: () => boolean
 }): MetisCommandRuntime {
   if (runtime) return runtime
@@ -61,7 +62,7 @@ export function ensureMetisCommandRuntime(opts: {
           if (lastProposalId === proposalId) lastProposalId = null
         })
     },
-    jevEnabled: () => opts.jevEnabled?.() === true,
+    jevEnabled: () => (opts.jevEnabled ?? (() => commandJevEnabled(opts.getSettings)))() === true,
     operatorDecideAuth: () => {
       const s = opts.getSettings()
       const base = resolveOperatorBaseUrl(s)

@@ -18,6 +18,7 @@ import {
   startOperatorRuntime,
   stopOperatorRuntime
 } from './operator-ingest'
+import { commandJevEnabled, resetDecisionProvidersState } from './operator-decision-providers-state'
 import { enqueueOperatorItem, loadQueueState, saveQueueState } from './operator-queue'
 import { hashOperatorId, signOperatorIngest } from './operator-hmac-sign'
 import { resetOperatorIntegrationsStateForTests, setOperatorIntegrationsFetchForTests } from './operator-integrations'
@@ -165,6 +166,7 @@ beforeEach(() => {
 })
 afterEach(() => {
   stopOperatorRuntime()
+  resetDecisionProvidersState()
   setOperatorFetchForTests(null)
   setOperatorQueueDirForTests(null)
   setOperatorIntegrationsFetchForTests(null)
@@ -467,6 +469,42 @@ describe('operatorHeartbeat v2 seat fields + queue reporting', () => {
     const beat = await operatorHeartbeat(SETTINGS)
     expect(beat.ok).toBe(true)
     expect(operatorFundedProviders()).toEqual(['groq'])
+  })
+})
+
+describe('command JEV heartbeat source', () => {
+  const jevFetch = () =>
+    setOperatorFetchForTests(
+      (async () =>
+        new Response(JSON.stringify({ ok: true, decisionProviders: { jev: true } }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' }
+        })) as typeof fetch
+    )
+
+  it('managed heartbeat carrying decisionProviders.jev:true enables command JEV', async () => {
+    jevFetch()
+    expect(commandJevEnabled(() => SETTINGS)).toBe(false)
+    await operatorHeartbeat(SETTINGS)
+    expect(commandJevEnabled(() => SETTINGS)).toBe(true)
+  })
+
+  it('auto reporting seat heartbeat with jev:true does not enable command JEV', async () => {
+    jevFetch()
+    const reporting = { operatorUrl: 'https://operator.test', operatorReportingToken: 'auto-enrolled-licence' }
+    await operatorHeartbeat(reporting)
+    expect(commandJevEnabled(() => reporting)).toBe(false)
+  })
+
+  it('a rejected heartbeat clears command JEV', async () => {
+    jevFetch()
+    await operatorHeartbeat(SETTINGS)
+    setOperatorFetchForTests(
+      (async () =>
+        new Response('{"ok":false}', { status: 403, headers: { 'content-type': 'application/json' } })) as typeof fetch
+    )
+    await operatorHeartbeat(SETTINGS)
+    expect(commandJevEnabled(() => SETTINGS)).toBe(false)
   })
 })
 

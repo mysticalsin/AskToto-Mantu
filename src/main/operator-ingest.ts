@@ -27,6 +27,7 @@ import {
   operatorTelemetryTransport
 } from './operator-seat'
 import { operatorReportingAllowed } from './operator-reporting-policy'
+import { recordDecisionProvidersFromHeartbeat, resetDecisionProvidersState } from './operator-decision-providers-state'
 import {
   operatorEntitled,
   recordOperatorHeartbeatResult,
@@ -90,6 +91,7 @@ export function setOperatorFetchForTests(fn: typeof fetch | null): void {
 export function stopOperatorRuntime(): void {
   runtimeGeneration++
   lastFundedProviders = []
+  resetDecisionProvidersState()
   resetOperatorIntegrationsState()
   resetOperatorEntitlementsState()
   if (heartbeatTimer) {
@@ -450,6 +452,7 @@ export async function operatorHeartbeat(settings: OperatorRuntimeSettings): Prom
     if (res.status === 401 || res.status === 403 || body?.ok === false || body?.approved === false) {
       // An explicit rejection is not a network outage: revoke cached grants immediately.
       lastFundedProviders = []
+      resetDecisionProvidersState()
       resetOperatorIntegrationsState()
       recordOperatorHeartbeatResult(true, null)
       return {
@@ -460,6 +463,9 @@ export async function operatorHeartbeat(settings: OperatorRuntimeSettings): Prom
     }
     // Funded providers belong to a managed seat only: an auto reporting seat never holds any.
     if (res.ok) lastFundedProviders = managed ? fundedProvidersFromHeartbeat(res.json) : []
+    // Command JEV availability: every heartbeat refreshes it (outside the steady-state skip below); only a
+    // managed seat's own successful answer can turn it on.
+    recordDecisionProvidersFromHeartbeat(res.ok && managed, res.json)
     // PLAN.md P2.2b #2/#3: a failed heartbeat leaves the entitlements snapshot and integrations cache
     // untouched (recordOperatorHeartbeatResult no-ops on ok:false; the version refresh below is only
     // ever consulted with a real reported version, never called with a guess).
