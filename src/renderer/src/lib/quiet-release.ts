@@ -1,6 +1,6 @@
 import { useEffect, useRef } from 'react'
 import type { QuietDeferredBatch } from '@shared/quiet-mode-settings'
-import type { AskRequest, AnswerState } from '../state'
+import type { AskRequest, AnswerState } from './ask-types'
 import type { PublicSettings } from '@shared/ipc'
 import { fieldContext, noDecisionAsk } from './ask-context'
 

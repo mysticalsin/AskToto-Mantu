@@ -79,7 +79,9 @@ describe('MQA-275 — the overlay never steals focus except the one deliberate a
   })
 
   it('Notification#show() calls (an unrelated API — system toasts, not window focus) are left untouched', () => {
-    expect(indexSrc).toContain('notification.show()')
+    // G68 moved native notification creation into quiet-output.ts; quiet-policy.contract.test.ts pins that
+    // module as a pure system toast (Notification#show() only, no BrowserWindow focus calls).
+    expect(indexSrc).not.toMatch(/new Notification\(/)
     expect(indexSrc).toContain("body: 'Métis is linked to your Dust workspace.'")
   })
 

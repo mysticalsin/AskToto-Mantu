@@ -1,5 +1,5 @@
 import type { AskStart } from '@shared/ipc'
-import type { AskRequest } from '../state'
+import type { AskRequest } from './ask-types'
 
 /**
  * The ask:start payload for one run. `outputIntent` marks an unsolicited (ambient) ask so main's quiet gate can
