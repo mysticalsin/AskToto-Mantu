@@ -1,6 +1,7 @@
 import { readdirSync, readFileSync } from 'node:fs'
 import { join, relative } from 'node:path'
 import { describe, expect, it } from 'vitest'
+import { readModuleSource } from '../test-helpers/module-source'
 
 // D-18: Teams auto-join is excluded from 2.12. This is a source/doc scan only; it imports no runtime code.
 const repoRoot = join(__dirname, '..', '..')
@@ -66,7 +67,7 @@ describe('Teams auto-join disposition (D-18)', () => {
   })
 
   it('Agenda Join stays a user-click link', () => {
-    const agenda = readRepo('src', 'renderer', 'src', 'components', 'AgendaView.tsx')
+    const agenda = readModuleSource(__dirname, '../renderer/src/components/AgendaView').text
     expect(agenda).toContain('safeHref(ev.joinUrl)')
     expect(agenda).toMatch(/<a\s[^>]*href=\{joinHref\}/s)
   })
