@@ -46,6 +46,7 @@ export function createFeaturePreloadApis(ipc: IpcRenderer) {
     ...createConnectorAccountsPreloadApi(ipc),
     ...createAccountChoicePreloadApi(ipc),
     ...createQuietPreloadApi(ipc),
-    ...createDictationStatusPreloadApi(ipc)
+    ...createDictationStatusPreloadApi(ipc),
+    ...createAttachmentsPreloadApi(ipc)
   }
 }
