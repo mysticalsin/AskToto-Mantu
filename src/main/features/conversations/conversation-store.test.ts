@@ -12,7 +12,7 @@ import {
   turn
 } from './__fixtures__/conversation-harness'
 
-const SECRET_TURN = 'synthetic-private-question-0451'
+const PRIVATE_TURN_TEXT = 'synthetic-private-question-0451'
 const SECRET_DRAFT = 'synthetic-private-draft-0451'
 
 describe('conversation store (G49)', () => {
@@ -26,17 +26,17 @@ describe('conversation store (G49)', () => {
       conversationId: id,
       assistantId: 'sys-general',
       runId: 'r1',
-      turns: [turn('user', SECRET_TURN)]
+      turns: [turn('user', PRIVATE_TURN_TEXT)]
     })
     await service.draftSet({ conversationId: id, text: SECRET_DRAFT })
     for (const bytes of [...h.indexIo.files.values(), ...h.turnIo.files.values()]) {
-      expect(bytes.toString('utf8')).not.toContain(SECRET_TURN)
+      expect(bytes.toString('utf8')).not.toContain(PRIVATE_TURN_TEXT)
       expect(bytes.toString('utf8')).not.toContain(SECRET_DRAFT)
     }
     const index = open([...h.indexIo.files.values()][0]!)
-    expect(index).not.toContain(SECRET_TURN) // the index references turns, it does not hold them
+    expect(index).not.toContain(PRIVATE_TURN_TEXT) // the index references turns, it does not hold them
     expect(index).toContain(SECRET_DRAFT)
-    expect(open([...h.turnIo.files.values()][0]!)).toContain(SECRET_TURN)
+    expect(open([...h.turnIo.files.values()][0]!)).toContain(PRIVATE_TURN_TEXT)
     expect([...h.turnIo.files.keys()][0]).toContain(id)
   })
 
