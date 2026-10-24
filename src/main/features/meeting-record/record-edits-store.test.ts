@@ -52,7 +52,7 @@ describe('record edits store', () => {
 
   it('file name is a hash of the basename', () => {
     const path = sidecarPath(FOLDER, NAME)
-    expect(path).toMatch(/\/\.meeting-records\/[0-9a-f]{32}\.json$/)
+    expect(path).toMatch(/[\\/]\.meeting-records[\\/][0-9a-f]{32}\.json$/)
     expect(path).not.toContain('secret')
   })
 
