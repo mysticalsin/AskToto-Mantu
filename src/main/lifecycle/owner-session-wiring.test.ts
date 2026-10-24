@@ -6,6 +6,7 @@ import { ACCOUNT_CHOICE_IPC } from '@shared/connector-account-choice'
 import { CONNECTOR_ACCOUNTS_IPC } from '@shared/connector-accounts'
 import { ASSISTANT_IPC } from '@shared/assistants'
 import { ONBOARDING_INTERVIEW_IPC } from '@shared/onboarding-interview'
+import { WORKSPACE_IPC } from '@shared/conversation-workspace'
 import { CONVERSATION_IPC } from '@shared/conversations'
 import { DICTATION_MEMORY_IPC } from '@shared/dictation-memory'
 import { USER_MEMORY_IPC } from '@shared/user-memory'
@@ -94,6 +95,7 @@ describe('owner session wiring', () => {
       ARTIFACT_IPC.copy,
       ...Object.values(ASSISTANT_IPC),
       ...Object.values(ONBOARDING_INTERVIEW_IPC),
+      ...Object.values(WORKSPACE_IPC),
       ...Object.values(CONVERSATION_IPC),
       ...Object.values(USER_MEMORY_IPC),
       ...Object.values(MEETING_RECORD_IPC),
@@ -149,6 +151,7 @@ describe('owner session wiring', () => {
             Object.values(ASSISTANT_IPC).length +
             Object.values(ONBOARDING_INTERVIEW_IPC).length +
             Object.values(CONVERSATION_IPC).length +
+            Object.values(WORKSPACE_IPC).length +
             Object.values(USER_MEMORY_IPC).length +
             Object.values(MEETING_RECORD_IPC).length +
             Object.values(SUGGESTION_IPC).length

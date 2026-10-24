@@ -160,3 +160,42 @@ export function pruneDrafts(
   const keep = new Set(own.slice(0, DRAFT_MAX_PER_OWNER))
   return { drafts: live.filter((d) => !mine(d) || keep.has(d)), expired }
 }
+
+/** The longest supersede chain followed from one thread. */
+export const MAX_CHAIN = 50
+
+export const byRecent = (a: ConversationRecord, b: ConversationRecord): number =>
+  b.updatedAt - a.updatedAt || b.createdAt - a.createdAt || a.id.localeCompare(b.id)
+
+/** True for a row that belongs to the verified owner and tenant; other owners' rows share the partition file. */
+export const isMine =
+  (scope: { ownerKey: string; tenantKey: string }) =>
+  (r: { ownerKey: string; tenantKey: string }): boolean =>
+    r.ownerKey === scope.ownerKey && r.tenantKey === scope.tenantKey
+
+export interface ThreadContextSources {
+  /** The owner's assistants with their archive flag. Throws when they cannot be read. */
+  assistants(): Promise<ReadonlyArray<{ id: string; archived: boolean }>>
+  /** The saved meetings' own file names. Throws when they cannot be read. */
+  meetings(): Promise<readonly string[]>
+  remote(): { epoch: number; active: boolean; ttlMs: number }
+  now(): number
+}
+
+/** What a thread is still attached to, or null when that cannot be read (nothing may then be decided). */
+export async function buildThreadContext(sources: ThreadContextSources): Promise<ThreadContext | null> {
+  try {
+    const [assistants, meetings] = await Promise.all([sources.assistants(), sources.meetings()])
+    const remote = sources.remote()
+    return {
+      assistantIds: new Set(assistants.map((a) => a.id)),
+      assistantArchived: new Set(assistants.filter((a) => a.archived).map((a) => a.id)),
+      meetingFiles: new Set(meetings),
+      remoteEpoch: remote.epoch,
+      remoteTtlMs: remote.ttlMs,
+      now: sources.now()
+    }
+  } catch {
+    return null
+  }
+}

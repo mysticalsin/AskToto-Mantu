@@ -202,7 +202,8 @@ export function createOwnerSessionWiring(deps: OwnerSessionWiringDeps): OwnerSes
     assistants,
     meetings: async () => (await listMeetings()).map((row) => ({ file: row.file })),
     remote: dustConversationState,
-    audit: (record) => auditLog('conversation.store', { ...record })
+    audit: (record) => auditLog('conversation.store', { ...record }),
+    workspaceAudit: (record) => auditLog('conversation.workspace', { ...record })
   })
   // G57 user memory: durable preferences and expiring project context, owner-scoped and sealed.
   bootstrapUserMemory({

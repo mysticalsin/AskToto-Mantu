@@ -18,6 +18,7 @@ import { createLinksPreloadApi } from './links'
 import { createAssistantsPreloadApi } from './assistants'
 import { createOnboardingInterviewPreloadApi } from './onboarding-interview'
 import { createConversationsPreloadApi } from './conversations'
+import { createConversationWorkspacePreloadApi } from './conversation-workspace'
 import { createUserMemoryPreloadApi } from './user-memory'
 import { createMeetingRecordPreloadApi } from './meeting-record'
 import { createConnectorAccountsPreloadApi } from './connector-accounts'
@@ -52,6 +53,7 @@ export function createFeaturePreloadApis(ipc: IpcRenderer) {
     ...createAssistantsPreloadApi(ipc),
     ...createOnboardingInterviewPreloadApi(ipc),
     ...createConversationsPreloadApi(ipc),
+    ...createConversationWorkspacePreloadApi(ipc),
     ...createUserMemoryPreloadApi(ipc),
     ...createMeetingRecordPreloadApi(ipc),
     ...createConnectorAccountsPreloadApi(ipc),

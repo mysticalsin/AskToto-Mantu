@@ -19,6 +19,10 @@ import {
 } from '@shared/conversations'
 import type { SealedScope } from '../../infra/storage/sealed-scoped-store'
 import {
+  buildThreadContext,
+  byRecent,
+  isMine,
+  MAX_CHAIN,
   newConversationId,
   newTurnId,
   pruneDrafts,
@@ -63,9 +67,6 @@ export interface ConversationService {
 }
 
 type Refusal = ConversationRefusal['reason']
-const MAX_CHAIN = 50
-const byRecent = (a: ConversationRecord, b: ConversationRecord): number =>
-  b.updatedAt - a.updatedAt || b.createdAt - a.createdAt || a.id.localeCompare(b.id)
 
 export function createConversationService(deps: ConversationServiceDeps): ConversationService {
   let lock: Promise<unknown> = Promise.resolve()
@@ -88,27 +89,10 @@ export function createConversationService(deps: ConversationServiceDeps): Conver
   }
   const fromTx = (reason: 'signed-out' | 'unavailable' | 'stale'): { ok: false; reason: Refusal } => refuse(reason)
 
-  const context = async (): Promise<ThreadContext | null> => {
-    try {
-      const [assistants, meetings] = await Promise.all([deps.assistants(), deps.meetings()])
-      const remote = deps.remote()
-      return {
-        assistantIds: new Set(assistants.map((a) => a.id)),
-        assistantArchived: new Set(assistants.filter((a) => a.archived).map((a) => a.id)),
-        meetingFiles: new Set(meetings),
-        remoteEpoch: remote.epoch,
-        remoteTtlMs: remote.ttlMs,
-        now: deps.now()
-      }
-    } catch {
-      // Without knowing what still exists a thread cannot be called dead, so nothing is decided.
-      return null
-    }
-  }
-  const mine =
-    (scope: SealedScope) =>
-    (r: { ownerKey: string; tenantKey: string }): boolean =>
-      r.ownerKey === scope.ownerKey && r.tenantKey === scope.tenantKey
+  // Without knowing what still exists a thread cannot be called dead, so nothing is decided.
+  const context = (): Promise<ThreadContext | null> =>
+    buildThreadContext({ assistants: deps.assistants, meetings: deps.meetings, remote: deps.remote, now: deps.now })
+  const mine = isMine
 
   /** Reads one of the caller's conversations, or a refusal. */
   const findRecord = async (

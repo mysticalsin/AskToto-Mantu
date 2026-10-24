@@ -4,11 +4,15 @@ import type { IpcMain } from 'electron'
 import {
   createConversationService,
   createConversationStore,
-  type ConversationAuditPhase
+  createWorkspaceService,
+  createWorkspaceStore,
+  type ConversationAuditPhase,
+  type WorkspaceAuditPhase
 } from '../features/conversations'
 import type { AssistantService } from '../features/assistants'
 import { atomicSavedWrite } from '../infra/storage/atomic-saved-write'
 import type { SealedScopedIo } from '../infra/storage/sealed-scoped-store'
+import { registerConversationWorkspaceIpc } from '../ipc/conversation-workspace-ipc'
 import { registerConversationsIpc } from '../ipc/conversations-ipc'
 import type { AuthorizeSender } from '../ipc/sender-auth'
 import { ownerPartitionScope } from './owner-partition-scope'
@@ -29,6 +33,8 @@ export interface ConversationsWiringDeps {
   /** The remote (Dust) conversation epoch, whether one is held, and its time to live. */
   remote(): { epoch: number; active: boolean; ttlMs: number }
   audit(record: { phase: ConversationAuditPhase; reason?: string; count?: number }): void
+  /** The workspace-state audit (G50): phase tokens and counts only. */
+  workspaceAudit?(record: { phase: WorkspaceAuditPhase; reason?: string; count?: number }): void
   /** Defaults to G19's partition in force; a test seam. */
   partition?(): string | null
   now?(): number
@@ -75,16 +81,62 @@ export function bootstrapConversations(deps: ConversationsWiringDeps) {
       await atomicSavedWrite(target, data)
     }
   }
-  const service = createConversationService({
-    store: createConversationStore({ indexIo: io, turnIo: io, seal: deps.seal, open: deps.open, scope }),
+  // G50 workspace state: one sealed file per partition under its own directory; no `name` is ever accepted.
+  const workspaceRoot = (): string => join(deps.userDataPath(), 'conversation-workspace')
+  const workspaceFileOf = (partitionId: string, name?: string): { dir: string; target: string } => {
+    if (name !== undefined) throw new Error('invalid workspace document')
+    return { dir: workspaceRoot(), target: join(workspaceRoot(), `${partitionOf(partitionId)}.bin`) }
+  }
+  const workspaceIo: SealedScopedIo = {
+    async read(partitionId, name) {
+      try {
+        return await readFile(workspaceFileOf(partitionId, name).target)
+      } catch (error) {
+        if ((error as { code?: unknown } | null)?.code === 'ENOENT') return null
+        throw error
+      }
+    },
+    async write(partitionId, data, name) {
+      const { dir, target } = workspaceFileOf(partitionId, name)
+      await mkdir(dir, { recursive: true, mode: 0o700 })
+      await atomicSavedWrite(target, data)
+    }
+  }
+  const assistantRows = async (): Promise<Array<{ id: string; archived: boolean; name: string }>> => {
+    const listed = await deps.assistants.list()
+    if (!listed.ok) throw new Error('assistants unavailable')
+    return listed.assistants.map((a) => ({ id: a.assistantId, archived: a.archived, name: a.name }))
+  }
+  const conversationStore = createConversationStore({
+    indexIo: io,
+    turnIo: io,
+    seal: deps.seal,
+    open: deps.open,
+    scope
+  })
+  const meetingFiles = async (): Promise<string[]> => (await deps.meetings()).map((row) => row.file)
+  const workspace = createWorkspaceService({
+    conversations: conversationStore,
+    workspace: createWorkspaceStore({ io: workspaceIo, seal: deps.seal, open: deps.open, scope }),
     scope,
     now: deps.now ?? Date.now,
-    assistants: async () => {
-      const listed = await deps.assistants.list()
-      if (!listed.ok) throw new Error('assistants unavailable')
-      return listed.assistants.map((a) => ({ id: a.assistantId, archived: a.archived }))
-    },
-    meetings: async () => (await deps.meetings()).map((row) => row.file),
+    assistants: assistantRows,
+    meetings: meetingFiles,
+    remote: deps.remote,
+    audit: (phase, detail) => deps.workspaceAudit?.({ phase, ...detail })
+  })
+  registerConversationWorkspaceIpc({
+    ipcMain: deps.ipcMain,
+    authorizeSender: deps.authorizeSender,
+    requireAuth: deps.requireAuth,
+    service: workspace
+  })
+  const service = createConversationService({
+    store: conversationStore,
+    scope,
+    now: deps.now ?? Date.now,
+    assistants: assistantRows,
+    meetings: meetingFiles,
     remote: deps.remote,
     audit: (phase, detail) => deps.audit({ phase, ...detail })
   })
@@ -94,5 +146,5 @@ export function bootstrapConversations(deps: ConversationsWiringDeps) {
     requireAuth: deps.requireAuth,
     service
   })
-  return service
+  return { service, workspace }
 }

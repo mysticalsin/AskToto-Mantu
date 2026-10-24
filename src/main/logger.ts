@@ -413,6 +413,7 @@ export type AuditEvent =
   | 'onboarding.interview'
   // G49: persisted conversations (opened, appended, replayed, linked, draft-saved, draft-expired, refused). Phase, enum reason and counts only; never a turn, a draft, an id, an assistant or a meeting file.
   | 'conversation.store'
+  | 'conversation.workspace'
   // G57: the user memory (a correction or delete of a remembered preference or project context). Action and outcome only; never text.
   | 'user.memory'
   | 'meeting.record'
