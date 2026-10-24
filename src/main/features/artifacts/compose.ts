@@ -1,5 +1,6 @@
-import { nativeImage, shell, type IpcMain } from 'electron'
+import { clipboard, nativeImage, shell, type IpcMain } from 'electron'
 import { currentPartitionId, onMemoryPartitionChange } from '../../memory-partition/memory-access'
+import { openArtifactPreviewWindow } from '../../windows/artifact-preview-window'
 import { registerArtifactsIpc } from '../../ipc/artifacts-ipc'
 import { nodeArtifactFs } from './artifact-fs'
 import { createArtifactRegistry, type ArtifactRegistry } from './registry'
@@ -33,7 +34,14 @@ export function composeArtifacts(deps: ComposeArtifactsDeps): { registry: Artifa
     assertMainWindow: deps.assertMainWindow,
     requireAuth: deps.requireAuth,
     service,
-    dragIcon: () => nativeImage.createFromDataURL(DRAG_ICON_PNG)
+    dragIcon: () => nativeImage.createFromDataURL(DRAG_ICON_PNG),
+    showPreview: openArtifactPreviewWindow,
+    writeClipboard(payload) {
+      if (payload.kind === 'text') return clipboard.writeText(payload.text)
+      const image = nativeImage.createFromBuffer(payload.bytes)
+      if (image.isEmpty()) throw new Error('image could not be decoded')
+      clipboard.writeImage(image)
+    }
   })
   onMemoryPartitionChange(() => registry.clear())
   return { registry }

@@ -1,6 +1,13 @@
 import { useEffect, useState } from 'react'
 import { FileText } from 'lucide-react'
-import { ARTIFACT_CHANGED_NOTICE, type ArtifactChip } from '@shared/artifact'
+import {
+  ARTIFACT_CHANGED_NOTICE,
+  ARTIFACT_NOTICES,
+  artifactContentType,
+  artifactFailureNotice,
+  type ArtifactActionResult,
+  type ArtifactChip
+} from '@shared/artifact'
 import { TextButton } from './ui'
 
 const formatBytes = (bytes: number): string =>
@@ -43,9 +50,9 @@ export function ArtifactChips({
     }
   }, [turnId, settled])
 
-  const run = (action: Promise<{ ok: boolean }>): void => {
+  const run = (action: Promise<ArtifactActionResult>, success: string | null = null): void => {
     setFailure(null)
-    void settleArtifactAction(action).then((notice) => setFailure(notice))
+    void settleArtifactAction(action).then((notice) => setFailure(notice ?? success))
   }
 
   return (
@@ -54,6 +61,8 @@ export function ArtifactChips({
       failure={failure}
       onOpen={(id) => run(window.toto.openArtifact(id))}
       onReveal={(id) => run(window.toto.revealArtifact(id))}
+      onPreview={(id) => run(window.toto.previewArtifact(id))}
+      onCopy={(id) => run(window.toto.copyArtifact(id), ARTIFACT_NOTICES.copied)}
       onArm={(id) => void window.toto.armArtifactDrag(id).catch(() => {})}
       onDrag={(id) => window.toto.startArtifactDrag(id)}
     />
@@ -61,11 +70,14 @@ export function ArtifactChips({
 }
 
 /** The notice to show after an open or reveal: none on success, the honest moved-or-changed line otherwise. */
-export async function settleArtifactAction(action: Promise<{ ok: boolean }>): Promise<string | null> {
+export async function settleArtifactAction(
+  action: Promise<{ ok: boolean } | ArtifactActionResult>
+): Promise<string | null> {
   try {
-    return (await action).ok ? null : ARTIFACT_CHANGED_NOTICE
+    const result = await action
+    return result.ok ? null : artifactFailureNotice(result as ArtifactActionResult)
   } catch {
-    return ARTIFACT_CHANGED_NOTICE
+    return artifactFailureNotice({ ok: false, reason: 'changed' })
   }
 }
 
@@ -74,6 +86,8 @@ export function ArtifactChipList({
   failure,
   onOpen,
   onReveal,
+  onPreview,
+  onCopy,
   onArm,
   onDrag
 }: {
@@ -81,6 +95,8 @@ export function ArtifactChipList({
   failure: string | null
   onOpen(artifactId: string): void
   onReveal(artifactId: string): void
+  onPreview(artifactId: string): void
+  onCopy(artifactId: string): void
   onArm(artifactId: string): void
   onDrag(artifactId: string): void
 }): JSX.Element | null {
@@ -105,6 +121,12 @@ export function ArtifactChipList({
             <span className="text-[color:var(--color-ink-3)]">{formatBytes(chip.bytes)}</span>
             <TextButton onClick={() => onOpen(chip.artifactId)}>Open</TextButton>
             <TextButton onClick={() => onReveal(chip.artifactId)}>Show in folder</TextButton>
+            {artifactContentType(chip.displayName) && (
+              <>
+                <TextButton onClick={() => onPreview(chip.artifactId)}>Preview</TextButton>
+                <TextButton onClick={() => onCopy(chip.artifactId)}>Copy</TextButton>
+              </>
+            )}
           </div>
         ) : (
           <div key={chip.artifactId} className="answer__artifact text-[11px] text-[color:var(--color-ink-3)]">
@@ -113,7 +135,10 @@ export function ArtifactChipList({
         )
       )}
       {failure && (
-        <div role="alert" className="text-[11px] text-[var(--color-danger)]">
+        <div
+          role={failure === ARTIFACT_NOTICES.copied ? 'status' : 'alert'}
+          className={`text-[11px] ${failure === ARTIFACT_NOTICES.copied ? 'text-[color:var(--color-ink-2)]' : 'text-[var(--color-danger)]'}`}
+        >
           {failure}
         </div>
       )}

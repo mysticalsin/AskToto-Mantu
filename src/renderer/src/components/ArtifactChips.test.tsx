@@ -17,7 +17,16 @@ const chip = (over: Partial<ArtifactChip> = {}): ArtifactChip => ({
 const noop = (): void => {}
 const list = (chips: ArtifactChip[], failure: string | null = null): string =>
   renderToStaticMarkup(
-    <ArtifactChipList chips={chips} failure={failure} onOpen={noop} onReveal={noop} onArm={noop} onDrag={noop} />
+    <ArtifactChipList
+      chips={chips}
+      failure={failure}
+      onOpen={noop}
+      onReveal={noop}
+      onPreview={noop}
+      onCopy={noop}
+      onArm={noop}
+      onDrag={noop}
+    />
   )
 
 describe('ArtifactChips', () => {
@@ -54,5 +63,23 @@ describe('ArtifactChips', () => {
     expect(await settleArtifactAction(Promise.resolve({ ok: false }))).toBe('This file was moved or changed')
     expect(await settleArtifactAction(Promise.reject(new Error('x')))).toBe('This file was moved or changed')
     expect(list([chip()], 'This file was moved or changed')).toContain('role="alert"')
+  })
+
+  it('offers preview and copy only for types main can preview, and never a PDF or svg', () => {
+    expect(list([chip({ displayName: 'notes.md' })])).toContain('Preview')
+    expect(list([chip({ displayName: 'pic.png', kind: 'image' })])).toContain('Copy')
+    for (const displayName of ['a.pdf', 'a.svg', 'a.docx'])
+      expect(list([chip({ displayName })])).not.toContain('Preview')
+  })
+
+  it('maps each failure reason to one fixed, content-free line', async () => {
+    expect(await settleArtifactAction(Promise.resolve({ ok: false, reason: 'unsupported' }))).toContain(
+      'only be opened'
+    )
+    expect(await settleArtifactAction(Promise.resolve({ ok: false, reason: 'too-large' }))).toContain('too large')
+    expect(await settleArtifactAction(Promise.resolve({ ok: false, reason: 'failed' }))).toContain('did not work')
+    expect(await settleArtifactAction(Promise.resolve({ ok: false, reason: 'missing' }))).toBe(
+      'This file was moved or changed'
+    )
   })
 })

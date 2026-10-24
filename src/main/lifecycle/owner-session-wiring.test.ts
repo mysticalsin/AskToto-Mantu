@@ -81,6 +81,8 @@ describe('owner session wiring', () => {
       ARTIFACT_IPC.open,
       ARTIFACT_IPC.reveal,
       ARTIFACT_IPC.arm,
+      ARTIFACT_IPC.preview,
+      ARTIFACT_IPC.copy,
       ...Object.values(ASSISTANT_IPC),
       ...Object.values(USER_MEMORY_IPC)
     ])
@@ -127,7 +129,7 @@ describe('owner session wiring', () => {
             3 +
             Object.values(CONNECTOR_ACCOUNTS_IPC).length +
             Object.values(DICTATION_MEMORY_IPC).length +
-            4 +
+            6 +
             Object.values(ASSISTANT_IPC).length +
             Object.values(USER_MEMORY_IPC).length
         },

@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { mkdtempSync, rmSync, writeFileSync, utimesSync, unlinkSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -209,5 +210,83 @@ describe('artifact service: drag-out', () => {
     const begin = vi.fn()
     expect(service.dragStart('art-1', begin)).toEqual({ ok: false, reason: 'changed' })
     expect(begin).not.toHaveBeenCalled()
+  })
+})
+
+describe('artifact preview and copy (G55)', () => {
+  const sha = (text: string) => createHash('sha256').update(text).digest('hex')
+
+  it('previews a verified text file from main-resolved bytes only', async () => {
+    const { registry, service } = setup()
+    const r = await reg(registry, makeFile('notes.md', '# hi <b>'))
+    if (!r.ok) throw new Error('register')
+    const show = vi.fn()
+    expect(await service.preview(r.record.artifactId, show)).toEqual({ ok: true })
+    expect(show).toHaveBeenCalledTimes(1)
+    expect(show.mock.calls[0][0].title).toBe('notes.md')
+    expect(show.mock.calls[0][0].html).toContain('&lt;b&gt;')
+    expect(Object.keys(show.mock.calls[0][0]).sort()).toEqual(['html', 'title'])
+  })
+
+  it('refuses to preview or copy a file changed since it was recorded, even with the same size', async () => {
+    const { registry, service } = setup()
+    const file = makeFile('notes.md', 'hello')
+    const r = await reg(registry, file)
+    if (!r.ok) throw new Error('register')
+    writeFileSync(file, 'HELLO')
+    const show = vi.fn()
+    const write = vi.fn()
+    expect((await service.preview(r.record.artifactId, show)).ok).toBe(false)
+    expect((await service.copy(r.record.artifactId, write)).ok).toBe(false)
+    expect(show).not.toHaveBeenCalled()
+    expect(write).not.toHaveBeenCalled()
+  })
+
+  it('reports unsupported types and unknown ids without showing anything', async () => {
+    const { registry, service } = setup()
+    const r = await reg(registry, makeFile('data.pdf', '%PDF'))
+    if (!r.ok) throw new Error('register')
+    const show = vi.fn()
+    expect(await service.preview(r.record.artifactId, show)).toEqual({ ok: false, reason: 'unsupported' })
+    expect(await service.copy(r.record.artifactId, vi.fn())).toEqual({ ok: false, reason: 'unsupported' })
+    expect(await service.preview('nope', show)).toEqual({ ok: false, reason: 'not-found' })
+    expect(show).not.toHaveBeenCalled()
+  })
+
+  it('copies the exact file text, preserving lists, blank lines and unicode, and image bytes untouched', async () => {
+    const { registry, service } = setup()
+    const text = '# T\n\n- one\n- two\n\n1. a\n2. b\n\ncafé ✓\n'
+    const r = await reg(registry, makeFile('n.md', text))
+    if (!r.ok) throw new Error('register')
+    const write = vi.fn()
+    expect(await service.copy(r.record.artifactId, write)).toEqual({ ok: true })
+    expect(write).toHaveBeenCalledWith({ kind: 'text', text })
+    expect(sha(text)).toBe(r.record.sha256)
+
+    const png = join(dir, 'p.png')
+    writeFileSync(png, Buffer.from([0x89, 0x50, 0x4e, 0x47, 0, 255]))
+    const img = await reg(registry, png)
+    if (!img.ok) throw new Error('register')
+    const writeImg = vi.fn()
+    await service.copy(img.record.artifactId, writeImg)
+    expect(writeImg.mock.calls[0][0].kind).toBe('image')
+    expect([...writeImg.mock.calls[0][0].bytes]).toEqual([0x89, 0x50, 0x4e, 0x47, 0, 255])
+  })
+
+  it('reports a clipboard failure honestly instead of ok', async () => {
+    const { registry, service } = setup()
+    const r = await reg(registry, makeFile('n.txt', 'x'))
+    if (!r.ok) throw new Error('register')
+    const write = vi.fn(() => {
+      throw new Error('clipboard busy')
+    })
+    expect(await service.copy(r.record.artifactId, write)).toEqual({ ok: false, reason: 'failed' })
+  })
+
+  it('refuses a file over the cap without reading it', async () => {
+    const { registry, service } = setup()
+    const r = await reg(registry, makeFile('big.txt', 'x'.repeat(1024 * 1024 + 1)))
+    if (!r.ok) throw new Error('register')
+    expect(await service.preview(r.record.artifactId, vi.fn())).toEqual({ ok: false, reason: 'too-large' })
   })
 })

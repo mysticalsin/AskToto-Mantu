@@ -63,6 +63,7 @@ describe('M2-0420 — no window is ever titled with the package name', () => {
       'index.ts: win',
       'intelligence.ts: intelWin',
       'windows/annotation-window.ts: win',
+      'windows/artifact-preview-window.ts: win',
       'windows/permission-helper-window.ts: win',
       'windows/task-browser-window.ts: win'
     ])

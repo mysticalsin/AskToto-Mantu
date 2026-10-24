@@ -73,6 +73,8 @@ export const ARTIFACT_IPC = {
   open: 'artifacts:open',
   reveal: 'artifacts:reveal',
   arm: 'artifacts:arm',
+  preview: 'artifacts:preview',
+  copy: 'artifacts:copy',
   dragStart: 'artifacts:dragStart'
 } as const
 
@@ -81,7 +83,61 @@ export const ArtifactIdRequestSchema = z.object({ artifactId: z.string().min(1).
 
 export type ArtifactActionResult =
   | { ok: true }
-  | { ok: false; reason: 'signed-out' | 'invalid' | 'not-found' | 'missing' | 'changed' | 'blocked' | 'failed' }
+  | {
+      ok: false
+      reason:
+        | 'signed-out'
+        | 'invalid'
+        | 'not-found'
+        | 'missing'
+        | 'changed'
+        | 'blocked'
+        | 'failed'
+        | 'unsupported'
+        | 'too-large'
+    }
 
 /** The one honest line for a file that is gone or different from what was recorded. */
 export const ARTIFACT_CHANGED_NOTICE = 'This file was moved or changed'
+
+/**
+ * G55: previews are rendered by main into one self-contained document and shown in a window with no preload, no node,
+ * no scripts and this policy. Nothing may load, connect, frame, submit or navigate; only inline styling and `data:`
+ * images (the image preview itself) are allowed.
+ */
+export const ARTIFACT_PREVIEW_CSP =
+  "default-src 'none'; img-src data:; style-src 'unsafe-inline'; script-src 'none'; connect-src 'none'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'"
+
+export const PREVIEW_TEXT_EXTENSIONS = ['.md', '.txt', '.csv', '.json', '.html'] as const
+export const PREVIEW_IMAGE_EXTENSIONS = ['.png', '.jpg', '.jpeg', '.gif', '.webp'] as const
+export const PREVIEW_TEXT_MAX_BYTES = 1024 * 1024
+export const PREVIEW_IMAGE_MAX_BYTES = 8 * 1024 * 1024
+
+const extensionOf = (name: string): string => {
+  const dot = name.lastIndexOf('.')
+  return dot < 0 ? '' : name.slice(dot).toLowerCase()
+}
+
+/** How a file is previewed and copied. SVG, PDF and anything script-capable or unknown has no preview (open it instead). */
+export function artifactContentType(name: string): 'text' | 'image' | null {
+  const ext = extensionOf(name)
+  if ((PREVIEW_TEXT_EXTENSIONS as readonly string[]).includes(ext)) return 'text'
+  if ((PREVIEW_IMAGE_EXTENSIONS as readonly string[]).includes(ext)) return 'image'
+  return null
+}
+
+/** Fixed, content-free copy for each way an artifact action can fail. */
+export const ARTIFACT_NOTICES = {
+  unsupported: 'This file type can only be opened, not previewed or copied',
+  tooLarge: 'This file is too large to preview or copy',
+  failed: 'That did not work. Try Open instead',
+  copied: 'Copied'
+} as const
+
+export function artifactFailureNotice(result: ArtifactActionResult): string | null {
+  if (result.ok) return null
+  if (result.reason === 'unsupported') return ARTIFACT_NOTICES.unsupported
+  if (result.reason === 'too-large') return ARTIFACT_NOTICES.tooLarge
+  if (result.reason === 'failed' || result.reason === 'blocked') return ARTIFACT_NOTICES.failed
+  return ARTIFACT_CHANGED_NOTICE
+}
