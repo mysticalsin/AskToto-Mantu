@@ -82,4 +82,12 @@ describe('ArtifactChips', () => {
       'This file was moved or changed'
     )
   })
+
+  it('file list is a named group and chip actions carry the file name (G91)', () => {
+    const html = list([chip()])
+    expect(html).toContain('role="group" aria-label="Files from this answer"')
+    for (const action of ['Open', 'Show in folder', 'Preview', 'Copy']) {
+      expect(html).toContain(`aria-label="${action} notes.md"`)
+    }
+  })
 })

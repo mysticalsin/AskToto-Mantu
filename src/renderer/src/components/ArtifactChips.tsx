@@ -102,7 +102,7 @@ export function ArtifactChipList({
 }): JSX.Element | null {
   if (chips.length === 0) return null
   return (
-    <div className="answer__artifacts flex flex-col gap-1" aria-label="Files from this answer">
+    <div className="answer__artifacts flex flex-col gap-1" role="group" aria-label="Files from this answer">
       {chips.map((chip) =>
         chip.status === 'ready' ? (
           <div
@@ -119,12 +119,20 @@ export function ArtifactChipList({
             <FileText size={11} />
             <span className="truncate">{chip.displayName}</span>
             <span className="text-[color:var(--color-ink-3)]">{formatBytes(chip.bytes)}</span>
-            <TextButton onClick={() => onOpen(chip.artifactId)}>Open</TextButton>
-            <TextButton onClick={() => onReveal(chip.artifactId)}>Show in folder</TextButton>
+            <TextButton ariaLabel={`Open ${chip.displayName}`} onClick={() => onOpen(chip.artifactId)}>
+              Open
+            </TextButton>
+            <TextButton ariaLabel={`Show in folder ${chip.displayName}`} onClick={() => onReveal(chip.artifactId)}>
+              Show in folder
+            </TextButton>
             {artifactContentType(chip.displayName) && (
               <>
-                <TextButton onClick={() => onPreview(chip.artifactId)}>Preview</TextButton>
-                <TextButton onClick={() => onCopy(chip.artifactId)}>Copy</TextButton>
+                <TextButton ariaLabel={`Preview ${chip.displayName}`} onClick={() => onPreview(chip.artifactId)}>
+                  Preview
+                </TextButton>
+                <TextButton ariaLabel={`Copy ${chip.displayName}`} onClick={() => onCopy(chip.artifactId)}>
+                  Copy
+                </TextButton>
               </>
             )}
           </div>

@@ -15,16 +15,31 @@ export function noticePosition(
   return { x, y }
 }
 
-export function LinkFailureNoticeView({ at }: { at: { x: number; y: number } | null }): JSX.Element | null {
-  if (!at) return null
+/** The anchor for a link activated from the keyboard: just below the focused element's left edge. */
+export function anchorFromRect(rect: { left: number; bottom: number }): { x: number; y: number } {
+  return { x: rect.left, y: rect.bottom }
+}
+
+/**
+ * The live region stays mounted and empty while idle: screen readers often drop an alert that is inserted
+ * already populated, but reliably announce text added to an existing one. The visual box is hidden from them.
+ */
+export function LinkFailureNoticeView({ at }: { at: { x: number; y: number } | null }): JSX.Element {
   return (
-    <div
-      role="alert"
-      style={{ position: 'fixed', left: `${at.x}px`, top: `${at.y}px`, width: `${WIDTH}px`, zIndex: 50 }}
-      className="pointer-events-none rounded-lg border border-[var(--color-danger)]/30 bg-black/80 px-2 py-1 text-[11px] text-[var(--color-danger)] shadow-lg"
-    >
-      {LINK_OPEN_FAILED_NOTICE}
-    </div>
+    <>
+      <div role="alert" className="sr-only">
+        {at ? LINK_OPEN_FAILED_NOTICE : ''}
+      </div>
+      {at && (
+        <div
+          aria-hidden="true"
+          style={{ position: 'fixed', left: `${at.x}px`, top: `${at.y}px`, width: `${WIDTH}px`, zIndex: 50 }}
+          className="pointer-events-none rounded-lg border border-[var(--color-danger)]/30 bg-black/80 px-2 py-1 text-[11px] text-[var(--color-danger)] shadow-lg"
+        >
+          {LINK_OPEN_FAILED_NOTICE}
+        </div>
+      )}
+    </>
   )
 }
 
@@ -32,14 +47,21 @@ export function LinkFailureNoticeView({ at }: { at: { x: number; y: number } | n
  * Transient feedback for a link that did not open (G55), shown next to where the user last pressed the pointer.
  * Mounted once in the answer surface; main pushes the event with no URL, so the copy is always the same fixed line.
  */
-export function LinkFailureNotice(): JSX.Element | null {
+export function LinkFailureNotice(): JSX.Element {
   const [at, setAt] = useState<{ x: number; y: number } | null>(null)
   const pointer = useRef({ x: 16, y: 16 })
   useEffect(() => {
     const track = (e: PointerEvent): void => {
       pointer.current = { x: e.clientX, y: e.clientY }
     }
+    const trackFocus = (e: FocusEvent): void => {
+      // Keyboard focus only: a pointer press also focuses the link, and the pointer position is the better anchor.
+      if (e.target instanceof Element && e.target.matches(':focus-visible')) {
+        pointer.current = anchorFromRect(e.target.getBoundingClientRect())
+      }
+    }
     window.addEventListener('pointerdown', track, true)
+    window.addEventListener('focusin', trackFocus, true)
     let timer: ReturnType<typeof setTimeout> | undefined
     const off = window.toto?.onLinkOpenFailed?.(() => {
       setAt(noticePosition(pointer.current, { width: window.innerWidth, height: window.innerHeight }))
@@ -48,6 +70,7 @@ export function LinkFailureNotice(): JSX.Element | null {
     })
     return () => {
       window.removeEventListener('pointerdown', track, true)
+      window.removeEventListener('focusin', trackFocus, true)
       off?.()
       if (timer) clearTimeout(timer)
     }
