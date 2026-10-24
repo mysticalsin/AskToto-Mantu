@@ -107,16 +107,32 @@ export type ConnectorRefusalReason =
   | 'catalog_changed'
   | 'input_invalid'
   | 'account_unavailable'
+  /** More than one account could run it and no trusted signal picked one (G62). Nothing ran. */
+  | 'account_ambiguous'
   | 'account_not_ready'
   | 'grant_stale'
   | 'not_approved'
   | 'handler_failed'
   | 'output_invalid'
 
+/**
+ * Which rule chose the account (G62). A closed set of labels: never an email, a tenant id or an account ref, so it is
+ * safe in audit metadata.
+ */
+export const ACCOUNT_RESOLUTION_RULES = [
+  'explicit_owner_choice',
+  'source_item_account',
+  'only_account',
+  'single_healthy_account'
+] as const
+export type AccountResolutionRule = (typeof ACCOUNT_RESOLUTION_RULES)[number]
+
 /** Where a result came from. Carried on every successful and failed call. */
 export interface ConnectorProvenance {
   connectorKind: ConnectorKind
   accountRef: AccountRef
+  /** Which rule chose `accountRef`. */
+  accountRule: AccountResolutionRule
   opId: string
   revision: number
 }
@@ -126,6 +142,15 @@ export interface ConnectorWriteReceipt {
   argsHash: string
   idempotencyKey: string
   observation: string
+}
+
+export interface ConnectorAccountChoiceOption {
+  accountRef: AccountRef
+  label: string
+  maskedHint?: string
+  health: 'connecting' | 'healthy' | 'degraded' | 'needs_reauth' | 'disconnected'
+  /** Ready for this operation's effect right now (G61 readiness). Unready accounts are shown, never pickable. */
+  selectable: boolean
 }
 
 export type ConnectorResult =
@@ -138,4 +163,6 @@ export type ConnectorResult =
       /** The provider reported a missing consent (maps to the existing "grant permission" UI). */
       needsConsent?: boolean
       error?: string
+      /** With `account_ambiguous`: the accounts the owner can choose between (renderer-safe fields only). */
+      choices?: ConnectorAccountChoiceOption[]
     }

@@ -9,6 +9,7 @@ import {
 import type { ConnectorAccountHealthSignal } from '@shared/connector-accounts'
 import { ACTION_OBSERVATION_MAX_CHARS, actionDigest, actionIdempotencyKey, isArgsHash } from '../../action-guard'
 import type { AccountResolver } from './account-ref'
+import { isAccountSelectable, resolveAccount } from './account-resolver'
 import type { CatalogPublisher } from './catalog-publisher'
 
 /** What the owner approved. Main mints it; the arguments are bound by `argsHash`. */
@@ -22,8 +23,10 @@ export interface ConnectorCall {
   /** The catalog revision this call was planned against. */
   revision: number
   input: unknown
-  /** Optional explicit owner selection. Omission resolves only when exactly one account is available. */
+  /** Explicit owner selection (the choice card). It names the account; no other account stands in for it. */
   accountRef?: AccountRef
+  /** The account bound to the item the call concerns (G62), supplied by main, never by a renderer or model. */
+  sourceAccountRef?: AccountRef
   approval?: ConnectorApproval
 }
 
@@ -101,6 +104,7 @@ const MESSAGES: Record<ConnectorRefusalReason, string> = {
   catalog_changed: 'The connector catalog changed after this was planned. Plan it again.',
   input_invalid: 'The request does not match what this connector operation accepts.',
   account_unavailable: 'No connected account is available for this operation.',
+  account_ambiguous: 'More than one account could do this. Choose which one to use. Nothing was changed.',
   account_not_ready: 'This account is still connecting or needs attention before it can be used.',
   grant_stale: 'The permission for this account is no longer valid. Reconnect it and try again.',
   not_approved: 'This change needs your confirmation first. Nothing was changed.',
@@ -137,7 +141,8 @@ export function createConnectorExecutor(deps: ConnectorExecutorDeps): ConnectorE
           opId: call.opId.slice(0, 64),
           reason,
           revision: snapshot.revision,
-          plannedRevision: Number.isInteger(call.revision) ? call.revision : -1
+          plannedRevision: Number.isInteger(call.revision) ? call.revision : -1,
+          ...(provenance ? { accountRule: provenance.accountRule } : {})
         })
         return { ok: false, reason, message: MESSAGES[reason], ...(provenance ? { provenance } : {}), ...extra }
       }
@@ -150,11 +155,47 @@ export function createConnectorExecutor(deps: ConnectorExecutorDeps): ConnectorE
       const parsed = op.input.safeParse(call.input)
       if (!parsed.success) return refuse('input_invalid')
 
-      const accountRef = deps.accounts.resolve(op.kind, call.accountRef)
-      if (!accountRef) return refuse('account_unavailable')
+      const candidates = deps.accounts.candidates(op.kind)
+      const resolution = resolveAccount({
+        candidates,
+        effect: op.effect,
+        signals: {
+          ...(call.accountRef ? { ownerChoice: call.accountRef } : {}),
+          ...(call.sourceAccountRef ? { sourceAccount: call.sourceAccountRef } : {})
+        }
+      })
+      if (!resolution.ok) {
+        if (resolution.reason === 'ambiguous') {
+          // The operation does not run. Main shows the owner the accounts (renderer-safe fields only) and asks.
+          const choices = resolution.options.flatMap((option) => {
+            const candidate = candidates.find((c) => c.accountRef === option.accountRef)
+            return candidate
+              ? [
+                  {
+                    accountRef: candidate.accountRef,
+                    label: candidate.label,
+                    ...(candidate.maskedHint ? { maskedHint: candidate.maskedHint } : {}),
+                    health: candidate.health,
+                    selectable: isAccountSelectable(candidate.health, op.effect)
+                  }
+                ]
+              : []
+          })
+          audit('connector.refused', {
+            opId: op.opId,
+            reason: 'account_ambiguous',
+            revision: snapshot.revision,
+            candidateCount: choices.length
+          })
+          return { ok: false, reason: 'account_ambiguous', message: MESSAGES.account_ambiguous, choices }
+        }
+        return refuse(resolution.reason === 'not_ready' ? 'account_not_ready' : 'account_unavailable')
+      }
+      const accountRef = resolution.accountRef
       const provenance: ConnectorProvenance = {
         connectorKind: op.kind,
         accountRef,
+        accountRule: resolution.rule,
         opId: op.opId,
         revision: snapshot.revision
       }
@@ -229,7 +270,12 @@ export function createConnectorExecutor(deps: ConnectorExecutorDeps): ConnectorE
       const output = op.output.safeParse(outcome.output)
       if (!output.success) return refuse('output_invalid', provenance)
 
-      audit('connector.executed', { opId: op.opId, revision: snapshot.revision, effect: op.effect })
+      audit('connector.executed', {
+        opId: op.opId,
+        revision: snapshot.revision,
+        effect: op.effect,
+        accountRule: resolution.rule
+      })
       if (!isWriteEffect(op.effect)) return { ok: true, output: output.data, provenance }
       const id = (output.data as { id?: unknown }).id
       const observation = `${op.opId} confirmed${typeof id === 'string' ? ` id ${id}` : ''}`.slice(

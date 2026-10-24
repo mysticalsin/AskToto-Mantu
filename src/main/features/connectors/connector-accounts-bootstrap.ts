@@ -6,8 +6,14 @@ import { createFileConnectorAccountStore } from './account-store'
 import type { ConnectorAccountStore } from './account-store'
 import type { ConnectorAccountVerificationSignal } from './account-registry'
 import { createConnectorAccountRegistry } from './account-registry'
+import { ACCOUNT_CHOICE_IPC, type AccountChoiceState } from '@shared/connector-account-choice'
+import { registerAccountChoiceIpc } from '../../ipc/connector-account-choice-ipc'
 import { registerConnectorAccountsIpc } from '../../ipc/connector-accounts-ipc'
-import { configureConnectorAccountRuntime } from './connector-runtime'
+import {
+  accountChoiceBroker,
+  configureAccountChoiceDelivery,
+  configureConnectorAccountRuntime
+} from './connector-runtime'
 
 export interface ConnectorAccountsBootstrapDeps {
   ipcMain: Pick<IpcMain, 'handle'>
@@ -16,6 +22,8 @@ export interface ConnectorAccountsBootstrapDeps {
   ownerSession: Pick<OwnerSessionAuthority, 'currentOwnerKey' | 'currentTenantKey' | 'onRevoked'>
   userDataPath(): string
   onWillQuit(listener: () => void): void
+  /** How an account choice card reaches its owner window (production: `webContents.fromId(id)?.send`). */
+  sendToWebContents?(webContentsId: number, channel: string, state: AccountChoiceState): void
   /** Test seam; production reads only the signed-in main-process auth session. */
   identity?(): { signedIn: boolean; email?: string }
   /** Test seams; production persists to userData and verifies against the main-process Graph token cache. */
@@ -72,8 +80,20 @@ export function bootstrapConnectorAccounts(deps: ConnectorAccountsBootstrapDeps)
     }
   })
 
+  const sendToWebContents = deps.sendToWebContents
+  configureAccountChoiceDelivery(
+    sendToWebContents ? (id, state) => sendToWebContents(id, ACCOUNT_CHOICE_IPC.state, state) : null
+  )
+  registerAccountChoiceIpc(deps.ipcMain, {
+    assertMainWindow: deps.assertMainWindow,
+    requireAuth: deps.requireAuth,
+    broker: accountChoiceBroker()
+  })
+
   deps.ownerSession.onRevoked((ref, reason) => {
     if (reason !== 'sign-out' && reason !== 'auth-changed') return
+    // A pending account choice belongs to the session that raised it: it never resumes under another owner.
+    accountChoiceBroker().revokeAll(reason)
     void registry.disconnectOwnerAccounts({ ownerKey: ref.ownerKey, tenantKey: ref.tenantKey })
   })
   deps.onWillQuit(() => {

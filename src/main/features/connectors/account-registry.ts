@@ -82,6 +82,8 @@ export type CompleteConnectorOnboardingResult =
   | { ok: false; reason: 'flow_not_found' | 'flow_expired' }
 
 export interface ConnectorAccountRegistry extends AccountResolver {
+  /** Returns the requested account or the only non-disconnected account; ambiguity fails closed. */
+  resolve(kind: ConnectorKind, requestedAccountRef?: AccountRef): AccountRef | null
   prepareCurrentScope(): Promise<void>
   ensureAccount(input: EnsureConnectorAccountInput): Promise<AccountRef>
   listViews(): Promise<ConnectorAccountView[]>
@@ -347,6 +349,17 @@ export function createConnectorAccountRegistry(deps: {
         return available.some((account) => account.accountRef === requestedAccountRef) ? requestedAccountRef : null
       }
       return available.length === 1 ? available[0].accountRef : null
+    },
+
+    candidates(kind) {
+      const scope = currentScope()
+      if (!scope) return []
+      return [...(partitions.get(partitionKey(scope, kind))?.accounts.values() ?? [])].map((account) => ({
+        accountRef: account.accountRef,
+        label: account.label,
+        ...(account.maskedHint ? { maskedHint: account.maskedHint } : {}),
+        health: account.health.health
+      }))
     },
 
     isReady(kind, accountRef, effect) {
