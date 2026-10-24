@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "id": "JEV-02",
+  "title": "Rhetorical question and a quoted question inside a statement",
+  "synthetic": true,
+  "language": "fr",
+  "meetingType": "sales",
+  "requires": [],
+  "steps": [
+    { "kind": "final", "utteranceId": "u1", "revision": 1, "speaker": "them", "text": "Qui voudrait payer ce prix-là ?", "lang": "fr", "tMs": 1000 },
+    { "kind": "final", "utteranceId": "u2", "revision": 1, "speaker": "them", "text": "Mon collègue a écrit : « pouvez-vous nous aider ? »", "lang": "fr", "tMs": 20000 }
+  ],
+  "labels": [
+    { "at": 0, "warranted": false, "reason": "rhetorical" },
+    { "at": 1, "warranted": false, "reason": "quoted" }
+  ],
+  "expect": { "maxCards": 0 }
+}

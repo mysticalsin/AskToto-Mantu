@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "id": "JEV-11",
+  "title": "Classifier and generator cost units stay separately attributable",
+  "synthetic": true,
+  "language": "es",
+  "meetingType": "interview",
+  "requires": ["cost-attribution", "classifier"],
+  "steps": [
+    { "kind": "final", "utteranceId": "u1", "revision": 1, "speaker": "them", "text": "¿Cómo manejaría un conflicto en el equipo?", "lang": "es", "tMs": 1000 },
+    { "kind": "classifier", "outcome": "ok", "scores": { "question": 0.9, "objection": 0, "hesitation": 0, "decision": 0 } },
+    { "kind": "candidate", "cardKey": "card-a", "text": "Use un ejemplo concreto con resultado medible.", "tMs": 2500, "forUtteranceId": "u1" }
+  ],
+  "labels": [
+    { "at": 0, "warranted": true, "reason": "direct-question", "useful": true }
+  ],
+  "expect": { "maxCards": 1, "maxClassifierCalls": 1 }
+}

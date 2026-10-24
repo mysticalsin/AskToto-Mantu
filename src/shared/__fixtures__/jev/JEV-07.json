@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "id": "JEV-07",
+  "title": "A late duplicate judgment cannot undo a newer or pinned card",
+  "synthetic": true,
+  "language": "es",
+  "meetingType": "sales",
+  "requires": ["card-swap"],
+  "steps": [
+    { "kind": "candidate", "cardKey": "card-a", "text": "Ofrezca una demostración corta.", "tMs": 1000 },
+    { "kind": "pin", "cardKey": "card-a", "tMs": 3000 },
+    { "kind": "candidate", "cardKey": "card-b", "text": "Proponga una demo breve.", "tMs": 15000 }
+  ],
+  "labels": [
+    { "at": 0, "warranted": true, "reason": "new-guidance", "useful": true },
+    { "at": 2, "warranted": false, "reason": "duplicate" }
+  ],
+  "expect": { "maxCards": 1, "finalCardKey": "card-a" }
+}

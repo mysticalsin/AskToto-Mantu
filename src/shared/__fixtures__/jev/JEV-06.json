@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "id": "JEV-06",
+  "title": "A reworded duplicate keeps the card; genuinely new guidance replaces it",
+  "synthetic": true,
+  "language": "fr",
+  "meetingType": "internal",
+  "requires": ["card-swap"],
+  "steps": [
+    { "kind": "candidate", "cardKey": "card-a", "text": "Proposez un pilote de deux semaines.", "tMs": 1000 },
+    { "kind": "candidate", "cardKey": "card-b", "text": "Suggérez un essai pilote sur quatorze jours.", "tMs": 12000 },
+    { "kind": "candidate", "cardKey": "card-c", "text": "Demandez d'abord le budget validé.", "tMs": 24000 }
+  ],
+  "labels": [
+    { "at": 0, "warranted": true, "reason": "new-guidance", "useful": true },
+    { "at": 1, "warranted": false, "reason": "duplicate" },
+    { "at": 2, "warranted": true, "reason": "new-guidance", "useful": true }
+  ],
+  "expect": { "maxCards": 2, "finalCardKey": "card-c" }
+}

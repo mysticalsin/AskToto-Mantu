@@ -1,0 +1,26 @@
+{
+  "schemaVersion": 1,
+  "id": "JEV-09",
+  "title": "Classifier failures are bounded and degrade to the existing rules",
+  "synthetic": true,
+  "language": "pt-BR",
+  "meetingType": "support",
+  "requires": ["classifier"],
+  "steps": [
+    { "kind": "classifier", "outcome": "unauthenticated" },
+    { "kind": "classifier", "outcome": "rate-limited" },
+    { "kind": "classifier", "outcome": "timeout" },
+    { "kind": "classifier", "outcome": "malformed" },
+    { "kind": "classifier", "outcome": "nan", "scores": { "question": 0, "objection": 0, "hesitation": 0, "decision": 0 } },
+    { "kind": "classifier", "outcome": "outage" }
+  ],
+  "labels": [
+    { "at": 0, "warranted": false, "reason": "degraded" },
+    { "at": 1, "warranted": false, "reason": "degraded" },
+    { "at": 2, "warranted": false, "reason": "degraded" },
+    { "at": 3, "warranted": false, "reason": "degraded" },
+    { "at": 4, "warranted": false, "reason": "degraded" },
+    { "at": 5, "warranted": false, "reason": "degraded" }
+  ],
+  "expect": { "maxCards": 0, "maxClassifierCalls": 6 }
+}

@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "id": "JEV-01",
+  "title": "Stable question without a question mark, then the same question finalized with one",
+  "synthetic": true,
+  "language": "en",
+  "meetingType": "technical",
+  "requires": [],
+  "steps": [
+    { "kind": "partial", "utteranceId": "u1", "text": "how do we handle retries on", "tMs": 500 },
+    { "kind": "final", "utteranceId": "u1", "revision": 1, "speaker": "them", "text": "How do we handle retries on the queue", "lang": "en", "tMs": 1000 },
+    { "kind": "final", "utteranceId": "u1", "revision": 2, "speaker": "them", "text": "How do we handle retries on the queue?", "lang": "en", "tMs": 3000 }
+  ],
+  "labels": [
+    { "at": 1, "warranted": true, "reason": "direct-question", "useful": true },
+    { "at": 2, "warranted": false, "reason": "duplicate" }
+  ],
+  "expect": { "maxCards": 1 }
+}

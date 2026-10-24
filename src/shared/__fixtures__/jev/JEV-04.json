@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "id": "JEV-04",
+  "title": "ASR correction, retraction and an overlapping turn invalidate the earlier decision",
+  "synthetic": true,
+  "language": "es",
+  "meetingType": "support",
+  "requires": ["stale-drop"],
+  "steps": [
+    { "kind": "final", "utteranceId": "u1", "revision": 1, "speaker": "them", "text": "¿Puedes explicarme cómo reiniciar el servicio?", "lang": "es", "tMs": 1000 },
+    { "kind": "correction", "utteranceId": "u1", "revision": 2, "text": "¿Puedes explicarme cómo reinstalar el servicio?", "tMs": 2000 },
+    { "kind": "final", "utteranceId": "u2", "revision": 1, "speaker": "them", "text": "Perdón, ¿cuánto cuesta el plan básico?", "lang": "es", "tMs": 6000 },
+    { "kind": "retraction", "utteranceId": "u2", "tMs": 6500 },
+    { "kind": "final", "utteranceId": "u3", "revision": 1, "speaker": "you", "text": "Un momento, lo reviso.", "lang": "es", "tMs": 6400 }
+  ],
+  "labels": [
+    { "at": 0, "warranted": true, "reason": "direct-question", "useful": true },
+    { "at": 1, "warranted": false, "reason": "stale-evidence" },
+    { "at": 3, "warranted": false, "reason": "stale-evidence" }
+  ],
+  "expect": { "mustStaleDrop": ["u1", "u2"] }
+}
