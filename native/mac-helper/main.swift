@@ -98,7 +98,21 @@
 //
 //   speak-voices      One-shot, read-only. Prints installed voices as JSON {voices:[{id,name,language}]}; it never
 //                     downloads or requests a voice.
+//
+//   calendar-status   One-shot, read-only (G65). Prints {status}: notDetermined, denied, restricted, writeOnly or
+//                     fullAccess (EKEventStore.authorizationStatus). It never raises a system prompt.
+//   calendar-access-ask  One-shot (G65). The ONLY calendar call that may raise the Calendar prompt
+//                     (requestFullAccessToEvents). Prints {status} like calendar-status. Metis calls it only after the
+//                     person pressed Confirm.
+//   calendar-event-create  One-shot (G65). Reads {subject, body, startIso, endIso} from stdin (event text is never
+//                     in argv), re-checks full access, saves ONE event to the default calendar with no attendees
+//                     and no alarms. Prints {ok:true, id} or {ok:false, error} with error one of permission,
+//                     no_calendar, save_failed, bad_input.
+//   calendar-event-read <id>  One-shot, read-only (G65). Prints {ok:true, subject, startIso, endIso, cancelled} for
+//                     the event with that identifier, or {ok:false, error:"not_found"|"permission"}. Metis compares
+//                     it with what the person confirmed before reporting the event as created.
 import AppKit
+import EventKit
 import AVFoundation
 import Darwin
 import Security
@@ -923,6 +937,129 @@ func runAutomationAsk(bundleId: String) -> Never {
     }
 }
 
+struct CalendarStatusResult: Encodable {
+    let status: String
+}
+
+struct CalendarEventInput: Decodable {
+    let subject: String
+    let body: String?
+    let startIso: String
+    let endIso: String
+}
+
+struct CalendarEventResult: Encodable {
+    let ok: Bool
+    var id: String?
+    var error: String?
+    var subject: String?
+    var startIso: String?
+    var endIso: String?
+    var cancelled: Bool?
+}
+
+func calendarAuthStatusName() -> String {
+    let status = EKEventStore.authorizationStatus(for: .event)
+    if #available(macOS 14.0, *) {
+        switch status {
+        case .fullAccess: return "fullAccess"
+        case .writeOnly: return "writeOnly"
+        case .notDetermined: return "notDetermined"
+        case .restricted: return "restricted"
+        case .denied: return "denied"
+        default: return "denied"
+        }
+    }
+    switch status {
+    case .notDetermined: return "notDetermined"
+    case .restricted: return "restricted"
+    case .denied: return "denied"
+    default: return "fullAccess"
+    }
+}
+
+func runCalendarStatus() -> Never {
+    emitJson(CalendarStatusResult(status: calendarAuthStatusName()), command: "calendar-status")
+}
+
+func runCalendarAccessAsk() -> Never {
+    if calendarAuthStatusName() == "notDetermined" {
+        let store = EKEventStore()
+        let done = DispatchSemaphore(value: 0)
+        if #available(macOS 14.0, *) {
+            store.requestFullAccessToEvents { _, _ in done.signal() }
+        } else {
+            store.requestAccess(to: .event) { _, _ in done.signal() }
+        }
+        _ = done.wait(timeout: .now() + 110)
+    }
+    emitJson(CalendarStatusResult(status: calendarAuthStatusName()), command: "calendar-access-ask")
+}
+
+func parseCalendarDate(_ text: String) -> Date? {
+    let plain = ISO8601DateFormatter()
+    if let date = plain.date(from: text) { return date }
+    let fractional = ISO8601DateFormatter()
+    fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+    return fractional.date(from: text)
+}
+
+func formatCalendarDate(_ date: Date) -> String {
+    let formatter = ISO8601DateFormatter()
+    formatter.formatOptions = [.withInternetDateTime]
+    return formatter.string(from: date)
+}
+
+func runCalendarEventCreate() -> Never {
+    let data = FileHandle.standardInput.readDataToEndOfFile()
+    guard let input = try? JSONDecoder().decode(CalendarEventInput.self, from: data),
+          let start = parseCalendarDate(input.startIso),
+          let end = parseCalendarDate(input.endIso),
+          end > start else {
+        emitJson(CalendarEventResult(ok: false, error: "bad_input"), command: "calendar-event-create")
+    }
+    // Only full access can read the event back, so write-only counts as missing.
+    guard calendarAuthStatusName() == "fullAccess" else {
+        emitJson(CalendarEventResult(ok: false, error: "permission"), command: "calendar-event-create")
+    }
+    let store = EKEventStore()
+    guard let calendar = store.defaultCalendarForNewEvents else {
+        emitJson(CalendarEventResult(ok: false, error: "no_calendar"), command: "calendar-event-create")
+    }
+    let event = EKEvent(eventStore: store)
+    event.calendar = calendar
+    event.title = input.subject
+    event.notes = input.body
+    event.startDate = start
+    event.endDate = end
+    do {
+        try store.save(event, span: .thisEvent, commit: true)
+    } catch {
+        emitJson(CalendarEventResult(ok: false, error: "save_failed"), command: "calendar-event-create")
+    }
+    guard let identifier = event.eventIdentifier else {
+        emitJson(CalendarEventResult(ok: false, error: "save_failed"), command: "calendar-event-create")
+    }
+    emitJson(CalendarEventResult(ok: true, id: identifier), command: "calendar-event-create")
+}
+
+func runCalendarEventRead(id: String) -> Never {
+    guard calendarAuthStatusName() == "fullAccess" else {
+        emitJson(CalendarEventResult(ok: false, error: "permission"), command: "calendar-event-read")
+    }
+    let store = EKEventStore()
+    guard let event = store.event(withIdentifier: id) else {
+        emitJson(CalendarEventResult(ok: false, error: "not_found"), command: "calendar-event-read")
+    }
+    emitJson(CalendarEventResult(
+        ok: true,
+        subject: event.title ?? "",
+        startIso: formatCalendarDate(event.startDate),
+        endIso: formatCalendarDate(event.endDate),
+        cancelled: event.status == .canceled
+    ), command: "calendar-event-read")
+}
+
 struct ActivatePidResult: Encodable {
     let activated: Bool
 }
@@ -1068,7 +1205,7 @@ func runSpeakVoices() -> Never {
 
 let arguments = CommandLine.arguments
 guard arguments.count >= 2 else {
-    fail("usage: metis-mac-helper <watch-frontmost|ocr|transcribe|screen-metrics|stat-flags|proc-info|supervise|stall-watch|code-identity|bundle-copies|tcc-status|automation-ask|activate-pid|watch-modifiers|speak|speak-voices> [path|-]")
+    fail("usage: metis-mac-helper <watch-frontmost|ocr|transcribe|screen-metrics|stat-flags|proc-info|supervise|stall-watch|code-identity|bundle-copies|tcc-status|automation-ask|activate-pid|watch-modifiers|speak|speak-voices|calendar-status|calendar-access-ask|calendar-event-create|calendar-event-read> [path|-]")
 }
 switch arguments[1] {
 case "watch-frontmost":
@@ -1116,6 +1253,17 @@ case "automation-ask":
         fail("usage: metis-mac-helper automation-ask <bundle-id>")
     }
     runAutomationAsk(bundleId: arguments[2])
+case "calendar-status":
+    runCalendarStatus()
+case "calendar-access-ask":
+    runCalendarAccessAsk()
+case "calendar-event-create":
+    runCalendarEventCreate()
+case "calendar-event-read":
+    guard arguments.count >= 3 else {
+        fail("usage: metis-mac-helper calendar-event-read <id>")
+    }
+    runCalendarEventRead(id: arguments[2])
 case "activate-pid":
     guard arguments.count >= 3 else {
         fail("usage: metis-mac-helper activate-pid <pid>")

@@ -17,6 +17,9 @@
     <!-- Apple Events — desktop commands drive Notes and System Events through /usr/bin/osascript (NSAppleEventsUsageDescription) -->
     <key>com.apple.security.automation.apple-events</key>
     <true/>
+    <!-- Calendar — Apple Calendar events the person confirms, created and read back through EventKit (G65) -->
+    <key>com.apple.security.personal-information.calendars</key>
+    <true/>
     <!-- Network client — OAuth loopback flows (Microsoft, Google), API calls -->
     <key>com.apple.security.network.client</key>
     <true/>

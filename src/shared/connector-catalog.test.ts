@@ -13,6 +13,12 @@ const PINNED: Record<number, string> = {
     'outlook.calendar.today|outlook|read|Calendars.Read|tz|events',
     'outlook.draft.create|outlook|create|Mail.ReadWrite|body,subject|id',
     'outlook.event.create|outlook|create|Calendars.ReadWrite|body,endIso,startIso,subject|endIso,id,startIso,verified'
+  ].join('\n'),
+  3: [
+    'apple.calendar.event.create|apple_calendar|create|EventKit.FullAccess|body,endIso,startIso,subject|endIso,id,startIso,verified',
+    'outlook.calendar.today|outlook|read|Calendars.Read|tz|events',
+    'outlook.draft.create|outlook|create|Mail.ReadWrite|body,subject|id',
+    'outlook.event.create|outlook|create|Calendars.ReadWrite|body,endIso,startIso,subject|endIso,id,startIso,verified'
   ].join('\n')
 }
 
@@ -20,7 +26,19 @@ describe('connector catalog', () => {
   it('has a unique opId per operation and each op id is prefixed by its kind', () => {
     const ids = CONNECTOR_CATALOG.map((op) => op.opId)
     expect(new Set(ids).size).toBe(ids.length)
-    for (const op of CONNECTOR_CATALOG) expect(op.opId.startsWith(`${op.kind}.`)).toBe(true)
+    // `apple_calendar` ops read `apple.calendar.…`: the kind's underscore is the op id's dot.
+    for (const op of CONNECTOR_CATALOG)
+      expect(op.opId.startsWith(`${op.kind.replace('_', '.')}.`) || op.opId.startsWith(`${op.kind}.`)).toBe(true)
+  })
+
+  it('lists apple.calendar.event.create as a write that requires start and end', () => {
+    const op = CONNECTOR_CATALOG.find((o) => o.opId === 'apple.calendar.event.create')
+    expect(op?.kind).toBe('apple_calendar')
+    expect(op && isWriteEffect(op.effect)).toBe(true)
+    expect(op?.input.safeParse({ subject: 'x' }).success).toBe(false)
+    expect(
+      op?.input.safeParse({ subject: 'x', startIso: '2026-10-25T10:00:00Z', endIso: '2026-10-25T11:00:00Z' }).success
+    ).toBe(true)
   })
 
   it('pins the fingerprint of the current revision', () => {

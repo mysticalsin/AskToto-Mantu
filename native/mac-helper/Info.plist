@@ -6,6 +6,10 @@
   <string>com.mantu.asktoto.mac-helper</string>
   <key>CFBundleName</key>
   <string>Métis</string>
+  <key>NSCalendarsFullAccessUsageDescription</key>
+  <string>Métis uses your calendar to add events you confirm and to check they were saved.</string>
+  <key>NSCalendarsUsageDescription</key>
+  <string>Métis uses your calendar to add events you confirm and to check they were saved.</string>
   <key>NSSpeechRecognitionUsageDescription</key>
   <string>Métis uses Apple Speech to transcribe meetings on this Mac when you choose it in Settings.</string>
 </dict>

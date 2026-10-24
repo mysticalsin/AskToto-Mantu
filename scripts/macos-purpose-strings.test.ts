@@ -16,6 +16,7 @@ const SYSTEM_AUDIO = 'Métis uses system audio to transcribe the other side of t
 const SCREEN = 'Métis uses screen recording to hear meeting audio and to see your screen when you ask.'
 const APPLE_SPEECH = 'Métis uses Apple Speech to transcribe meetings on this Mac when you choose it in Settings.'
 const APPLE_EVENTS = 'Métis uses Apple Events to carry out desktop commands you confirm, such as creating a note.'
+const CALENDAR = 'Métis uses your calendar to add events you confirm and to check they were saved.'
 const NATIVE_SPEECH = 'Métis uses speech recognition to transcribe your meetings on this Mac.'
 
 const ELECTRON_APP: Record<string, string> = {
@@ -23,7 +24,9 @@ const ELECTRON_APP: Record<string, string> = {
   NSAudioCaptureUsageDescription: SYSTEM_AUDIO,
   NSScreenCaptureUsageDescription: SCREEN,
   NSSpeechRecognitionUsageDescription: APPLE_SPEECH,
-  NSAppleEventsUsageDescription: APPLE_EVENTS
+  NSAppleEventsUsageDescription: APPLE_EVENTS,
+  NSCalendarsFullAccessUsageDescription: CALENDAR,
+  NSCalendarsUsageDescription: CALENDAR
 }
 
 /** The `extendInfo:` map of one top-level electron-builder section (`mac:`, `mas:`), as plain key/value text. */
@@ -73,6 +76,19 @@ describe('C26 — macOS purpose strings follow the HIG', () => {
   it('the Apple Speech helper embeds its own sentence (it requests authorization itself)', () => {
     const plist = read('native', 'mac-helper', 'Info.plist')
     expect(plist).toContain(`<key>NSSpeechRecognitionUsageDescription</key>\n  <string>${APPLE_SPEECH}</string>`)
+  })
+
+  it('calendar purpose strings pinned in the helper that raises the EventKit prompt and in both entitlement files', () => {
+    const plist = read('native', 'mac-helper', 'Info.plist')
+    expect(plist).toContain(`<key>NSCalendarsFullAccessUsageDescription</key>\n  <string>${CALENDAR}</string>`)
+    expect(plist).toContain(`<key>NSCalendarsUsageDescription</key>\n  <string>${CALENDAR}</string>`)
+    expectHigSentence(CALENDAR)
+    for (const file of ['entitlements.mac.plist', 'entitlements.mas.plist']) {
+      expect(read('build', file), file).toContain('<key>com.apple.security.personal-information.calendars</key>')
+    }
+    expect(read('native-app', 'project.yml')).toContain(
+      `INFOPLIST_KEY_NSCalendarsFullAccessUsageDescription: "${CALENDAR}"`
+    )
   })
 
   it('the native app uses the same voice for the prompts it declares', () => {
