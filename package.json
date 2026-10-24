@@ -113,7 +113,7 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.106.0",
-    "@azure/msal-node": "^5.3.0",
+    "@azure/msal-node": "^7.1.0",
     "@dust-tt/client": "^1.2.6",
     "@huggingface/transformers": "^3.0.0",
     "@modelcontextprotocol/sdk": "^1.32.1",
