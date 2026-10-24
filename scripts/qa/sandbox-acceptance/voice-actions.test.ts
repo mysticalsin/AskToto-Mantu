@@ -59,7 +59,15 @@ const isolatedEnv = () => ({
 
 describe('voice-actions CLI wiring', () => {
   it('registers the scenario after the existing ones, keeping them and their defaults', () => {
-    expect(SCENARIOS).toEqual(['meeting', 'settings-hig', 'upgrade', 'stress', 'voice-actions'])
+    expect(SCENARIOS).toEqual([
+      'meeting',
+      'settings-hig',
+      'upgrade',
+      'stress',
+      'voice-actions',
+      'quiet-mode',
+      'memory-assistants'
+    ])
     expect(resolveConfig([], isolatedEnv()).values.scenario).toBe('meeting')
   })
 

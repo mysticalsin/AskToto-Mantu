@@ -17,7 +17,7 @@
 // --dry-run validates arguments and every guard, prints the plan and touches nothing.
 import { existsSync, mkdirSync, statSync, writeFileSync } from 'node:fs'
 import { arch, platform as osPlatform, release } from 'node:os'
-import { basename, join, resolve } from 'node:path'
+import { basename, dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { readBundleId, readBundleVersion, readCodesign, mainExecutableSha256 } from './bundle.mjs'
 import { prepareAudio, AUDIO_KINDS } from './audio.mjs'
@@ -37,10 +37,14 @@ import {
   checkSocketBudget
 } from './lib.mjs'
 import { guardReport, launchApp, planLaunch, prepareProfile } from './session.mjs'
-import { DEFAULT_CANDIDATE_VERSION, runUpgradeScenario, UPGRADE_STEPS } from './upgrade.mjs'
-import { HIG_SEED_SETTINGS, SETTINGS_HIG_STEPS, runSettingsHigScenario } from './settings-hig.mjs'
+import { DEFAULT_CANDIDATE_VERSION, runUpgradeScenario } from './upgrade.mjs'
+import { HIG_SEED_SETTINGS, runSettingsHigScenario } from './settings-hig.mjs'
 import { runVoiceActionsScenario, prepareVoiceActions, describePrepared, voiceExtraEnv } from './voice-actions.mjs'
-import { VOICE_ACTIONS_STEPS, reportLeaksMarkers } from './voice-actions-lib.mjs'
+import { reportLeaksMarkers } from './voice-actions-lib.mjs'
+import { bindRun, preflightSource } from './binding.mjs'
+import { MA_MARKERS, runMemoryAssistantsScenario } from './memory-assistants.mjs'
+import { prepareQuietMode, QUIET_MARKERS, runQuietModeScenario } from './quiet-mode.mjs'
+import { SCENARIOS, SCENARIO_STEPS } from './scenario-registry.mjs'
 import { parseCases, stressSteps } from './stress-lib.mjs'
 import { runStressScenario } from './stress.mjs'
 import {
@@ -51,7 +55,10 @@ import {
   verifyMeetingPreserved
 } from './scenario.mjs'
 
-export const SCENARIOS = Object.freeze(['meeting', 'settings-hig', 'upgrade', 'stress', 'voice-actions'])
+export { SCENARIOS }
+
+/** Spoken or typed words a scenario's report must never contain; a report that does is withheld and the run FAILS. */
+const LEAK_MARKERS = Object.freeze({ 'quiet-mode': QUIET_MARKERS, 'memory-assistants': MA_MARKERS })
 
 /** Flags only `--scenario voice-actions` accepts. */
 const VOICE_ACTIONS_FLAGS = Object.freeze([
@@ -73,6 +80,7 @@ export const CLI_SPEC = Object.freeze({
   'sandbox-root': { type: 'string' },
   'run-id': { type: 'string' },
   out: { type: 'string' },
+  provenance: { type: 'string' },
   audio: { type: 'string', default: 'speech' },
   wav: { type: 'string' },
   'meeting-seconds': { type: 'number', default: 90, min: 20 },
@@ -90,8 +98,13 @@ export const CLI_SPEC = Object.freeze({
 export function resolveConfig(argv, env = process.env) {
   const values = parseCli(argv, CLI_SPEC)
   if (!SCENARIOS.includes(values.scenario)) throw new CliError(`--scenario must be one of ${SCENARIOS.join(', ')}`)
-  // The Settings scenario never listens to anything, so it does not need synthesised speech (macOS say + afconvert).
-  if (values.scenario === 'settings-hig' && !argv.some((token) => token === '--audio' || token.startsWith('--audio=')))
+  if (values.provenance && (!existsSync(values.provenance) || !statSync(values.provenance).isFile()))
+    throw new CliError(`--provenance: no such file ${values.provenance}`)
+  // The Settings and memory-assistants scenarios never listen to anything, so they do not need synthesised speech.
+  if (
+    (values.scenario === 'settings-hig' || values.scenario === 'memory-assistants') &&
+    !argv.some((token) => token === '--audio' || token.startsWith('--audio='))
+  )
     values.audio = 'tone'
   if (!AUDIO_KINDS.includes(values.audio)) throw new CliError(`--audio must be one of ${AUDIO_KINDS.join(', ')}`)
   if (values.audio === 'file' && !values.wav) throw new CliError('--audio file needs --wav <path>')
@@ -217,7 +230,8 @@ export function dryRunPlan(config, env = process.env, { bundleId = undefined, pl
           captureFile: layout.captureWav,
           bundleId,
           platform,
-          ...(values.scenario === 'voice-actions' ? { extraEnv: voiceExtraEnv(layout) } : {})
+          ...(values.scenario === 'voice-actions' ? { extraEnv: voiceExtraEnv(layout) } : {}),
+          ...(values.scenario === 'quiet-mode' ? { extraEnv: voiceExtraEnv(layout, { fifo: false }) } : {})
         })
   return {
     ok: guards.ok,
@@ -235,26 +249,7 @@ export function dryRunPlan(config, env = process.env, { bundleId = undefined, pl
         : values.scenario === 'stress'
           ? { zip: values.zip, appsDir: layout.appsDir, cases: values.cases, longMinutes: values['long-minutes'] }
           : {}),
-      steps:
-        values.scenario === 'stress'
-          ? stressSteps(values.cases)
-          : values.scenario === 'upgrade'
-            ? [...UPGRADE_STEPS]
-            : values.scenario === 'settings-hig'
-              ? [...SETTINGS_HIG_STEPS]
-              : values.scenario === 'voice-actions'
-                ? [...VOICE_ACTIONS_STEPS]
-                : [
-                    'launch-and-renderer-ready',
-                    'meeting-live',
-                    'transcript-observed',
-                    'stop-and-save',
-                    'review-opens-meeting',
-                    'clean-quit',
-                    'relaunch',
-                    'meeting-preserved-after-relaunch',
-                    'final-quit'
-                  ],
+      steps: values.scenario === 'stress' ? stressSteps(values.cases) : [...SCENARIO_STEPS[values.scenario]],
       ...(values.scenario === 'voice-actions'
         ? {
             voiceActions: {
@@ -297,6 +292,23 @@ async function main(argv) {
     console.error(`[acceptance] ${error.message}`)
     return EXIT_CODES.PRECONDITION
   }
+  // G88: bind the exact artifact before anything launches. A scenario that installs its own build binds its receipt after the run.
+  const installsOwnBuild = values.scenario === 'upgrade' || values.scenario === 'stress'
+  const expectedZipSha = installsOwnBuild
+    ? sha256File(values.scenario === 'stress' ? values.zip : values['candidate-zip'])
+    : null
+  const bindArgs = {
+    appPath,
+    receiptDir: dirname(appPath),
+    provenancePath: values.provenance ?? null,
+    runId: layout.runId,
+    expectedInstallerSha256: expectedZipSha
+  }
+  const bound = installsOwnBuild ? preflightSource({ ...bindArgs, installerSha256: expectedZipSha }) : bindRun(bindArgs)
+  if (bound.problems.length) {
+    console.error(`[acceptance] the artifact cannot be bound; nothing was launched: ${bound.problems.join('; ')}`)
+    return EXIT_CODES.PRECONDITION
+  }
   let audio
   try {
     audio = prepareAudio({ kind: values.audio, layout, wavSource: values.wav })
@@ -314,10 +326,11 @@ async function main(argv) {
       return EXIT_CODES.PRECONDITION
     }
   }
-  prepareProfile(
-    layout,
-    values.scenario === 'settings-hig' ? HIG_SEED_SETTINGS : values.scenario === 'voice-actions' ? voice.seed : {}
-  )
+  const quiet =
+    values.scenario === 'quiet-mode'
+      ? await prepareQuietMode({ layout, log: (line) => console.log(`[acceptance] ${line}`) })
+      : null
+  prepareProfile(layout, values.scenario === 'settings-hig' ? HIG_SEED_SETTINGS : (voice?.seed ?? quiet?.seed ?? {}))
   const report = createReport({
     tool: 'run-acceptance',
     config: {
@@ -352,6 +365,7 @@ async function main(argv) {
               mainExecutableSha256: mainExecutableSha256(appPath)
             }),
       audio,
+      ...(installsOwnBuild ? {} : { binding: bound.binding }),
       ...(voice ? { voiceActions: describePrepared(voice) } : {}),
       host: { platform: osPlatform(), arch: arch(), osRelease: release(), node: process.version }
     }
@@ -372,6 +386,7 @@ async function main(argv) {
     if (session) await session.kill().catch(() => {})
     for (const owned of stressSessions) await owned.kill().catch(() => {})
     if (voice) await voice.stop().catch(() => {})
+    if (quiet) await quiet.stop().catch(() => {})
   }
   process.once('SIGINT', () => void cleanup().finally(() => process.exit(130)))
   try {
@@ -428,6 +443,25 @@ async function main(argv) {
           transcriptWaitSeconds: values['transcript-wait-seconds']
         },
         log
+      })
+    } else if (values.scenario === 'quiet-mode') {
+      await runQuietModeScenario({
+        report,
+        launch: () => launchApp({ ...launchArgs, extraEnv: quiet.extraEnv }),
+        onSession: (next) => {
+          session = next
+        },
+        prepared: quiet,
+        config: { saveWaitSeconds: values['save-wait-seconds'] }
+      })
+    } else if (values.scenario === 'memory-assistants') {
+      await runMemoryAssistantsScenario({
+        report,
+        layout,
+        launch: () => launchApp(launchArgs),
+        onSession: (next) => {
+          session = next
+        }
       })
     } else if (values.scenario === 'settings-hig') {
       await runSettingsHigScenario({
@@ -532,8 +566,22 @@ async function main(argv) {
     await cleanup()
   }
   let final = finishReport(report)
-  // A voice report carries counts, states, timings and hashes, never what was said: refuse to write one that does.
-  const leaked = values.scenario === 'voice-actions' ? reportLeaksMarkers(final) : []
+  if (installsOwnBuild) {
+    // The receipt is written by the scenario's own install; it must be for the zip this run was given.
+    const after = bindRun(bindArgs)
+    final = after.binding
+      ? { ...final, meta: { ...final.meta, binding: after.binding } }
+      : { ...final, verdict: 'FAIL', meta: { ...final.meta, binding: null, bindingProblems: after.problems } }
+    if (!after.binding)
+      console.error(`[acceptance] the artifact could not be bound after the run: ${after.problems.join('; ')}`)
+  }
+  // A voice, quiet-mode or memory report carries counts, states, timings and hashes, never what was said or typed: refuse to write one that does.
+  const leaked =
+    values.scenario === 'voice-actions'
+      ? reportLeaksMarkers(final)
+      : LEAK_MARKERS[values.scenario]
+        ? reportLeaksMarkers(final, LEAK_MARKERS[values.scenario])
+        : []
   if (leaked.length) {
     console.error(
       `[acceptance] the report contained ${leaked.length} spoken marker(s); it is withheld and the run FAILS`

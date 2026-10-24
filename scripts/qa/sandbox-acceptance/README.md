@@ -202,6 +202,70 @@ $ISO /bin/bash -c "cd $REPO && node scripts/qa/sandbox-acceptance/run-acceptance
 
 The "previous" build is whatever zip is passed; a branch build labelled 1.9.7 is not the shipped public 1.9.7.
 
+## Quiet mode scenario (`--scenario quiet-mode`, G88, CAP-32)
+
+QA identity only; a synthetic meeting is live and the output gate (G68) is read through the real preload bridge. The gate is never
+disabled. The direct request uses the local mock LLM (same mock and certificate handling as voice-actions) and the real Ask box
+(`Ask Métis anything`, Return). The report carries actions, counts and booleans only; the typed question contains `quokka`, and a
+report that contains that word is withheld and the run FAILS.
+
+| Step | Observes |
+|---|---|
+| `qm-policy-default` | `getQuietPolicy()` is a valid policy and allows every channel when idle. NOT_SUPPORTED when the bridge is absent or the host is already quiet (an OS Focus mode). |
+| `qm-meeting-live` | The synthetic meeting is live (the in-call signal main's gate reads). |
+| `qm-unsolicited-held` | Every channel of the policy is `defer` or `drop`; `quietOutputOffer(channel)` never answers `allow` and agrees with the policy. |
+| `qm-direct-request-answered` | A typed ask is answered while quiet: the answer view shows and the mock LLM saw exactly 1 request. NOT_SUPPORTED without the mock or the Ask box. |
+| `qm-released-after-stop` | After Stop and save, one coalesced `onQuietOutputReleased` batch names every deferred channel. FAIL when the policy is allow again and nothing was released. |
+| `clean-quit` | Clean shutdown, no owned process left. |
+
+## Memory and assistants scenario (`--scenario memory-assistants`, G88, CAP-26 and CAP-29 local)
+
+Defaults to the tone input (it never listens). Reports carry counts, revisions and booleans; the assistant name contains `marmoset` and
+the corrected memory `zebrafinch`, both leak-checked in the report and scanned at rest after the quit.
+At the integration tip the assistants bridge has no renderer consumer and `propose` is owner-command only, and the user-memory bridge
+has no add call. So the creation and memory steps are NOT_SUPPORTED with that reason, not faked; no QA hook was added to `src/`.
+A PASS needs a visible confirm card and a trusted click (the confirm IPC is never called by the harness).
+
+| Step | Observes |
+|---|---|
+| `ma-assistant-propose-card` | A proposal mounts a visible confirm card; one click creates exactly one assistant. |
+| `ma-assistant-idempotent` | Proposing and confirming the same draft again leaves the count unchanged. |
+| `ma-memory-correct` | An existing memory keeps its id, its revision rises, the list holds the corrected text. |
+| `ma-memory-delete-tombstone` | One fewer memory, one more tombstone, the id is gone. |
+| `clean-quit`, `relaunch` | As the meeting scenario. |
+| `ma-persisted-after-relaunch` | Exactly the assistants this profile created are listed, and a deleted memory has not come back. |
+| `final-quit` | Clean shutdown. |
+| `ma-no-marker-at-rest` | After the quit, neither marker is readable anywhere under the profile, home or TMPDIR. |
+
+## Binding (every scenario, G88, CAP-40)
+
+Every report carries `meta.binding`: `commit`, `run` (`hosted` with id, attempt and url, or `local` with the run id), `installerSha256`
+(from `install-receipt.json`, never from a guessed path), `appHash` (sha256 of the installed `Contents/Resources/app.asar`),
+`mainExecutableSha256`, `bundleVersion` and `bindingSource`.
+
+- `provenance`: pass `--provenance <provenance.json>` from a `qa-candidate` run. It must pass `provenanceProblems` and the installer sha256
+  must be one of its `builds[].assets[].sha256`.
+- `local-asserted`: no provenance. The commit is `HEAD` of the harness checkout, which must have a clean `git status`. The label says
+  the zip-to-commit link is asserted by whoever ran it, not proven.
+- A binding problem is exit 2 before anything launches. Upgrade and stress install their own build, so the source is checked up front
+  against the zip's own hash and the receipt is bound after the run (a receipt for a different zip fails the run).
+
+## E2E map (`capability-map.json`, `e2e-report.mjs`)
+
+`capability-map.json` lists all 40 capabilities and all 54 E2E-01..10 cases, each with rows of a kind: `sandbox` (a scenario and step ids,
+target `LOCALLY_TESTED` or `DESIGNED`), `ci-only` (the unit or CI evidence), `owner-checklist` (hardware or owner; target
+`LIVE_VERIFIED`, `ACCEPTED` or `MEASURED`; never names a scenario), `blocked-external` (decision id and the exact unblock step),
+`pending-disposition` (G92 records E2E-04 and E2E-08) or `not-in-2.12`. `capability-map.test.ts` fails on a missing CAP or case, an unknown
+scenario or step, an owner row that names a scenario, a sandbox row claiming a live or measured level, or a blocked row without an unblock.
+
+```bash
+node scripts/qa/sandbox-acceptance/e2e-report.mjs <acceptance-*.json>... [--json]
+```
+
+Joins the map with the latest report of each scenario. Statuses: `PASS`, `FAIL`, `NOT_RUN`, `NOT_SUPPORTED` (never upgraded),
+`CI_ONLY`, `OWNER`, `BLOCKED_EXTERNAL`, `PENDING`. Exit 2 when a report has no valid binding or the reports disagree on commit, installer
+or app hash; exit 1 when a row FAILED. Soak reports are not bound yet (soak.mjs is unchanged), so the soak rows stay `NOT_RUN`.
+
 ## Soak verdict SOAK-ACCEPT-1
 
 Thresholds are fixed in `soak-verdict.mjs` and printed in every summary. This is a 60-minute acceptance rule, not the
