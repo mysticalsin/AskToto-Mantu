@@ -6,7 +6,7 @@
  * logged. When there's no token (SSO unconfigured, signed out, or consent not yet granted) we return
  * needsConsent so the UI can offer a one-click connect (re-runs sign-in) instead of erroring.
  */
-import { getGraphTokenOutcome } from './auth'
+import { getGraphToken, getGraphTokenOutcome } from './auth'
 import { auditLog } from './logger'
 import type { CalendarEvent, CalendarTodayResult } from '@shared/ipc'
 import { safeHref } from '@shared/safe-url'
@@ -96,8 +96,10 @@ function toEvent(ev: any): CalendarEvent {
 }
 
 export async function calendarToday(tz: string): Promise<CalendarTodayResult> {
-  const result = await calendarTodayForConnector(tz)
-  const { healthSignal: _healthSignal, ...legacy } = result
+  // Legacy renderer path keeps the token-only contract (getGraphToken); health metadata is connector-only.
+  const token = await getGraphToken(['Calendars.Read'])
+  if (!token) return { ok: false, needsConsent: true }
+  const { healthSignal: _healthSignal, ...legacy } = await fetchCalendarToday(token, tz)
   return legacy
 }
 
@@ -119,8 +121,10 @@ export async function calendarTodayForConnector(tz: string): Promise<CalendarCon
     }
     return { ok: false, needsConsent: true, healthSignal: 'consent_required' }
   }
-  const token = outcome.token
+  return fetchCalendarToday(outcome.token, tz)
+}
 
+async function fetchCalendarToday(token: string, tz: string): Promise<CalendarConnectorResult> {
   const zone = safeTimeZone(tz)
 
   try {

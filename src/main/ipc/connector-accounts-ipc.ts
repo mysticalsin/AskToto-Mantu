@@ -9,7 +9,7 @@ import {
   ConnectorOnboardingListResponseSchema,
   ConnectorOnboardingMutationResponseSchema
 } from '@shared/connector-accounts'
-import type { ConnectorAccountRegistry } from './account-registry'
+import type { ConnectorAccountRegistry } from '../features/connectors/account-registry'
 
 export interface ConnectorAccountsIpcDeps {
   assertMainWindow(event: IpcMainInvokeEvent): void

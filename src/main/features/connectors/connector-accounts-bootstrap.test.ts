@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import type { GraphTokenOutcome } from '../../auth'
+import type { GraphTokenOutcome } from '../../auth-graph-token-outcome'
 import { createMemoryConnectorAccountStore } from './account-store'
 import { bootstrapConnectorAccounts } from './connector-accounts-bootstrap'
 

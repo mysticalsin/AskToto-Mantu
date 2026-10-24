@@ -1,12 +1,12 @@
 import type { IpcMain, IpcMainInvokeEvent } from 'electron'
 import { authStatus, getGraphTokenOutcome } from '../../auth'
-import type { GraphTokenOutcome } from '../../auth'
+import type { GraphTokenOutcome } from '../../auth-graph-token-outcome'
 import type { OwnerSessionAuthority } from '../../lifecycle/owner-session-authority'
 import { createFileConnectorAccountStore } from './account-store'
 import type { ConnectorAccountStore } from './account-store'
 import type { ConnectorAccountVerificationSignal } from './account-registry'
 import { createConnectorAccountRegistry } from './account-registry'
-import { registerConnectorAccountsIpc } from './connector-accounts-ipc'
+import { registerConnectorAccountsIpc } from '../../ipc/connector-accounts-ipc'
 import { configureConnectorAccountRuntime } from './connector-runtime'
 
 export interface ConnectorAccountsBootstrapDeps {

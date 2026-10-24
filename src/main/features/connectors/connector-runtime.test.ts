@@ -1,9 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-const getGraphTokenOutcome = vi.fn<(scopes: string[]) => Promise<
-  | { ok: true; token: string }
-  | { ok: false; reason: 'not_configured' | 'no_account' | 'interaction_required' | 'transient' }
->>()
+const getGraphTokenOutcome =
+  vi.fn<
+    (
+      scopes: string[]
+    ) => Promise<
+      | { ok: true; token: string }
+      | { ok: false; reason: 'not_configured' | 'no_account' | 'interaction_required' | 'transient' }
+    >
+  >()
 vi.mock('../../auth', () => ({
   getGraphToken: vi.fn(),
   getGraphTokenOutcome: (s: string[]) => getGraphTokenOutcome(s)
@@ -113,9 +118,7 @@ describe('runConnectorWrite (Outlook IPC consumer)', () => {
 
     expect(result.result).toMatchObject({ ok: false, reason: 'account_not_ready' })
     expect(result.result).not.toHaveProperty('needsConsent')
-    expect(await runtimeRegistry.listViews()).toMatchObject([
-      { health: 'degraded', reason: 'token_refresh_transient' }
-    ])
+    expect(await runtimeRegistry.listViews()).toMatchObject([{ health: 'degraded', reason: 'token_refresh_transient' }])
     expect(fetchSpy).not.toHaveBeenCalled()
   })
 })

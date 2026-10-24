@@ -28,6 +28,7 @@ import {
 import { createSessionTenantResolver } from './auth-session-tenant'
 import { readSpeechAuthBoundary as readVerifiedSpeechAuthBoundary } from './auth-speech-boundary'
 import { isAdminManagedEnforced } from './auth-admin-policy'
+import { graphTokenFailure, type GraphTokenOutcome } from './auth-graph-token-outcome'
 import {
   SpeechAuthLeaseController,
   type SpeechAuthLease,
@@ -278,63 +279,27 @@ export async function makePca(cfg: AzureConfig): Promise<PublicClientApplication
   })
 }
 
-export type GraphTokenOutcome =
-  | { ok: true; token: string }
-  | { ok: false; reason: 'not_configured' | 'no_account' | 'interaction_required' | 'transient' }
-
-const INTERACTION_REQUIRED_GRAPH_ERROR_CODES = new Set([
-  'invalid_grant',
-  'no_tokens_found',
-  'refresh_token_expired',
-  'ui_not_allowed',
-  'consent_required',
-  'interaction_required',
-  'login_required',
-  'bad_token',
-  'interrupted_user'
-])
-
-function graphTokenNeedsInteraction(error: unknown): boolean {
-  try {
-    const InteractionRequiredAuthError = msal().InteractionRequiredAuthError
-    if (error instanceof InteractionRequiredAuthError) return true
-  } catch {
-    // A failed lazy MSAL load is not a reason to hide the original transient failure.
-  }
-  if (!error || typeof error !== 'object') return false
-  try {
-    const errorCode = (error as { errorCode?: unknown }).errorCode
-    return typeof errorCode === 'string' && INTERACTION_REQUIRED_GRAPH_ERROR_CODES.has(errorCode.trim().toLowerCase())
-  } catch {
-    return false
-  }
-}
-
-/** Obtain a Graph token while preserving the difference between missing setup, interaction, and outage. */
+/** Graph token preserving the difference between missing setup, interaction and outage (getGraphToken below is the legacy token-only form). */
 export async function getGraphTokenOutcome(scopes: string[]): Promise<GraphTokenOutcome> {
   try {
     const cfg = readConfig()
     if (!cfg) return { ok: false, reason: 'not_configured' }
     const pca = await makePca(cfg)
     const accounts = await pca.getTokenCache().getAllAccounts()
-    // Bind to the validated, signed-in session account — NOT just accounts[0] — so a stray/extra cached
-    // account can never be used to read another user's calendar.
+    // Bind to the validated session account, NOT accounts[0]: a stray cached account must never read another user's data.
     loadSession()
-    const want = (session?.email || '').toLowerCase()
-    const account = accounts.find((a) => (a.username || '').toLowerCase() === want) ?? null
+    const account = accounts.find((a) => (a.username || '').toLowerCase() === (session?.email || '').toLowerCase())
     if (!account) return { ok: false, reason: 'no_account' }
     const result = await pca.acquireTokenSilent({ account, scopes, forceRefresh: false })
-    const token = result?.accessToken
-    return token ? { ok: true, token } : { ok: false, reason: 'interaction_required' }
+    return result?.accessToken ? { ok: true, token: result.accessToken } : { ok: false, reason: 'interaction_required' }
   } catch (error) {
-    return { ok: false, reason: graphTokenNeedsInteraction(error) ? 'interaction_required' : 'transient' }
+    return graphTokenFailure(error, () => msal().InteractionRequiredAuthError)
   }
 }
 
-/** Legacy token-only contract for existing non-connector callers. */
 export async function getGraphToken(scopes: string[]): Promise<string | null> {
-  const outcome = await getGraphTokenOutcome(scopes)
-  return outcome.ok ? outcome.token : null
+  const o = await getGraphTokenOutcome(scopes)
+  return o.ok ? o.token : null
 }
 
 let session: Session | null = null
@@ -474,8 +439,7 @@ async function probeRefreshToken(): Promise<'valid' | 'revoked' | 'unknown'> {
     const pca = await makePca(cfg)
     const accounts = await pca.getTokenCache().getAllAccounts() // nothing cached to probe → no account → 'unknown', not a revocation
     loadSession()
-    const want = (session?.email || '').toLowerCase()
-    const account = accounts.find((a) => (a.username || '').toLowerCase() === want) ?? null
+    const account = accounts.find((a) => (a.username || '').toLowerCase() === (session?.email || '').toLowerCase())
     if (!account) return 'unknown'
     // forceRefresh: actually exercise the refresh token against the server (vs returning a cached AT).
     const result = await pca.acquireTokenSilent({ account, scopes: ['User.Read'], forceRefresh: true })

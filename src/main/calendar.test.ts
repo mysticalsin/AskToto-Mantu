@@ -1,12 +1,14 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 
 const getGraphTokenOutcome = vi.hoisted(() =>
-  vi.fn<() => Promise<
-    | { ok: true; token: string }
-    | { ok: false; reason: 'not_configured' | 'no_account' | 'interaction_required' | 'transient' }
-  >>(async () => ({ ok: true, token: 'graph-token' }))
+  vi.fn<
+    () => Promise<
+      | { ok: true; token: string }
+      | { ok: false; reason: 'not_configured' | 'no_account' | 'interaction_required' | 'transient' }
+    >
+  >(async () => ({ ok: true, token: 'graph-token' }))
 )
-vi.mock('./auth', () => ({ getGraphTokenOutcome }))
+vi.mock('./auth', () => ({ getGraphToken: vi.fn(async () => 'graph-token'), getGraphTokenOutcome }))
 vi.mock('./logger', () => ({ auditLog: vi.fn() }))
 
 import { calendarToday, calendarTodayForConnector, safeTimeZone } from './calendar'
