@@ -4,6 +4,7 @@ import { vadWindowsFromPcm } from '@shared/vad'
 import { IMPORT_CHUNK_SECONDS } from '@shared/ipc'
 import { ImportRetentionBlockedError } from './import-retention-policy'
 import { StaleImportJobWriteError } from './import-job-retention-coordinator'
+import { isErasureFenced } from './memory-partition/erasure-fence'
 import type { ImportJob, ImportJobManagerDeps, ImportSpeakerAttempt } from './import-job-types'
 
 const SAMPLE_RATE = 16_000
@@ -226,9 +227,15 @@ export async function finalizeImportJob(
   job: ImportJob,
   attempt?: ImportJobPipelineAttempt
 ): Promise<void> {
+  // G82: a job enqueued before the owner erased their data must not write its meeting afterwards.
+  const writeAllowed = (): void => {
+    if (isErasureFenced(job.createdAt)) throw new StaleImportJobWriteError()
+    host.assertJobWriteAllowed(job, attempt)
+  }
   try {
     job.progressPct = Math.max(job.progressPct ?? 0, 99)
     host.assertRetentionAllowed()
+    writeAllowed()
     const file = await host.deps.saveMeeting(
       {
         title: job.title,
@@ -238,7 +245,7 @@ export async function finalizeImportJob(
         lines: [...job.lines].sort((a, b) => a.t - b.t),
         recap: ''
       },
-      () => host.assertJobWriteAllowed(job, attempt)
+      writeAllowed
     )
     if (await host.stopIfPolicyHeld(job, attempt)) return
     job.file = file
@@ -258,7 +265,7 @@ export async function finalizeImportJob(
       if (await host.stopIfPolicyHeld(job, attempt)) return
       if (recap?.trim()) {
         host.assertRetentionAllowed()
-        await host.deps.updateRecap(file, recap, 'complete', () => host.assertJobWriteAllowed(job, attempt))
+        await host.deps.updateRecap(file, recap, 'complete', writeAllowed)
         if (await host.abandonIfCancelled(job, file)) return
         if (await host.stopIfPolicyHeld(job, attempt)) return
         recapPersisted = true
@@ -284,7 +291,7 @@ export async function finalizeImportJob(
     }
     if (await host.abandonIfCancelled(job, file)) return
     if (await host.stopIfPolicyHeld(job, attempt)) return
-    await host.deps.enqueueIngest(file, undefined, () => host.assertJobWriteAllowed(job, attempt))
+    await host.deps.enqueueIngest(file, undefined, writeAllowed)
     if (await host.abandonIfCancelled(job, file)) return
     if (await host.stopIfPolicyHeld(job, attempt)) return
 

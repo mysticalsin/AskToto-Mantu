@@ -21,6 +21,7 @@ import type {
   TaskRuntimeState,
   TaskStatus
 } from './task-contract'
+import { archivePredatesErasure } from './task-erasure-fence'
 import { TASK_STORE_DECRYPT_FAILED, type TaskStateStore } from './encrypted-task-file-store'
 import {
   decodeTaskRuntimeState,
@@ -523,6 +524,7 @@ export class DesktopActionTaskBridge {
         return { available: false, uncertain: 0 }
       }
 
+      if (result.kind === 'loaded' && archivePredatesErasure(result.state)) result = { kind: 'not-found' } // G82
       if (result.kind === 'unavailable') {
         this.deps.log?.warn(`[desktop-action-task] task archive unavailable (${result.reason}); dispatch stays closed`)
         return { available: false, uncertain: 0 }

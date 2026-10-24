@@ -3,15 +3,17 @@ import { stat } from 'node:fs/promises'
 import { join } from 'node:path'
 import { DATA_STORES } from '@shared/data-store-inventory'
 import type { DataExportDeps, ErasureHost } from '../features/data-rights'
-import type { ExtraRecord } from '../features/data-rights/data-export'
 import type { AssistantService } from '../features/assistants'
 import type { ArtifactRegistry } from '../features/artifacts'
+import type { DictationMemory } from '../features/dictation'
+import type { UserMemory } from '../features/user-memory'
 import { createExportService, type ExportService } from '../features/export/export-service'
-import { sourceIdOf } from '../features/data-rights/data-export'
+import { eraseLegacyOwnedMeetings } from '../features/data-rights/legacy-meetings'
+import { legacyMeetingsFolderOf } from '../infra/storage/paths'
 import { whenDrainSettles, whenIndexWritesSettle } from '../brain/ingest'
 import { brainDir } from '../brain/brain-root'
 import { removeWiki } from '../brain/publish'
-import { purgeBrain } from '../brain/store'
+import { loadAccount, loadDeal, loadEntitySlugs, loadPerson, purgeBrain } from '../brain/store'
 import { runCredentialCleanup } from '../credential-cleanup'
 import { productionClearers } from '../credential-clearers'
 import { purgeGraphArtifacts } from '../graphify'
@@ -25,10 +27,13 @@ import { deleteAllMeetings } from '../recall'
 import { getSettings } from '../store'
 import { taskBrowserRuntime } from '../task-browser/task-browser-runtime'
 import { resolveMeetingsFolder } from '../transcripts'
+import { collectExtraRecords, type ExportedEntity } from './data-rights-export-records'
 
 export interface ProductionDataRightsParts {
   artifacts: Pick<ArtifactRegistry, 'clear'>
   assistants: Pick<AssistantService, 'list'>
+  userMemory: Pick<UserMemory, 'list'>
+  dictionary: Pick<DictationMemory, 'dictionaryList'>
 }
 
 /** The G58 export receipt log shares its file with every other export: the path comes from the inventory row. */
@@ -45,6 +50,28 @@ const exportService: ExportService = createExportService({
   },
   receiptLogPath: () => join(app.getPath('userData'), EXPORT_RECEIPTS)
 })
+
+/** Entities are derived from meetings; each names the meeting files it came from so the manifest can say so. */
+async function exportedEntities(): Promise<ExportedEntity[]> {
+  const settings = getSettings()
+  const out: ExportedEntity[] = []
+  const load = { person: loadPerson, account: loadAccount, deal: loadDeal } as const
+  for (const kind of ['person', 'account', 'deal'] as const) {
+    for (const slug of await loadEntitySlugs(settings, kind)) {
+      const record = await load[kind](settings, slug)
+      if (!record) continue
+      const meetings = record.meetings.map(({ file, date, title }) => ({ file, date, title }))
+      out.push({
+        kind,
+        slug,
+        record: { ...record, meetings },
+        meetingFiles: meetings.map((meeting) => meeting.file),
+        modifiedAt: Math.max(0, ...meetings.map((meeting) => Date.parse(meeting.date) || 0))
+      })
+    }
+  }
+  return out
+}
 
 /** The quiesce wait stops at this bound so a slow provider call never holds the erasure open. */
 const QUIESCE_BOUND_MS = 10_000
@@ -84,7 +111,15 @@ export function createProductionDataRights(parts: ProductionDataRightsParts): {
     brainRoot: () => brainDir(getSettings()),
     async deleteMeetings() {
       const result = await deleteAllMeetings()
-      return { ok: result.ok, deleted: result.deleted, failed: result.failed.length }
+      const legacy = await eraseLegacyOwnedMeetings({
+        folder: legacyMeetingsFolderOf(resolveMeetingsFolder(getSettings())),
+        isOwned: isOwnedMeetingFile
+      })
+      return {
+        ok: result.ok && legacy.failed === 0,
+        deleted: result.deleted + legacy.deleted,
+        failed: result.failed.length + legacy.failed
+      }
     },
     meetingCount: async () => (await ownedMeetings()).length,
     purgeBrain: () => purgeBrain(getSettings(), { mode: 'erase' }),
@@ -113,20 +148,16 @@ export function createProductionDataRights(parts: ProductionDataRightsParts): {
         return { status: error instanceof MeetingNotDownloadedError ? 'not-downloaded' : 'unreadable' }
       }
     },
-    async extraRecords(): Promise<ExtraRecord[]> {
-      const listed = await parts.assistants.list()
-      if (!listed.ok) return []
-      return listed.assistants
-        .filter((assistant) => !assistant.system)
-        .map((assistant) => ({
-          store: 'assistants' as const,
-          name: assistant.assistantId,
-          sourceId: sourceIdOf(assistant.assistantId),
-          origin: 'user-typed' as const,
-          modifiedAt: assistant.updatedAt,
-          text: JSON.stringify({ name: assistant.name, base: assistant.base, instructions: assistant.instructions })
-        }))
-    },
+    extraRecords: () =>
+      collectExtraRecords({
+        async assistants() {
+          const listed = await parts.assistants.list()
+          return listed.ok ? listed.assistants.filter((assistant) => !assistant.system) : []
+        },
+        userMemory: () => parts.userMemory.list(),
+        dictionary: () => parts.dictionary.dictionaryList(),
+        brainEntities: exportedEntities
+      }),
     exportDirectory: (request) => exportService.exportDirectory(request),
     appVersion: () => app.getVersion()
   }

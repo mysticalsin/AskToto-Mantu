@@ -163,7 +163,7 @@ export function createOwnerSessionWiring(deps: OwnerSessionWiringDeps): OwnerSes
     onWillQuit: (listener) => app.once('will-quit', listener)
   })
   // G26 dictation memory: the encrypted segment journal (single recovery) and the owned-span personal dictionary.
-  bootstrapDictationMemory({
+  const dictationMemory = bootstrapDictationMemory({
     ipcMain,
     authorizeSender,
     requireAuth: () => requireAuth(),
@@ -191,7 +191,7 @@ export function createOwnerSessionWiring(deps: OwnerSessionWiringDeps): OwnerSes
     onboardingAudit: (record) => auditLog('onboarding.interview', { ...record })
   })
   // G57 user memory: durable preferences and expiring project context, owner-scoped and sealed.
-  bootstrapUserMemory({
+  const userMemory = bootstrapUserMemory({
     ipcMain,
     authorizeSender,
     requireAuth: () => requireAuth(),
@@ -222,7 +222,12 @@ export function createOwnerSessionWiring(deps: OwnerSessionWiringDeps): OwnerSes
   })
 
   // G82 data rights: the store inventory's erasure with receipts, the erasure fence and the export.
-  const dataRights = createProductionDataRights({ artifacts: artifacts.registry, assistants })
+  const dataRights = createProductionDataRights({
+    artifacts: artifacts.registry,
+    assistants,
+    userMemory,
+    dictionary: dictationMemory
+  })
   bootstrapDataRights({
     ipcMain,
     authorizeSender,

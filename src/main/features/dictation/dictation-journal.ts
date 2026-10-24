@@ -28,6 +28,7 @@ import { z } from 'zod'
 import type { DictationRecoveryItem } from '@shared/dictation-memory'
 import { DICTATION_RECOVERY_TEXT_MAX_CHARS } from '@shared/dictation-memory'
 import { atomicSavedWrite } from '../../infra/storage/atomic-saved-write'
+import { isErasureFenced } from '../../memory-partition/erasure-fence'
 import type { PriorDraft } from '../desktop-contract'
 import type { MemoryKeyring } from './dictation-memory-crypto'
 import {
@@ -332,6 +333,8 @@ export function createDictationJournal(deps: DictationJournalDeps): DictationJou
           if (current.status !== 'ok') return
           const { entry } = current
           if (entry.partition !== partition || entry.offered || expired(entry) || live.has(id)) return
+          // G82: a leftover from before the owner erased their data is never offered back (the fence only moves forward).
+          if (isErasureFenced(entry.updatedAtMs, partition)) return
           const text = recoveredText(entry)
           if (text.trim().length === 0) return
           // Mark first: a record is never returned unless it is durably marked, so it can never be offered twice.

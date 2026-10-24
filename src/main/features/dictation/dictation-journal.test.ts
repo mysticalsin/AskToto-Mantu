@@ -1,6 +1,7 @@
 import { readdir, readFile, stat, utimes, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
+import { configureErasureFence, createErasureFence, erasureFenceFile } from '../../memory-partition/erasure-fence'
 import type { PriorDraft } from '../desktop-contract'
 import { PARTITION_A, PARTITION_B, makeTempRoot, syntheticKeys } from './__fixtures__/dictation-memory-fixtures'
 import { createDictationJournal, type DictationJournal, type DictationJournalDeps } from './dictation-journal'
@@ -390,5 +391,28 @@ describe('dictation journal: partition and purge (G26)', () => {
     await a.journal.appendSegment('live', 'live words')
     expect(await a.journal.purge()).toBe(2)
     expect(await files(a.journalDir)).toHaveLength(1)
+  })
+})
+
+describe('dictation journal after erasure (G82)', () => {
+  it('a record written before the owner erased their data is not offered, one written after is', async () => {
+    const dir = makeTempRoot()
+    roots.push(dir)
+    const clock = { value: 1_000_000_000_000 }
+    const first = setup({ dir: dir.path, clock })
+    await first.journal.appendSegment('turn-1', 'leftover synthetic sentence')
+    first.journal.endTurn('turn-1')
+    const fence = createErasureFence(erasureFenceFile(dir.path))
+    await fence.record(PARTITION_A, 'c'.repeat(32), clock.value + 1000)
+    configureErasureFence(fence)
+    try {
+      clock.value += 2000
+      await first.journal.appendSegment('turn-2', 'new synthetic sentence')
+      first.journal.endTurn('turn-2')
+      const offered = await setup({ dir: dir.path, clock }).journal.take()
+      expect(offered.map((item) => item.text)).toEqual(['new synthetic sentence'])
+    } finally {
+      configureErasureFence(null)
+    }
   })
 })

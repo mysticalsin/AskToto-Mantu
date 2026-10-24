@@ -60,6 +60,9 @@ function detectOneDriveUncached(): string {
 // key the first time they're opened (see decryptEnvelopeV2's self-healing rewrap).
 const COPY_FORWARD_MARKER = '.copied-legacy-asktoto-meetings'
 
+/** The pre-rename meetings folder: a sibling of whichever folder is in force (G82 erases the owner's files there). */
+export const legacyMeetingsFolderOf = (folder: string): string => join(dirname(folder), 'AskToto Meetings')
+
 function copyForwardLegacyMeetingsOnce(folder: string): void {
   try {
     const userDataDir = app.getPath('userData')
@@ -68,7 +71,7 @@ function copyForwardLegacyMeetingsOnce(folder: string): void {
     if (existsSync(marker)) return // already ran (this launch or a previous one) — marker is the single source of truth
     // Sibling of the RESOLVED folder (not a fixed path): the legacy folder sat next to whichever
     // location — OneDrive root, Documents, or an explicit user folder — was in force at the time.
-    const legacy = join(dirname(folder), 'AskToto Meetings')
+    const legacy = legacyMeetingsFolderOf(folder)
     if (existsSync(legacy)) {
       if (!existsSync(folder)) mkdirSync(folder, { recursive: true })
       for (const dirent of readdirSync(legacy, { withFileTypes: true })) {

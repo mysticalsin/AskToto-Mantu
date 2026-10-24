@@ -23,6 +23,7 @@ import {
 import { readSavedFile, decodeSaved, resolveMeetingsFolder } from '../transcripts'
 import { classifyAll, storageAt } from '../infra/storage/meetings-storage'
 import { mainLog } from '../logger'
+import { unerasedEntries } from './conflict-copy-fence'
 import {
   brainDir,
   slugify,
@@ -223,10 +224,9 @@ function journalToWrite(entries: CorrectionEntry[], unrecognized: UnrecognizedEn
  *  "corrections" and ends ".json" — covers both the classic `corrections-<hostname>.json` form and
  *  personal OneDrive's `corrections (<user>'s conflicted copy <date>).json` form — EXCLUDING our own
  *  bookkeeping files, matched by the `.corrupt-`/`.merged-` infix rather than a prefix: an already-
- *  resolved copy is renamed to `<origname>.merged-<ts>.json` (whose ORIGINAL name may itself carry a
- *  `-<hostname>` segment, so the marker lands mid-name, not at the front), and a set-aside corrupt copy
- *  to `corrections.corrupt-conflict-<origname>-<ts>.json`. Matching by prefix alone would re-detect (and
- *  endlessly re-process/re-rename) those on every subsequent call. */
+ *  resolved copy is renamed to `<origname>.merged-<ts>.json`, a set-aside corrupt copy to
+ *  `corrections.corrupt-conflict-<origname>-<ts>.json`; a prefix match would re-process both on every
+ *  subsequent call. */
 function isConflictCopyName(f: string): boolean {
   return (
     f !== CORRECTIONS_REL &&
@@ -322,7 +322,7 @@ export function readCorrectionsJournal(s: Settings): CorrectionEntry[] {
   const sources = [{ sourceId: '__primary__', entries: primary.status === 'ok' ? primary.entries : [] }]
   for (const name of conflictNames) {
     const parsed = parseJournalFile(join(root, name))
-    if (parsed.status === 'ok') sources.push({ sourceId: name, entries: parsed.entries })
+    if (parsed.status === 'ok') sources.push({ sourceId: name, entries: unerasedEntries(parsed.entries) })
   }
   return mergeJournalSources(sources)
 }
@@ -421,7 +421,7 @@ export async function readCorrectionsJournalSafe(
   for (const name of conflictNames) {
     const parsed = parseJournalFile(join(root, name))
     if (parsed.status === 'ok') {
-      sources.push({ sourceId: name, entries: parsed.entries })
+      sources.push({ sourceId: name, entries: unerasedEntries(parsed.entries) })
       resolvedCopies.push(name)
       // A conflict copy's own forward-compat entries are corrections too, and the copy is about to be
       // renamed out of the way — carry the ones the primary doesn't already hold, deduped by their bytes

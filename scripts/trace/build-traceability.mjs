@@ -16,7 +16,8 @@ const SOURCE_REFERENCE_EXPECTATIONS = Object.freeze([
     // Re-pinned after G19 (2.12): the corruption-lock path follows the memory partition (one line, same line numbers).
     reference_commit: '37e1cf4ca76d8eeb8e9a16c1daa55f870749a51b',
     reference_path: 'src/main/brain/corrections.ts',
-    expected_sha256: 'a06ba253686a2eaf8b7799e0a89f8a37386a230a97dabaf7cf4409890329f5b8',
+    // Re-pinned after G82 (2.12): a conflict copy's pre-erasure entries are dropped (same line numbers).
+    expected_sha256: '5b47495ea1122d6580eda678ba94bf54e87be01efead81a4ac9d432ffba52116',
     hash_policy: SOURCE_REFERENCE_HASH_POLICY
   },
   {

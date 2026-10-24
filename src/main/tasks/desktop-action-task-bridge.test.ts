@@ -1,4 +1,8 @@
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
+import { configureErasureFence, createErasureFence, erasureFenceFile } from '../memory-partition/erasure-fence'
 import type { DesktopActionRequest, DesktopActionResult } from '@shared/desktop-actions'
 import type { CommandExecutionContext } from '../command-control'
 import { actionEnvelope, type ActionEnvelope } from '../action-guard'
@@ -456,6 +460,23 @@ describe('DesktopActionTaskBridge restart recovery', () => {
     const later = make({ now: () => 1_000_000 + 25 * 60 * 60 * 1000 }, store)
     await later.bridge.recover()
     expect(later.bridge.snapshot()).toEqual([])
+  })
+
+  it('does not recover a task archive that predates the owner erasing their data (G82)', async () => {
+    const store = new MemoryStore()
+    await make({}, store).bridge.execute(NOTES, context('done'))
+    const dir = mkdtempSync(join(tmpdir(), 'synthetic-task-fence-'))
+    try {
+      const fence = createErasureFence(erasureFenceFile(dir))
+      await fence.record('legacy', 'c'.repeat(32), 2_000_000)
+      configureErasureFence(fence)
+      const reloaded = make({}, store)
+      expect(await reloaded.bridge.recover()).toEqual({ available: true, uncertain: 0 })
+      expect(reloaded.bridge.snapshot()).toEqual([])
+    } finally {
+      configureErasureFence(null)
+      rmSync(dir, { recursive: true, force: true })
+    }
   })
 
   it('starts fresh and keeps the bytes aside when the archive is corrupt', async () => {
