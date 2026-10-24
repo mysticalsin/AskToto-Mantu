@@ -32,6 +32,8 @@ export type DataStoreId =
   | 'graph'
   | 'assistants'
   | 'user-memory'
+  | 'onboarding-interview'
+  | 'suggestions'
   | 'context-snapshots'
   | 'connector-accounts'
   | 'desktop-tasks'
@@ -242,6 +244,34 @@ export const DATA_STORES: readonly DataStoreEntry[] = [
     names: ['graph'],
     owner: 'graphify.ts',
     paths: ['graph']
+  }),
+  row({
+    id: 'onboarding-interview',
+    label: 'Your onboarding interview answers',
+    dataClass: 'assistant',
+    location: 'user-data',
+    encryptedAtRest: 'always',
+    scope: 'owner-partition',
+    exportable: false,
+    phase: 3,
+    recreatedBy: ['onboarding interview write'],
+    names: ['onboarding'],
+    owner: 'lifecycle/onboarding-interview-wiring.ts',
+    partitionPaths: ['onboarding/{pid}.bin']
+  }),
+  row({
+    id: 'suggestions',
+    label: 'Your suggestions and their feedback',
+    dataClass: 'derived-knowledge',
+    location: 'user-data',
+    encryptedAtRest: 'always',
+    scope: 'owner-partition',
+    exportable: false,
+    phase: 3,
+    recreatedBy: ['suggestion research run'],
+    names: ['suggestions'],
+    owner: 'lifecycle/suggestions-wiring.ts',
+    partitionPaths: ['suggestions/{pid}.bin']
   }),
   row({
     id: 'assistants',

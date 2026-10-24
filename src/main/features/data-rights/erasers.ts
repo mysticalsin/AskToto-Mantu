@@ -192,6 +192,8 @@ export function createProductionErasers(host: ErasureHost): Partial<Record<DataS
     graph: pathEraser(entry('graph'), host, () => host.purgeGraph()),
     assistants: pathEraser(entry('assistants'), host),
     'user-memory': pathEraser(entry('user-memory'), host),
+    'onboarding-interview': pathEraser(entry('onboarding-interview'), host),
+    suggestions: pathEraser(entry('suggestions'), host),
     'context-snapshots': pathEraser(entry('context-snapshots'), host),
     'connector-accounts': pathEraser(entry('connector-accounts'), host),
     'desktop-tasks': pathEraser(entry('desktop-tasks'), host),
