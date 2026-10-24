@@ -19,7 +19,7 @@ export interface OwnerSessionRef {
 /** Opaque, renderer-safe token. */
 export type OwnerSessionHandle = string & { readonly __brand: 'OwnerSessionHandle' }
 
-const nonNegativeSafeInt = z.number().int().nonnegative().safe()
+const nonNegativeSafeInt = z.number().int().nonnegative()
 
 const FrameOwnerSchema = z
   .string()
@@ -29,23 +29,23 @@ const FrameOwnerSchema = z
   })
   .transform((value) => value as `${number}:${number}`)
 
-export const OwnerSessionRefSchema: z.ZodType<OwnerSessionRef, z.ZodTypeDef, unknown> = z
+export const OwnerSessionRefSchema: z.ZodType<OwnerSessionRef, unknown> = z
   .object({
     v: z.literal(1),
     ownerKey: z.string().regex(/^[0-9a-f]{64}$/),
     tenantKey: z.string().regex(/^[0-9a-f]{64}$/),
     authGeneration: nonNegativeSafeInt,
-    sessionId: z.string().uuid(),
+    sessionId: z.guid(),
     frameOwner: FrameOwnerSchema,
     contextRevision: nonNegativeSafeInt,
-    issuedAt: z.number().int().positive().safe()
+    issuedAt: z.number().int().positive()
   })
   .strict()
 
 /**
  * Random base64url token. All-hex strings are refused so a hex ownerKey can never pass as a handle.
  */
-export const OwnerSessionHandleSchema: z.ZodType<OwnerSessionHandle, z.ZodTypeDef, unknown> = z
+export const OwnerSessionHandleSchema: z.ZodType<OwnerSessionHandle, unknown> = z
   .string()
   .regex(/^[A-Za-z0-9_-]{32,64}$/)
   .refine((value) => !/^[0-9a-fA-F]+$/.test(value), { message: 'handle must not be hex' })

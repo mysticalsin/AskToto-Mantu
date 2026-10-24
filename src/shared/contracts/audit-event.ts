@@ -30,13 +30,13 @@ export const AuditEventRecordSchema = z
       .string()
       .regex(/^[0-9a-f]{64}$/)
       .nullable(),
-    sessionId: z.string().uuid().nullable(),
+    sessionId: z.guid().nullable(),
     surface: z.string().regex(/^[a-zA-Z][a-zA-Z0-9.]{0,63}$/),
     outcome: AuditOutcomeSchema,
     // An enum-like token, never free text.
     reason: z.string().regex(/^[a-z][a-z0-9-]{0,47}$/),
     privacyClass: AuditPrivacyClassSchema,
-    ts: z.number().int().positive().safe()
+    ts: z.number().int().positive()
   })
   .strict()
 export type AuditEventRecord = z.infer<typeof AuditEventRecordSchema>

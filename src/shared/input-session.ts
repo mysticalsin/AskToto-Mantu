@@ -66,8 +66,8 @@ export type InputSessionStop = z.infer<typeof InputSessionStopSchema>
 /** Public revision snapshot; not a credential. Callers retain it across async work and echo it on start/stop. */
 export const InputSessionContextSchema = z
   .object({
-    authSessionGeneration: z.number().int().nonnegative().safe(),
-    contextRevision: z.number().int().nonnegative().safe()
+    authSessionGeneration: z.number().int().nonnegative(),
+    contextRevision: z.number().int().nonnegative()
   })
   .strict()
 export type InputSessionContext = z.infer<typeof InputSessionContextSchema>
@@ -96,9 +96,9 @@ export const InputSessionLeaseSchema = z
     source: InteractiveInputSourceSchema,
     purpose: InputPurposeSchema,
     activation: z.enum(['ambient', 'explicit']),
-    authSessionGeneration: z.number().int().nonnegative().safe(),
-    contextRevision: z.number().int().nonnegative().safe(),
-    revision: z.number().int().positive().safe(),
+    authSessionGeneration: z.number().int().nonnegative(),
+    contextRevision: z.number().int().nonnegative(),
+    revision: z.number().int().positive(),
     startedAt: z.number().finite(),
     actionAuthority: z.boolean()
   })
@@ -152,7 +152,7 @@ export type InputSessionStopReason = z.infer<typeof InputSessionStopReasonSchema
 export const InputSessionRevokedSchema = z
   .object({
     sessionId: z.string().regex(/^[a-f0-9]{48}$/),
-    revision: z.number().int().positive().safe(),
+    revision: z.number().int().positive(),
     reason: InputSessionStopReasonSchema
   })
   .strict()
@@ -160,22 +160,22 @@ export type InputSessionRevoked = z.infer<typeof InputSessionRevokedSchema>
 
 export const MeetingMicCaptureGrantSchema = z
   .object({
-    captureId: z.string().uuid(),
-    startedAt: z.number().int().positive().safe()
+    captureId: z.guid(),
+    startedAt: z.number().int().positive()
   })
   .strict()
 export type MeetingMicCaptureGrant = z.infer<typeof MeetingMicCaptureGrantSchema>
 export const MeetingMicCaptureConfirmRequestSchema = z
   .object({
-    captureId: z.string().uuid(),
-    startedAt: z.number().int().positive().safe()
+    captureId: z.guid(),
+    startedAt: z.number().int().positive()
   })
   .strict()
-export const MeetingMicCaptureReleaseRequestSchema = z.object({ captureId: z.string().uuid() }).strict()
+export const MeetingMicCaptureReleaseRequestSchema = z.object({ captureId: z.guid() }).strict()
 export const MeetingMicCaptureRevokedSchema = z
   .object({
-    captureId: z.string().uuid().optional(),
-    startedAt: z.number().int().positive().safe(),
+    captureId: z.guid().optional(),
+    startedAt: z.number().int().positive(),
     reason: InputSessionStopReasonSchema
   })
   .strict()

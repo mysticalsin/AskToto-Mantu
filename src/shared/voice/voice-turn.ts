@@ -148,7 +148,7 @@ export type VoiceShortcut = z.infer<typeof VoiceShortcutSchema>
 /** What the renderer may know. `enabled` is the effective value (QA, release default and managed policy applied). */
 export const VoiceStateSnapshotSchema = z
   .object({
-    revision: z.number().int().nonnegative().safe(),
+    revision: z.number().int().nonnegative(),
     state: VoiceStateSchema,
     turnId: z.string().min(1).max(64).nullable(),
     reason: VoiceReasonSchema.nullable(),

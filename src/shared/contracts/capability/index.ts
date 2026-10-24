@@ -83,11 +83,14 @@ function checkEngineSelection(
  * Checks the `capability` label before anything else: a value labelled for the other capability is rejected
  * once, at `capability`, and its engines are not checked against an engine set it never claimed.
  */
-function labelled<Schema extends z.ZodTypeAny>(capability: 'speech' | 'generation', schema: Schema) {
-  return z
-    .object({ capability: z.literal(capability) })
-    .passthrough()
-    .pipe(schema)
+function labelled<Schema extends z.ZodType>(capability: 'speech' | 'generation', schema: Schema) {
+  return (
+    z
+      .object({ capability: z.literal(capability) })
+      .passthrough()
+      // zod 4 types a pipe target's input as the first stage's output, so the target is widened to accept any input.
+      .pipe(schema as z.ZodType<z.output<Schema>, any>)
+  )
 }
 
 export const SpeechCapabilitySchema = labelled(

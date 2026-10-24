@@ -31,7 +31,7 @@ const RevisionSchema = z.number().int().nonnegative().max(SIGNED_INT32_MAX)
 
 export const LocalTranscriptLineSchema = z
   .object({
-    id: z.string().uuid(),
+    id: z.guid(),
     speaker: z.enum(['them', 'you', 'unknown']),
     text: z.string().min(1).max(4000),
     t: z.number().int().nonnegative()
@@ -41,7 +41,7 @@ export type LocalTranscriptLine = z.infer<typeof LocalTranscriptLineSchema>
 
 export const LocalTranscriptBeginSchema = z
   .object({
-    sessionId: z.string().uuid(),
+    sessionId: z.guid(),
     revision: z.literal(0),
     lines: z.array(LocalTranscriptLineSchema).max(APPEND_LINES_MAX)
   })
@@ -53,7 +53,7 @@ export type LocalTranscriptBegin = z.infer<typeof LocalTranscriptBeginSchema>
 
 export const LocalTranscriptAppendSchema = z
   .object({
-    sessionId: z.string().uuid(),
+    sessionId: z.guid(),
     baseRevision: RevisionSchema,
     revision: RevisionSchema,
     lines: z.array(LocalTranscriptLineSchema).max(APPEND_LINES_MAX)
@@ -70,7 +70,7 @@ export type LocalTranscriptAppend = z.infer<typeof LocalTranscriptAppendSchema>
 
 export const LocalTranscriptResyncSchema = z
   .object({
-    sessionId: z.string().uuid(),
+    sessionId: z.guid(),
     revision: RevisionSchema,
     lines: z.array(LocalTranscriptLineSchema).max(RESYNC_LINES_MAX)
   })
@@ -81,7 +81,7 @@ export const LocalTranscriptResyncSchema = z
 export type LocalTranscriptResync = z.infer<typeof LocalTranscriptResyncSchema>
 
 export const LocalTranscriptEndSchema = z
-  .object({ sessionId: z.string().uuid() })
+  .object({ sessionId: z.guid() })
   .strict()
 export type LocalTranscriptEnd = z.infer<typeof LocalTranscriptEndSchema>
 

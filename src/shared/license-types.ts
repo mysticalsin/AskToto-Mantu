@@ -77,7 +77,7 @@ export const V1ActivateResponseSchema = z.union([V1ActivateOkSchema, V1ActivateE
 export type V1ActivateResponse = z.infer<typeof V1ActivateResponseSchema>
 
 export const V1RegisterRequestSchema = z.object({
-  installId: z.string().uuid(),
+  installId: z.guid(),
   appVersion: z.string().min(1).max(64),
   os: z.string().min(1).max(32)
 })

@@ -61,11 +61,11 @@ export type ApplicationFocusIntent = Extract<ApplicationIntent, { operation: 'ap
 export type ApplicationQuitIntent = Extract<ApplicationIntent, { operation: 'apps.quit' }>
 
 /** Untrusted input is deliberately separate from the inferred typed intent API. */
-export function parseApplicationIntent(input: unknown): z.SafeParseReturnType<unknown, ApplicationIntent> {
+export function parseApplicationIntent(input: unknown): z.ZodSafeParseResult<ApplicationIntent> {
   const screened = screenedRecord(input, 'candidateSet')
-  if (!screened) return { success: false, error: new z.ZodError([
-    { code: 'custom', path: [], message: 'Expected ordinary JSON intent data without accessors or native objects' }
-  ]) }
+  if (!screened) return { success: false, error: (new z.ZodError([
+    { code: 'custom', path: [], message: 'Expected ordinary JSON intent data without accessors or native objects', input }
+  ]) as z.ZodError<ApplicationIntent>) }
   return ApplicationIntentSchema.safeParse(screened)
 }
 

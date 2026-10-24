@@ -41,7 +41,7 @@ export const TranscriptLineSchema = z
     // and optional, only ever present as a pair, and absent on every line saved before it existed; a cloud-final
     // line must agree with the provider segment it carries (shared/transcript-line-identity.ts).
     utteranceId: z.string().regex(LEDGER_ID_PATTERN).optional(),
-    revision: z.number().int().positive().safe().optional()
+    revision: z.number().int().positive().optional()
   })
   .superRefine((line, context) => {
     if (!lineIdentityIsConsistent(line)) context.addIssue({ code: z.ZodIssueCode.custom, path: ['utteranceId'] })

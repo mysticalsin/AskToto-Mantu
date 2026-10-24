@@ -5,10 +5,10 @@
 import { z } from 'zod'
 import { RENDERER_VIEWS } from './renderer-view'
 
-export const HistoryTraceSchema = z.object({ requestId: z.string().uuid(), sentAt: z.number().finite().positive() })
+export const HistoryTraceSchema = z.object({ requestId: z.guid(), sentAt: z.number().finite().positive() })
 export type HistoryTrace = z.infer<typeof HistoryTraceSchema>
 export const HistorySettledSchema = z.object({
-  requestId: z.string().uuid(),
+  requestId: z.guid(),
   outcome: z.enum(['ok', 'failed', 'discarded']),
   ipcMs: z.number().finite().nonnegative(),
   renderMs: z.number().finite().nonnegative().optional()

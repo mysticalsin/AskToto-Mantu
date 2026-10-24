@@ -10,7 +10,7 @@ import { dirname, join } from 'node:path'
 import { z } from 'zod'
 
 const IdentityFileSchema = z.object({
-  installId: z.string().uuid(),
+  installId: z.guid(),
   installedAt: z.string().min(1),
   memberNumber: z.number().int().positive().nullable(),
   memberNumberAssignedAt: z.string().nullable()

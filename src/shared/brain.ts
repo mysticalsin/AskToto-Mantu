@@ -369,7 +369,8 @@ const CorrectionFieldUpdatePayloadSchema = z.object({
   kind: EntityKindSchema,
   id: z.string(),
   field: z.string(),
-  value: z.unknown()
+  // zod 4 no longer infers a missing `z.unknown()` key as optional; the payload type keeps `value` optional.
+  value: z.unknown().optional()
 })
 const CorrectionCommitmentRejectPayloadSchema = z.object({
   personSlug: z.string(),

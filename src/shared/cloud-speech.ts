@@ -34,10 +34,10 @@ export const CLOUD_SPEECH_CAPTURE_CEILING_MAX_SAMPLES =
 export const CloudSpeechEngineSchema = z.enum(BROKERED_STT_PROVIDER_IDS)
 export type CloudSpeechEngine = z.infer<typeof CloudSpeechEngineSchema>
 
-const CaptureIdSchema = z.string().uuid()
-const CounterSchema = z.number().int().positive().safe()
-const OffsetSchema = z.number().int().nonnegative().safe()
-const HandoffNonceSchema = z.string().uuid()
+const CaptureIdSchema = z.guid()
+const CounterSchema = z.number().int().positive()
+const OffsetSchema = z.number().int().nonnegative()
+const HandoffNonceSchema = z.guid()
 const LanguageSchema = z
   .string()
   .regex(/^(?:auto|multi|[a-z]{2}(?:-[A-Z]{2})?)$/)
@@ -486,7 +486,7 @@ export const CloudSpeechCaptureCeilingEventSchema = z
     type: z.literal('capture-ceiling'),
     captureId: CaptureIdSchema,
     captureGeneration: CounterSchema,
-    ceilingId: z.string().uuid(),
+    ceilingId: z.guid(),
     maxSampleOffsetExclusive: z.literal(CLOUD_SPEECH_CAPTURE_CEILING_MAX_SAMPLES)
   })
   .strict()
@@ -514,7 +514,7 @@ export const CloudSpeechCaptureCeilingAckSchema = z
     type: z.literal('capture-ceiling-ack'),
     captureId: CaptureIdSchema,
     captureGeneration: CounterSchema,
-    ceilingId: z.string().uuid(),
+    ceilingId: z.guid(),
     tracks: z.array(CeilingTrackFrontierSchema).min(1).max(2)
   })
   .strict()
@@ -528,7 +528,7 @@ export const CloudSpeechCaptureCeilingAckResultSchema = z.union([
       ok: z.literal(true),
       captureId: CaptureIdSchema,
       captureGeneration: CounterSchema,
-      ceilingId: z.string().uuid(),
+      ceilingId: z.guid(),
       tracks: z.array(CeilingTrackFrontierSchema).min(1).max(2)
     })
     .strict()

@@ -45,7 +45,6 @@ export const SETTINGS_FEATURE_MODULES: readonly SettingsFeatureModule[] = [
   VOICE_ACTIONS_FEATURE
 ]
 
-const KIND = z.ZodFirstPartyTypeKind
 const ACRONYMS = new Set(['asr', 'stt', 'llm', 'mcp', 'url', 'id', 'ai', 'cf', 'api', 'cli', 'ui', 'sso', 'jti', 'ocr'])
 
 /** `cfAiGatewayId` -> `CF AI gateway ID`. */
@@ -68,46 +67,58 @@ interface Described {
   max?: number
 }
 
-function describeSchema(schema: z.ZodTypeAny): Described {
+/** The zod 4 definition shape this module reads. Introspection goes through the public `_zod.def` contract. */
+interface ZodDef {
+  type: string
+  innerType?: z.ZodType
+  in?: z.ZodType
+  out?: z.ZodType
+  entries?: Record<string, string | number>
+  checks?: Array<{
+    _zod: { def: { check?: string; value?: unknown; minimum?: unknown; maximum?: unknown; inclusive?: boolean } }
+  }>
+}
+
+function describeSchema(schema: z.ZodType): Described {
   let current = schema
   let nullable = false
   for (;;) {
-    const def = current._def as { typeName: z.ZodFirstPartyTypeKind } & Record<string, any>
-    switch (def.typeName) {
-      case KIND.ZodDefault:
-      case KIND.ZodOptional:
-      case KIND.ZodCatch:
-      case KIND.ZodReadonly:
-        current = def.innerType
+    const def = current._zod.def as unknown as ZodDef
+    switch (def.type) {
+      case 'default':
+      case 'prefault':
+      case 'optional':
+      case 'catch':
+      case 'readonly':
+        current = def.innerType!
         continue
-      case KIND.ZodNullable:
+      case 'nullable':
         nullable = true
-        current = def.innerType
+        current = def.innerType!
         continue
-      case KIND.ZodEffects:
-        current = def.schema
+      case 'pipe':
+        // `.transform()` and `.preprocess()` are pipes with a transform on one side: describe the real side.
+        // A pipe between two real schemas (`.pipe()`) stays `unknown`, as it always did.
+        if (def.out!._zod.def.type === 'transform') current = def.in!
+        else if (def.in!._zod.def.type === 'transform') current = def.out!
+        else return { kind: 'unknown', nullable }
         continue
-      case KIND.ZodBoolean:
+      case 'boolean':
         return { kind: 'boolean', nullable }
-      case KIND.ZodNumber: {
-        const checks = def.checks as Array<{ kind: string; value?: number }>
-        return { kind: 'number', nullable, ...bounds(checks) }
-      }
-      case KIND.ZodString: {
-        const checks = def.checks as Array<{ kind: string; value?: number }>
-        return { kind: 'string', nullable, ...bounds(checks) }
-      }
-      case KIND.ZodEnum:
-        return { kind: 'enum', nullable, options: [...(def.values as string[])] }
-      case KIND.ZodArray:
+      case 'number':
+        return { kind: 'number', nullable, ...bounds(def.checks ?? []) }
+      case 'string':
+        return { kind: 'string', nullable, ...bounds(def.checks ?? []) }
+      case 'enum':
+        return { kind: 'enum', nullable, options: Object.values(def.entries!).map(String) }
+      case 'array':
         return { kind: 'array', nullable }
-      case KIND.ZodRecord:
-      case KIND.ZodMap:
+      case 'record':
+      case 'map':
         return { kind: 'record', nullable }
-      case KIND.ZodObject:
+      case 'object':
         return { kind: 'object', nullable }
-      case KIND.ZodUnion:
-      case KIND.ZodDiscriminatedUnion:
+      case 'union':
         return { kind: 'union', nullable }
       default:
         return { kind: 'unknown', nullable }
@@ -115,18 +126,22 @@ function describeSchema(schema: z.ZodTypeAny): Described {
   }
 }
 
-function bounds(checks: Array<{ kind: string; value?: number }>): { min?: number; max?: number } {
+/** Explicit `.min()` / `.max()` (numeric value or string length). Format checks such as `.int()` are not bounds. */
+function bounds(checks: NonNullable<ZodDef['checks']>): { min?: number; max?: number } {
   const out: { min?: number; max?: number } = {}
   for (const check of checks) {
-    if (check.kind === 'min' && typeof check.value === 'number') out.min = check.value
-    if (check.kind === 'max' && typeof check.value === 'number') out.max = check.value
+    const def = check._zod.def
+    if (def.check === 'greater_than' && typeof def.value === 'number') out.min = def.value
+    if (def.check === 'less_than' && typeof def.value === 'number') out.max = def.value
+    if (def.check === 'min_length' && typeof def.minimum === 'number') out.min = def.minimum
+    if (def.check === 'max_length' && typeof def.maximum === 'number') out.max = def.maximum
   }
   return out
 }
 
 /** Pure: builds the registry for a schema shape and its feature modules. Throws if the two disagree. */
 export function buildSettingsRegistry(
-  shape: Readonly<Record<string, z.ZodTypeAny>>,
+  shape: Readonly<Record<string, z.ZodType>>,
   modules: readonly SettingsFeatureModule[],
   defaults: Readonly<Record<string, unknown>> = {}
 ): readonly SettingEntry[] {

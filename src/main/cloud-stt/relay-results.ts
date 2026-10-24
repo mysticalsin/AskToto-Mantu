@@ -26,17 +26,17 @@ const WordSchema = z
 
 const IdentitySchema = z.object({
   protocolVersion: z.literal(1),
-  sessionId: z.string().uuid(),
-  captureGeneration: z.number().int().positive().safe(),
+  sessionId: z.guid(),
+  captureGeneration: z.number().int().positive(),
   track: TrackSchema,
-  streamEpoch: z.number().int().positive().safe()
+  streamEpoch: z.number().int().positive()
 })
 
 const TranscriptSchema = IdentitySchema.extend({
   type: z.literal('transcript'),
-  sequence: z.number().int().positive().safe(),
-  segmentIndex: z.number().int().positive().safe(),
-  revision: z.number().int().positive().safe(),
+  sequence: z.number().int().positive(),
+  segmentIndex: z.number().int().positive(),
+  revision: z.number().int().positive(),
   text: z.string().max(RELAY_RESULT_MAX_TEXT),
   startMs: z.number().finite().nonnegative(),
   endMs: z.number().finite().nonnegative(),
@@ -53,7 +53,7 @@ const TranscriptSchema = IdentitySchema.extend({
 
 const TerminalSchema = IdentitySchema.extend({
   type: z.literal('terminal'),
-  lastSequence: z.number().int().nonnegative().safe(),
+  lastSequence: z.number().int().nonnegative(),
   closeConfirmed: z.literal(true),
   tail: z.enum(['complete', 'incomplete']),
   reason: z.enum([

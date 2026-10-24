@@ -88,7 +88,7 @@ export const DEFAULT_REVISION_LIMITS: RevisionLimits = Object.freeze({
 
 const ChannelSchema = z.enum(['mic', 'system'])
 const MsSchema = z.number().finite().nonnegative()
-const SeqSchema = z.number().int().nonnegative().safe()
+const SeqSchema = z.number().int().nonnegative()
 const LanguageSchema = z.string().min(2).max(35)
 const IdSchema = z.string().min(1).max(64)
 
@@ -106,7 +106,7 @@ export const TranscriptSegmentSchema = z
     source: z.enum(['provider', 'user']),
     relaySessionId: IdSchema,
     providerSeq: SeqSchema.optional(),
-    providerSegmentIndex: z.number().int().positive().safe().optional()
+    providerSegmentIndex: z.number().int().positive().optional()
   })
   .strict()
   .superRefine((segment, context) => {
@@ -128,8 +128,8 @@ export const TranscriptRevisionSchema = z
 
 export const TranscriptRevisionDeltaSchema = z
   .object({
-    meetingStartedAt: z.number().int().positive().safe(),
-    revision: z.number().int().nonnegative().safe(),
+    meetingStartedAt: z.number().int().positive(),
+    revision: z.number().int().nonnegative(),
     changed: z.array(TranscriptSegmentSchema).max(200),
     finalized: z.boolean()
   })
@@ -139,7 +139,7 @@ export type TranscriptRevisionDelta = z.infer<typeof TranscriptRevisionDeltaSche
 const providerFields = { relaySessionId: IdSchema, providerSeq: SeqSchema }
 const spanFields = {
   ...providerFields,
-  providerSegmentIndex: z.number().int().positive().safe().optional(),
+  providerSegmentIndex: z.number().int().positive().optional(),
   channel: ChannelSchema,
   text: z.string(),
   language: LanguageSchema,

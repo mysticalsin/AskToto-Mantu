@@ -8,14 +8,14 @@ export const CommandSpeechStartSchema = z.object({ sessionId: CommandSpeechSessi
 export const CommandSpeechFrameSchema = z
   .object({
     sessionId: CommandSpeechSessionIdSchema,
-    sequence: z.number().int().nonnegative().safe(),
+    sequence: z.number().int().nonnegative(),
     samples: z.instanceof(Float32Array)
   })
   .strict()
 export const CommandSpeechFinishSchema = z
   .object({
     sessionId: CommandSpeechSessionIdSchema,
-    frameCount: z.number().int().nonnegative().safe()
+    frameCount: z.number().int().nonnegative()
   })
   .strict()
 export const CommandSpeechCancelSchema = z.object({ sessionId: CommandSpeechSessionIdSchema }).strict()

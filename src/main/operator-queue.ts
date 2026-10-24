@@ -148,7 +148,7 @@ export function consumeDropped(state: QueueState): { dropped: number; state: Que
 const QueueItemSchema = z.object({
   id: z.string().min(1),
   path: z.string().min(1),
-  body: z.record(z.unknown()),
+  body: z.record(z.string(), z.unknown()),
   enqueuedAt: z.number(),
   attempts: z.number().int().nonnegative(),
   nextAttemptAt: z.number(),

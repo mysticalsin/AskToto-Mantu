@@ -21,7 +21,7 @@ const LegacyClaimSchema = z.discriminatedUnion('state', [
       state: z.literal('adopted'),
       tenantKey: MemoryScopeSchema.shape.tenantKey,
       ownerKey: MemoryScopeSchema.shape.ownerKey,
-      adoptedAt: z.number().int().positive().safe()
+      adoptedAt: z.number().int().positive()
     })
     .strict()
 ])

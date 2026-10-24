@@ -63,13 +63,13 @@ const PermissionsSchema = z.array(z.unknown()).max(64)
 const PermissionIdSchema = z.string().regex(/^[a-z][a-z0-9_.:-]{0,79}$/)
 const ModeSchema = z.string().max(80)
 const ObjectiveSchema = z.string().max(2_000)
-const RevisionSchema = z.number().int().nonnegative().safe()
+const RevisionSchema = z.number().int().nonnegative()
 const ArraySchema = z.array(z.unknown())
 const ScreenIdSchema = z.string().max(128)
-const ScreenTimeSchema = z.number().int().nonnegative().safe()
-const RecordSchema = z.record(z.unknown())
+const ScreenTimeSchema = z.number().int().nonnegative()
+const RecordSchema = z.record(z.string(), z.unknown())
 
-function check<T>(schema: z.ZodType<T, z.ZodTypeDef, unknown>, value: unknown, code: ContractErrorCode): T {
+function check<T>(schema: z.ZodType<T, unknown>, value: unknown, code: ContractErrorCode): T {
   const parsed = schema.safeParse(value)
   if (!parsed.success) throw new ContractError(code)
   return parsed.data

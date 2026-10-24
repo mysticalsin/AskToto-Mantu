@@ -810,7 +810,7 @@ const AskStartBaseSchema = z.object({
     )
     .optional(),
   /** UUID of the append-only local transcript session used by eligible local asks. */
-  localSessionId: z.string().uuid().optional(),
+  localSessionId: z.guid().optional(),
   /** Bounded evidence from the packaged local vision worker. */
   visionEvidence: LocalVisionEvidenceSchema.optional(),
   /** Saved-meeting transcript for summary and recap only. Live context is main-derived: see `context`. */
@@ -1068,7 +1068,7 @@ export const BaseSettingsSchema = z.object({
   micDeviceId: z.string().default(''),
   suggestEverySec: z.number().min(5).max(120),
   mode: z.string().min(1).max(60).default('general'),
-  profile: ProfileSchema.default({}),
+  profile: ProfileSchema.prefault({}), // not .default(): zod 4 returns a default unparsed, skipping the profile's own defaults
   // Values may be EMPTY: '' is the codebase's unbind sentinel, not a malformed entry. resolveShortcut
   // (main/index.ts) resolves with `??` so a stored '' survives instead of falling back to the shipped
   // default, and registerShortcuts skips falsy accelerators. A `.min(1)` here made Settings' "Clear"

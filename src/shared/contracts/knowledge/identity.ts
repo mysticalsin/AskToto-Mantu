@@ -13,7 +13,7 @@ import { reportIssue } from './issue'
  * (`StrictEvidenceRefSchema`); a stored record keeps reading one that a newer service extends.
  */
 
-const GuidSchema = z.string().uuid()
+const GuidSchema = z.guid()
 
 /** A UTC ISO-8601 instant with a `Z` suffix. */
 export const InstantSchema = z.string().datetime()

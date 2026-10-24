@@ -196,12 +196,11 @@ describe('G20 (b): renderer-facing settings never carry a secret value', () => {
   it('the public settings schema adds only presence or readiness fields where the name is credential-shaped', () => {
     const base = new Set(SETTINGS_KEYS)
     const extras = Object.keys(PublicSettingsSchema.shape).filter((k) => !base.has(k))
-    const unwrap = (schema: z.ZodTypeAny): z.ZodTypeAny => {
+    const unwrap = (schema: z.ZodType): z.ZodType => {
       let current = schema
       for (;;) {
-        const def = current._def as { typeName: string; innerType?: z.ZodTypeAny; valueType?: z.ZodTypeAny }
-        if (def.typeName === 'ZodDefault' || def.typeName === 'ZodOptional' || def.typeName === 'ZodNullable')
-          current = def.innerType!
+        const def = current._zod.def as unknown as { type: string; innerType?: z.ZodType }
+        if (def.type === 'default' || def.type === 'optional' || def.type === 'nullable') current = def.innerType!
         else return current
       }
     }
@@ -211,9 +210,10 @@ describe('G20 (b): renderer-facing settings never carry a secret value', () => {
       (k) => !listsOfNames.has(k) && (isCredentialShapedSettingsKey(k) || /key/i.test(k))
     )) {
       const field = unwrap(PublicSettingsSchema.shape[key as keyof typeof PublicSettingsSchema.shape])
-      const def = field._def as { typeName: string; valueType?: z.ZodTypeAny }
-      const isFlag = def.typeName === 'ZodBoolean'
-      const isFlagMap = def.typeName === 'ZodRecord' && unwrap(def.valueType!)._def.typeName === 'ZodBoolean'
+      const def = field._zod.def as unknown as { type: string; valueType?: z.ZodType }
+      const isFlag = def.type === 'boolean'
+      const isFlagMap =
+        def.type === 'record' && (unwrap(def.valueType!)._zod.def as { type: string }).type === 'boolean'
       expect(isFlag || isFlagMap, `${key} is credential-shaped but not a boolean flag`).toBe(true)
     }
   })

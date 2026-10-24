@@ -55,8 +55,8 @@ export const SESSION_CONTEXT_IPC = {
 export const OutputsStaleSchema = z.object({ ids: z.array(z.string().min(1).max(200)).min(1).max(64) }).strict()
 export type OutputsStale = z.output<typeof OutputsStaleSchema>
 
-const StartedAtSchema = z.number().int().positive().safe()
-const LineTimeSchema = z.number().int().nonnegative().safe()
+const StartedAtSchema = z.number().int().positive()
+const LineTimeSchema = z.number().int().nonnegative()
 
 /** Speaker-intelligence label and detected language, as the renderer commits them (see transcriptToText). */
 const NameSchema = z.string().max(200)

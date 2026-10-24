@@ -17,14 +17,14 @@ const LanguageSchema = z
   .regex(/^(?:multi|[a-z]{2}(?:-[A-Z]{2})?)$/)
   .max(5)
 const DeploymentVersionSchema = z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$/)
-const TimestampSchema = z.number().int().positive().safe()
+const TimestampSchema = z.number().int().positive()
 const LimitsSchema = z
   .object({
-    maxStreamMs: z.number().int().positive().safe(),
-    drainWindowMs: z.number().int().positive().safe(),
-    maxInputBytesPerTrack: z.number().int().positive().safe(),
-    maxClientFrameBytes: z.number().int().positive().safe().max(SPEECH_BROKER_WS_MAX_PAYLOAD),
-    maxOutputBytesPerTrack: z.number().int().positive().safe()
+    maxStreamMs: z.number().int().positive(),
+    drainWindowMs: z.number().int().positive(),
+    maxInputBytesPerTrack: z.number().int().positive(),
+    maxClientFrameBytes: z.number().int().positive().max(SPEECH_BROKER_WS_MAX_PAYLOAD),
+    maxOutputBytesPerTrack: z.number().int().positive()
   })
   .strict()
 const CreateLimitsSchema = LimitsSchema.extend({ audioDeadlineAt: TimestampSchema }).strict()
@@ -91,13 +91,13 @@ const CapabilitySchema = z.union([ReadyCapabilitySchema, RefusedCapabilitySchema
 const CreateRequestSchema = z
   .object({
     operation: z.literal('create-session'),
-    captureGeneration: z.number().int().positive().safe(),
+    captureGeneration: z.number().int().positive(),
     tracks: z.array(TrackSchema).min(1).max(2),
     language: LanguageSchema.optional(),
     consent: z
       .object({
         accepted: z.literal(true),
-        captureGeneration: z.number().int().positive().safe(),
+        captureGeneration: z.number().int().positive(),
         tracks: z.array(TrackSchema).min(1).max(2),
         issuedAt: TimestampSchema,
         expiresAt: TimestampSchema
@@ -120,7 +120,7 @@ const CreateRequestSchema = z
 const GrantSchema = z
   .object({
     track: TrackSchema,
-    streamEpoch: z.number().int().positive().safe(),
+    streamEpoch: z.number().int().positive(),
     token: z.string().regex(/^[A-Za-z0-9_-]{43}$/)
   })
   .strict()
@@ -128,13 +128,13 @@ const CreatedSessionSchema = z
   .object({
     ok: z.literal(true),
     protocolVersion: z.literal(1),
-    sessionId: z.string().uuid(),
+    sessionId: z.guid(),
     routeId: RouteSchema,
     model: ModelSchema,
     configVersion: DeploymentVersionSchema,
     policyVersion: DeploymentVersionSchema,
     language: LanguageSchema,
-    captureGeneration: z.number().int().positive().safe(),
+    captureGeneration: z.number().int().positive(),
     grantExpiresAt: TimestampSchema,
     leaseExpiresAt: TimestampSchema,
     limits: CreateLimitsSchema,
@@ -154,19 +154,19 @@ const CreatedSessionSchema = z
 const TrackStatusSchema = z
   .object({
     track: TrackSchema,
-    streamEpoch: z.number().int().positive().safe(),
+    streamEpoch: z.number().int().positive(),
     phase: z.enum(['ready', 'opening', 'open', 'finishing', 'stopping', 'closed']),
     closeConfirmed: z.boolean(),
     tail: z.enum(['complete', 'incomplete']).nullable(),
-    lastSequence: z.number().int().nonnegative().safe()
+    lastSequence: z.number().int().nonnegative()
   })
   .strict()
 const StatusSchema = z
   .object({
     ok: z.literal(true),
     protocolVersion: z.literal(1),
-    sessionId: z.string().uuid(),
-    captureGeneration: z.number().int().positive().safe(),
+    sessionId: z.guid(),
+    captureGeneration: z.number().int().positive(),
     status: z.enum(['active', 'cancelled', 'expired']),
     cancellationRequested: z.boolean(),
     tracks: z.array(TrackStatusSchema).min(1).max(2)
@@ -176,7 +176,7 @@ const CancelSchema = z
   .object({
     ok: z.literal(true),
     protocolVersion: z.literal(1),
-    sessionId: z.string().uuid(),
+    sessionId: z.guid(),
     cancelled: z.boolean(),
     cancellationRequested: z.boolean()
   })
@@ -549,7 +549,7 @@ export class SpeechBrokerClient {
     timeoutMs = 12_000,
     operation?: SpeechBrokerOperation
   ): Promise<BrokerResult<SpeechSessionStatus>> {
-    if (!z.string().uuid().safeParse(sessionId).success) return { ok: false, code: 'SCHEMA' }
+    if (!z.guid().safeParse(sessionId).success) return { ok: false, code: 'SCHEMA' }
     const body = { operation: 'session-status', sessionId }
     const response = await this.postJson(`/v1/speech/sessions/${sessionId}/status`, body, true, timeoutMs, operation)
     if (!response.ok) return response
@@ -561,7 +561,7 @@ export class SpeechBrokerClient {
   }
 
   async cancel(sessionId: string, timeoutMs = 1_000): Promise<BrokerResult<z.infer<typeof CancelSchema>>> {
-    if (!z.string().uuid().safeParse(sessionId).success) return { ok: false, code: 'SCHEMA' }
+    if (!z.guid().safeParse(sessionId).success) return { ok: false, code: 'SCHEMA' }
     const body = { operation: 'cancel-session', sessionId }
     const response = await this.postJson(`/v1/speech/sessions/${sessionId}/cancel`, body, true, timeoutMs)
     if (!response.ok) return response

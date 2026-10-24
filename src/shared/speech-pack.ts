@@ -227,7 +227,7 @@ export const SpeechPackPlanPreviewResultSchema = z.discriminatedUnion('ok', [
       ok: z.literal(true),
       plan: z
         .object({
-          planId: z.string().uuid(),
+          planId: z.guid(),
           action: z.enum(['install', 'repair']),
           feature: z.literal('asr'),
           selectedComponent: SpeechPackComponentIdSchema,
@@ -243,7 +243,7 @@ export const SpeechPackPlanPreviewResultSchema = z.discriminatedUnion('ok', [
   z.object({ ok: z.literal(false), reason: SpeechPackActionReasonSchema }).strict()
 ])
 export const SpeechPackInstallWithPlanRequestSchema = z
-  .object({ planId: z.string().uuid(), action: z.enum(['install', 'repair']) })
+  .object({ planId: z.guid(), action: z.enum(['install', 'repair']) })
   .strict()
 export const SpeechPackInstallWithPlanResultSchema = SpeechPackActionResultSchema
 

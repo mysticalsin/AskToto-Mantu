@@ -3,8 +3,8 @@ import { TRANSCRIPT_LINE_KEYS, TranscriptLineSchema, type TranscriptLine } from 
 
 export const INCREMENTAL_MEETING_PROTOCOL = 1 as const
 
-const UuidSchema = z.string().uuid()
-const RevisionSchema = z.number().int().nonnegative().safe()
+const UuidSchema = z.guid()
+const RevisionSchema = z.number().int().nonnegative()
 const TimestampSchema = z.number().finite().int().min(-8.64e15).max(8.64e15)
 const TrackSchema = z.enum(['microphone', 'system'])
 const ExactTranscriptLineSchema = z
@@ -31,11 +31,11 @@ export const IncrementalMeetingIdentitySchema = z.discriminatedUnion('kind', [
     .object({
       kind: z.literal('cloud'),
       captureId: UuidSchema,
-      captureGeneration: z.number().int().positive().safe(),
-      streamGeneration: z.number().int().positive().safe(),
+      captureGeneration: z.number().int().positive(),
+      streamGeneration: z.number().int().positive(),
       track: TrackSchema,
-      epoch: z.number().int().positive().safe(),
-      segmentIndex: z.number().int().positive().safe()
+      epoch: z.number().int().positive(),
+      segmentIndex: z.number().int().positive()
     })
     .strict()
 ])
