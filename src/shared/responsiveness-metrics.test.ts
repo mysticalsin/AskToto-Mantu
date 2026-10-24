@@ -69,6 +69,10 @@ describe('metric catalogue', () => {
         'handoff_refused',
         'handoff_started',
         'handoff_superseded',
+        // G70: the shadow log records these three; displayed/dismissed/expired stay slots
+        'intervention_eligible',
+        'intervention_generated',
+        'intervention_superseded',
         'router_cloud_first',
         'router_local_first',
         'router_unavailable',
@@ -88,15 +92,24 @@ describe('metric catalogue', () => {
       else if (id.startsWith('card_')) expect(def.owner, id).toBe('G71')
       else expect(def.owner, id).toBeNull()
     }
-    expect(METRIC_DEFINITIONS.intervention_eligible.owner).toBe('G70')
+    expect(METRIC_DEFINITIONS.intervention_displayed.owner).toBe('G70')
+    expect(METRIC_DEFINITIONS.intervention_dismissed.owner).toBe('G70')
+    expect(METRIC_DEFINITIONS.intervention_expired.owner).toBe('G70')
     expect(METRIC_DEFINITIONS.queue_wait_ms.owner).toBe('G14')
+  })
+
+  it('the three intervention counters are wired', () => {
+    for (const id of ['intervention_eligible', 'intervention_generated', 'intervention_superseded'] as const) {
+      expect(METRIC_DEFINITIONS[id].wiring, id).toBe('wired')
+    }
   })
 
   it('names the IPC channels outside the shared IPC table', () => {
     expect(RESPONSIVENESS_IPC).toEqual({
       report: 'metrics:responsiveness',
       displayReceipt: 'metrics:display-receipt',
-      cardOutcome: 'metrics:card-outcome'
+      cardOutcome: 'metrics:card-outcome',
+      interventionShadow: 'metrics:intervention-shadow'
     })
   })
 })
@@ -246,7 +259,7 @@ describe('buildResponsivenessReport', () => {
     expect(partial.value).toBe('p50 640 ms, p95 640 ms, n=25')
     expect(partial.budget).toBe('Target p95 1000 ms (PROPOSED): within')
     expect(describeMetricEntry(entryOf(report, 'asks_cancelled')).value).toBe('3')
-    expect(describeMetricEntry(entryOf(report, 'intervention_eligible')).note).toBe('Not wired yet (G70)')
+    expect(describeMetricEntry(entryOf(report, 'intervention_displayed')).note).toBe('Not wired yet (G70)')
   })
 
   it('carries only ids, numbers and fixed labels: no free text a caller could smuggle content through', () => {

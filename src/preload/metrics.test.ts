@@ -37,6 +37,41 @@ describe('metrics preload bridge', () => {
     await expect(api.reportCardOutcome('ask-1', 'review_expired')).resolves.toBeUndefined()
   })
 
+  it('reportInterventionShadow invokes metrics:intervention-shadow', async () => {
+    const invoke = vi.fn(async () => undefined)
+    const api = createMetricsPreloadApi({ invoke })
+    const record = {
+      path: 'question',
+      status: 'existing-rules',
+      shouldGenerate: true,
+      reason: 'question-detected',
+      outcome: 'generate',
+      generation: 1,
+      contextRevision: 2
+    } as const
+    await api.reportInterventionShadow(record)
+    expect(RESPONSIVENESS_IPC.interventionShadow).toBe('metrics:intervention-shadow')
+    expect(invoke).toHaveBeenLastCalledWith('metrics:intervention-shadow', record)
+  })
+
+  it('swallows a rejected intervention-shadow invoke', async () => {
+    const invoke = vi.fn(async () => {
+      throw new Error('synthetic ipc failure')
+    })
+    const api = createMetricsPreloadApi({ invoke })
+    await expect(
+      api.reportInterventionShadow({
+        path: 'shadow',
+        status: 'existing-rules',
+        shouldGenerate: false,
+        reason: 'cooldown',
+        outcome: 'hold',
+        generation: 1,
+        contextRevision: 1
+      })
+    ).resolves.toBeUndefined()
+  })
+
   it('is spread into the window.toto bridge, and the inline readMetrics it replaced is gone', () => {
     // index.ts composes the self-contained feature bridges through feature-apis.ts (V02), which spreads this one.
     const { text } = readModuleSource(__dirname, './index')

@@ -226,3 +226,75 @@ describe('responsiveness report and display receipt (G12)', () => {
     expect(rec.snapshot().counters.card_review_expired).toBe(1)
   })
 })
+
+describe('intervention shadow log (G70)', () => {
+  const identity = { platform: 'darwin', arch: 'arm64', appVersion: '0.0.0-test' }
+  afterEach(() => setResponsivenessRecorderForTest(null))
+  const record = {
+    path: 'question',
+    status: 'existing-rules',
+    shouldGenerate: true,
+    reason: 'question-detected',
+    outcome: 'generate',
+    generation: 1,
+    contextRevision: 4
+  }
+
+  function useRecorder() {
+    const rec = createResponsivenessRecorder({ identity, now: () => 1_000 })
+    setResponsivenessRecorderForTest(rec)
+    return rec
+  }
+
+  it('intervention-shadow rejects a non-main sender', async () => {
+    useRecorder()
+    const ok = setup()
+    ok.assertMainWindow.mockImplementation(() => {
+      throw new Error('untrusted sender')
+    })
+    expect(() => ok.call(RESPONSIVENESS_IPC.interventionShadow, record)).toThrow('untrusted sender')
+  })
+
+  it('ignores unauthenticated calls', async () => {
+    const rec = useRecorder()
+    await setup({ auth: false }).call(RESPONSIVENESS_IPC.interventionShadow, record)
+    expect(rec.snapshot().counters.intervention_eligible).toBeUndefined()
+  })
+
+  it('counts eligible and generated for a generate or adopt outcome', async () => {
+    const rec = useRecorder()
+    const ok = setup()
+    await ok.call(RESPONSIVENESS_IPC.interventionShadow, record)
+    await ok.call(RESPONSIVENESS_IPC.interventionShadow, { ...record, outcome: 'adopt' })
+    await ok.call(RESPONSIVENESS_IPC.interventionShadow, { ...record, outcome: 'hold', shouldGenerate: false })
+    expect(rec.snapshot().counters.intervention_eligible).toBe(3)
+    expect(rec.snapshot().counters.intervention_generated).toBe(2)
+    expect(rec.snapshot().counters.intervention_superseded).toBeUndefined()
+  })
+
+  it('stale-drop increments intervention_superseded', async () => {
+    const rec = useRecorder()
+    await setup().call(RESPONSIVENESS_IPC.interventionShadow, { ...record, outcome: 'stale-drop' })
+    expect(rec.snapshot().counters.intervention_superseded).toBe(1)
+    expect(rec.snapshot().counters.intervention_generated).toBeUndefined()
+  })
+
+  it('ignores unknown enums or text fields', async () => {
+    const rec = useRecorder()
+    const ok = setup()
+    for (const junk of [
+      null,
+      'generate',
+      { ...record, outcome: 'explode' },
+      { ...record, path: 'other' },
+      { ...record, status: 'maybe' },
+      { ...record, text: 'a transcript line' },
+      { ...record, reason: 'free text with spaces' },
+      { ...record, generation: -1 },
+      { ...record, contextRevision: 1.5 }
+    ]) {
+      await ok.call(RESPONSIVENESS_IPC.interventionShadow, junk)
+    }
+    expect(rec.snapshot().counters.intervention_eligible).toBeUndefined()
+  })
+})

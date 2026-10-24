@@ -12,6 +12,7 @@ import type { MeetingsFolderPickResult, TeamFolderRefusal } from '@shared/contra
 import { getLockedKeys, getSettings, setSettings } from '../store'
 import { readEvalMetrics, aggregateMetrics } from '../metrics'
 import { RESPONSIVENESS_IPC } from '@shared/responsiveness-ipc'
+import { interventionCountersFor, parseInterventionShadowRecord } from '@shared/intervention-shadow'
 import { boundedAnswerAskId } from '../ask-stream-registry'
 import {
   askTiming,
@@ -81,6 +82,17 @@ export function registerWorkspaceIpc(deps: WorkspaceIpcDependencies): void {
     if (!requireAuth()) return
     const id = boundedAnswerAskId(askId)
     if (id && typeof outcome === 'string') askTiming.cardOutcome(id, outcome as CardOutcomeName)
+  })
+
+  // G70: one content-free shadow record per intervention decision. Closed enums and integers only; anything
+  // else (a text field, an unknown enum) is dropped whole, so no meeting content can ride this channel.
+  ipcMain.handle(RESPONSIVENESS_IPC.interventionShadow, (e, value: unknown) => {
+    assertMainWindow(e)
+    if (!requireAuth()) return
+    const record = parseInterventionShadowRecord(value)
+    if (!record) return
+    const recorder = getResponsivenessRecorder()
+    for (const counter of interventionCountersFor(record)) recorder.increment(counter)
   })
 
   // Parse a recap's markdown into a structured object (decisions + action-items-with-owners) the renderer
