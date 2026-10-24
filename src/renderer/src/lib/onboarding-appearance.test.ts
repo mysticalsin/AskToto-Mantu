@@ -428,7 +428,7 @@ describe('onboarding appearance — scene hop sits after the demo', () => {
     expect(shouldMountStarfield('hero')).toBe(false)
     expect(shouldMountStarfield('reveal')).toBe(false)
     expect(experience).toMatch(
-      /GUIDED_SCENES: Scene\[\] = \['problem', 'reveal', 'appearance', 'setup', 'personalize'\]/
+      /GUIDED_SCENES: Scene\[\] = \['problem', 'reveal', 'appearance', 'setup', 'personalize', 'interview'\]/
     )
     expect(experience).toMatch(/setScene\(sceneAfterReveal\(\)\)/)
     expect(experience).toMatch(/scene === 'appearance'/)

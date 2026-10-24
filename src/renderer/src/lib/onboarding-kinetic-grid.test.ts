@@ -105,8 +105,8 @@ describe('starfield is not mounted after the lady beat', () => {
   })
 })
 
-describe('no Skip control in the live onboarding tree', () => {
-  it('deletes Skip the tour, skip scene, Skip to the end, and Get started-skip', () => {
+describe('Skip exists only after the permissions step (D-27, G56)', () => {
+  it('keeps the old skip scene and tour-skip controls deleted', () => {
     expect(flow).not.toMatch(/'skip'/)
     expect(live).not.toMatch(/Skip the tour/)
     expect(live).not.toMatch(/Skip to the end/)
@@ -117,6 +117,12 @@ describe('no Skip control in the live onboarding tree', () => {
     expect(live).not.toMatch(/onboard-skip-chip/)
     expect(live).not.toMatch(/onboard-skip-screen/)
     expect(demo).not.toMatch(/Skip/)
+  })
+
+  it('mounts the skip control only through OnboardingSkip, gated by canSkipOnboarding', () => {
+    expect(experience.match(/<OnboardingSkip\b/g)).toHaveLength(1)
+    expect(experience).toMatch(/canSkipOnboarding\(\{ scene, consent \}\) && \(?\s*<OnboardingSkip/)
+    expect(experience).not.toMatch(/Skip setup/)
   })
 })
 

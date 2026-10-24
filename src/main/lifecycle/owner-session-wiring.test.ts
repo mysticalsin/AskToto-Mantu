@@ -5,6 +5,7 @@ import { OWNER_SESSION_IPC } from '@shared/contracts/owner-session'
 import { ACCOUNT_CHOICE_IPC } from '@shared/connector-account-choice'
 import { CONNECTOR_ACCOUNTS_IPC } from '@shared/connector-accounts'
 import { ASSISTANT_IPC } from '@shared/assistants'
+import { ONBOARDING_INTERVIEW_IPC } from '@shared/onboarding-interview'
 import { DICTATION_MEMORY_IPC } from '@shared/dictation-memory'
 import { USER_MEMORY_IPC } from '@shared/user-memory'
 import { MEETING_RECORD_IPC } from '@shared/meeting-record'
@@ -91,6 +92,7 @@ describe('owner session wiring', () => {
       ARTIFACT_IPC.preview,
       ARTIFACT_IPC.copy,
       ...Object.values(ASSISTANT_IPC),
+      ...Object.values(ONBOARDING_INTERVIEW_IPC),
       ...Object.values(USER_MEMORY_IPC),
       ...Object.values(MEETING_RECORD_IPC),
       ...Object.values(SUGGESTION_IPC)
@@ -143,6 +145,7 @@ describe('owner session wiring', () => {
             Object.values(DICTATION_MEMORY_IPC).length +
             6 +
             Object.values(ASSISTANT_IPC).length +
+            Object.values(ONBOARDING_INTERVIEW_IPC).length +
             Object.values(USER_MEMORY_IPC).length +
             Object.values(MEETING_RECORD_IPC).length +
             Object.values(SUGGESTION_IPC).length

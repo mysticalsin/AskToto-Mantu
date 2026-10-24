@@ -1,7 +1,10 @@
 import { describe, it, expect } from 'vitest'
 import {
   canMarkOnboardingDone,
+  canSkipOnboarding,
+  SKIPPABLE_SCENES,
   sceneAfterAppearance,
+  sceneAfterInterview,
   sceneAfterLicense,
   sceneAfterPersonalize,
   sceneAfterReveal,
@@ -52,5 +55,36 @@ describe('canMarkOnboardingDone — Ready is the only finish', () => {
     expect(canMarkOnboardingDone({ scene: 'skip', asrReady: true, consent: true })).toBe(false)
     expect(canMarkOnboardingDone({ scene: 'ready', asrReady: false, consent: true })).toBe(true)
     expect(canMarkOnboardingDone({ scene: 'ready', asrReady: true, consent: false })).toBe(false)
+  })
+})
+
+describe('G56 role interview and skip (D-27)', () => {
+  it('personalize continues into the interview only when it is available', () => {
+    expect(sceneAfterPersonalize(false, true)).toBe('interview')
+    expect(sceneAfterPersonalize(true, true)).toBe('interview')
+    expect(sceneAfterPersonalize(true, false)).toBe('license')
+    expect(sceneAfterPersonalize(false, false)).toBe('ready')
+    expect(sceneAfterPersonalize(undefined)).toBe('ready')
+  })
+
+  it('interview continues into license when the gate is on, else Ready', () => {
+    expect(sceneAfterInterview(true)).toBe('license')
+    expect(sceneAfterInterview(false)).toBe('ready')
+    expect(sceneAfterInterview(null)).toBe('ready')
+  })
+
+  it('skip is offered only after the permissions step, and only with consent', () => {
+    for (const scene of ['hero', 'problem', 'reveal', 'appearance', 'setup', 'ready'] as const) {
+      expect(canSkipOnboarding({ scene, consent: true })).toBe(false)
+    }
+    for (const scene of ['personalize', 'interview', 'license'] as const) {
+      expect(canSkipOnboarding({ scene, consent: false })).toBe(false)
+      expect(canSkipOnboarding({ scene, consent: true })).toBe(true)
+    }
+    expect(SKIPPABLE_SCENES).toEqual(['personalize', 'interview', 'license'])
+  })
+
+  it('the interview never marks onboarding done; only Ready does', () => {
+    expect(canMarkOnboardingDone({ scene: 'interview', asrReady: true, consent: true })).toBe(false)
   })
 })

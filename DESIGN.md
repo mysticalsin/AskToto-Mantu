@@ -101,7 +101,7 @@ Stage API: `exclusiveOnboardingBounds(display.bounds, display.workArea)`; exit o
 
 **Portal close.** When `onboardingDone` is about to flip (Ready Get started only): reverse the same soft pill into the top-center island (1.1–1.4s), play the CLOSE tone with the collapse, then exit exclusive fullscreen and park path A (`Y >= 25`). Do not snap to a 120×50 hole while the stage is still full-bleed. Do not call `setSimpleFullScreen(false)` before the close has been seen (or reduced-motion skip). Renderer plays close, then persists `onboardingDone` so main can `exitExclusiveOnboardingStage`. Do not leave a 1800×1169 hole or a `y=0` peek.
 
-**No Skip.** Users cannot skip onboarding. There is no Skip the tour chip, no skip scene, no Skip to the end, and no path that sets `onboardingDone` without completing Ready. Replay after a completed tour (Settings) still works and still calls `haltAllOnboardingAudio()` first.
+**Skip only after the permissions step (D-27, G56).** There is no Skip the tour chip, no skip scene and no Skip to the end. Before and during Your setup there is no skip at all. From personalize, the role interview and license, a quiet "Skip setup" text button (top right, beside mute) appears once recording consent is ticked (`canSkipOnboarding`). It opens an in-stage sheet ("Keep going" is the default and Escape); Skip runs one ordered cleanup (`lib/onboarding-skip.ts`: abort the mic request, discard an unfinished interview, the same audio teardown as Ready, the durable save, then exit) and persists `onboardingDone` with consent. Downloads are not cancelled and the appearance choice stays. Replay after a completed tour (Settings) still works and still calls `haltAllOnboardingAudio()` first; it never recreates assistants the interview already made.
 
 **Onboarding flow (Tony 11:52–11:53pm).** Full contract: `docs/design/ONBOARDING-FLOW.md`.
 
@@ -109,7 +109,7 @@ Stage API: `exclusiveOnboardingBounds(display.bounds, display.workArea)`; exit o
 hero → problem → reveal → appearance → setup → personalize → [license if enabled] → ready
 ```
 
-GUIDED_SCENES is problem / reveal / appearance / setup / personalize. Reveal Continue uses `sceneAfterReveal()` → appearance. Appearance Continue → setup. Personalize Continue → license or Ready (never appearance). License → Ready. No Skip.
+GUIDED_SCENES is problem / reveal / appearance / setup / personalize / interview. Reveal Continue uses `sceneAfterReveal()` → appearance. Appearance Continue → setup. Personalize Continue → the role interview when signed in, else license or Ready (never appearance). Interview → license or Ready. License → Ready. Skip setup only from personalize, interview and license.
 
 **Your setup loading orb.** Downloading / idle transcription and downloading / starting on-device model are `SetupRowState 'loading'`, not `'action'`. They show the Jakub thinking-orb (`InlineOrb` / `AgentStatus` kind=loading). Real progress in (0, 1) becomes a determinate % next to the orb. Empty progress: orb only, no fake 0%. `'action'` / **needed** is user work only (Allow Microphone, disk full, Retry). Continue stays blocked only while ASR is genuinely not ready and the list does not already claim complete. A complete-looking setup with a dead muted Continue is FAIL.
 
@@ -129,7 +129,7 @@ Persist the existing overlay setting. Seed from `settings.overlayLayout` (replay
 
 Do **not** change Hide park **8×2**, Island hover (camera / notch square, `hoverWatchRestRect` at `bounds.y`), cursor-watch, or overlay park leftover (PR 94). After exclusive exit, park the layout they picked using the existing rest surfaces. Windows: no fake notch in the preview either.
 
-Original Métis copy. No em dash. No Vibe Island trademark strings. Continue is `onboard-cta`, always visible, full opacity. Appearance scene mounts the KineticGrid bed (not hero, not the lady+universe video). See `docs/design/ONBOARDING-KINETIC-GRID.md`. No Skip. Starfield / space-with-moving-lights does not mount after the first beat.
+Original Métis copy. No em dash. No Vibe Island trademark strings. Continue is `onboard-cta`, always visible, full opacity. Appearance scene mounts the KineticGrid bed (not hero, not the lady+universe video). See `docs/design/ONBOARDING-KINETIC-GRID.md`. No Skip before the permissions step. Starfield / space-with-moving-lights does not mount after the first beat.
 
 Out of scope: Operator, Listen, ClickUp, overlay park PR 94, pack, Goldberg Aria, merge. READY TO MERGE stays no until Tony Mac-shows.
 
@@ -163,7 +163,7 @@ User-facing onboarding copy never uses an em dash (U+2014). Use a comma, period,
 - Why: Saying it out loud is how we stay transparent and aligned with GDPR.
 - Checkbox: I'll tell everyone on the call before I record.
 
-Skip does not exist. Ready is the only finish. Incomplete ASR is Retry, not a dead screen.
+Ready is the only finish of the tour; Skip setup (after the permissions step, with consent) runs the same teardown and save. Role interview (G56): four one-line questions with chip answers and static "2 of 4" dots, then "Here's your team" with three editable cards created only through the G48 confirm path; every step is saved so a quit resumes at the same question. Setup work goes to the setup meter bucket, never a usage meter, and Ready says so. Motion is the existing `.scene-enter` plus a 180 ms sheet fade and 6 px rise, transform and opacity only, off under reduced motion. Incomplete ASR is Retry, not a dead screen.
 
 Act 3 shows on-device model **download/install progress** (weights already fetch via `ensureLocalModel` on app open). Never copy "not installed" as a dead state. If RAM-gated, say so honestly.
 

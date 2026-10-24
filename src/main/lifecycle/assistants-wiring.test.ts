@@ -2,6 +2,7 @@ import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { ASSISTANT_IPC } from '@shared/assistants'
+import { ONBOARDING_INTERVIEW_IPC } from '@shared/onboarding-interview'
 import { makeTempRoot } from '../features/dictation/__fixtures__/dictation-memory-fixtures'
 import { open, seal } from '../features/assistants/__fixtures__/assistant-harness'
 import type { AuthorizeSender } from '../ipc/sender-auth'
@@ -54,7 +55,9 @@ function wiring(state: { owner: string | null; tenant: string | null; partition:
 describe('assistants wiring (G48)', () => {
   it('registers the channels and keeps the sealed assistant file under userData/assistants, named by partition', async () => {
     const w = wiring({ owner: KEY_A, tenant: TENANT, partition: 'a1'.repeat(12) })
-    expect([...w.handlers.keys()].sort()).toEqual(Object.values(ASSISTANT_IPC).sort())
+    expect([...w.handlers.keys()].sort()).toEqual(
+      [...Object.values(ASSISTANT_IPC), ...Object.values(ONBOARDING_INTERVIEW_IPC)].sort()
+    )
     const proposal = (await w.call(ASSISTANT_IPC.propose, {
       drafts: [{ name: 'Wiring Coach', base: 'support', instructions: 'synthetic-private-instruction' }]
     })) as { proposalId: string; previewHash: string }

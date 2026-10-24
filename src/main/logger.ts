@@ -409,6 +409,8 @@ export type AuditEvent =
   | 'dictation.memory'
   // G48: the assistant store (proposed, created, replayed, updated, archived, migrated, refused). Phase, enum reason and counts only; never a name, instructions or an id.
   | 'assistant.store'
+  // G56: the onboarding role interview and setup meter (saved, proposed, completed, discarded, setup-ended, refused). Phase, enum reason and counts only; never an answer, a name or instructions.
+  | 'onboarding.interview'
   // G57: the user memory (a correction or delete of a remembered preference or project context). Action and outcome only; never text.
   | 'user.memory'
   | 'meeting.record'
