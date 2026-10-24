@@ -18,6 +18,7 @@ import type { MetisCommandState } from '@shared/ipc'
 import { RIGHT_EDGE_DRAWER_WIDTH, RIGHT_EDGE_TAB_WIDTH } from '@shared/right-edge-geometry'
 import { RIGHT_EDGE_STRINGS, type RightEdgeStrings } from '../lib/right-edge/strings'
 import { ElapsedClock } from './Bar'
+import { AttachButton, AttachmentChips, composerDropProps, onComposerPaste } from './ComposerAttachments'
 import { MantuMark } from './MantuMark'
 import { TaskCardsHost } from './TaskCardsHost'
 import { WalkthroughCoachHost } from './WalkthroughCoachCard'
@@ -42,8 +43,9 @@ export interface SidecarChatProps {
 }
 
 /**
- * The edge composer is deliberately controlled. It never owns conversation state, invokes IPC, or
- * creates a second answer path; App supplies the same input, submit, stop, and answer body as the Bar.
+ * The edge composer is deliberately controlled. It never owns conversation state or creates a second answer path;
+ * App supplies the same input, submit, stop, and answer body as the Bar. Its attachment chips and paperclip talk to
+ * main only through the composer-attachments store (G54), which holds ids and names, never file contents.
  */
 export function SidecarChat({
   value = '',
@@ -63,59 +65,65 @@ export function SidecarChat({
   }
 
   return (
-    <form
-      aria-label="Ask Métis"
-      className="right-edge-sidecar__chat"
-      onSubmit={(event) => {
-        event.preventDefault()
-        submit()
-      }}
-    >
-      <input
-        ref={inputRef}
-        aria-label="Ask Métis anything"
-        className="right-edge-sidecar__chat-input no-drag"
-        disabled={!available || busy}
-        onChange={(event) => onChange?.(event.target.value)}
-        onPointerDown={onComposerActivity}
-        onCompositionStart={() => onComposingChange?.(true)}
-        onCompositionEnd={() => onComposingChange?.(false)}
-        onKeyDown={(event) => {
-          onComposerActivity?.()
-          // D10: IME uses Enter to commit a composition (isComposing, or keyCode 229 on the keydown it consumes).
-          // Sending then would discard the user's in-progress text.
-          if (
-            event.key === 'Enter' &&
-            !event.shiftKey &&
-            !event.nativeEvent.isComposing &&
-            event.nativeEvent.keyCode !== 229
-          ) {
-            event.preventDefault()
-            submit()
-          }
+    <>
+      <AttachmentChips />
+      <form
+        aria-label="Ask Métis"
+        className="right-edge-sidecar__chat"
+        {...composerDropProps}
+        onSubmit={(event) => {
+          event.preventDefault()
+          submit()
         }}
-        placeholder="Ask Métis anything"
-        spellCheck={false}
-        value={value}
-      />
-      <button
-        type={busy && stoppable ? 'button' : 'submit'}
-        aria-label={busy && stoppable ? 'Stop answer' : 'Ask Métis'}
-        className="right-edge-sidecar__chat-submit no-drag focus-ring"
-        disabled={!available || (busy && !stoppable)}
-        onClick={busy && stoppable ? onStop : undefined}
       >
-        {busy ? (
-          stoppable ? (
-            <X size={16} strokeWidth={1.9} />
+        <AttachButton disabled={!available || busy} />
+        <input
+          ref={inputRef}
+          aria-label="Ask Métis anything"
+          className="right-edge-sidecar__chat-input no-drag"
+          disabled={!available || busy}
+          onChange={(event) => onChange?.(event.target.value)}
+          onPaste={onComposerPaste}
+          onPointerDown={onComposerActivity}
+          onCompositionStart={() => onComposingChange?.(true)}
+          onCompositionEnd={() => onComposingChange?.(false)}
+          onKeyDown={(event) => {
+            onComposerActivity?.()
+            // D10: IME uses Enter to commit a composition (isComposing, or keyCode 229 on the keydown it consumes).
+            // Sending then would discard the user's in-progress text.
+            if (
+              event.key === 'Enter' &&
+              !event.shiftKey &&
+              !event.nativeEvent.isComposing &&
+              event.nativeEvent.keyCode !== 229
+            ) {
+              event.preventDefault()
+              submit()
+            }
+          }}
+          placeholder="Ask Métis anything"
+          spellCheck={false}
+          value={value}
+        />
+        <button
+          type={busy && stoppable ? 'button' : 'submit'}
+          aria-label={busy && stoppable ? 'Stop answer' : 'Ask Métis'}
+          className="right-edge-sidecar__chat-submit no-drag focus-ring"
+          disabled={!available || (busy && !stoppable)}
+          onClick={busy && stoppable ? onStop : undefined}
+        >
+          {busy ? (
+            stoppable ? (
+              <X size={16} strokeWidth={1.9} />
+            ) : (
+              <LoaderCircle size={16} strokeWidth={1.9} className="right-edge-sidecar__spin" />
+            )
           ) : (
-            <LoaderCircle size={16} strokeWidth={1.9} className="right-edge-sidecar__spin" />
-          )
-        ) : (
-          <CornerDownLeft size={16} strokeWidth={1.9} />
-        )}
-      </button>
-    </form>
+            <CornerDownLeft size={16} strokeWidth={1.9} />
+          )}
+        </button>
+      </form>
+    </>
   )
 }
 

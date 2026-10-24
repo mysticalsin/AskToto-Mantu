@@ -13,6 +13,7 @@ import type {
   SignInResult
 } from '@shared/ipc'
 import type { ProviderId } from '@shared/providers'
+import { composerAttachments } from './lib/composer-attachments'
 import { reportCardOutcomeAfterReceipt, reportDisplayReceiptWhenPainted } from './lib/display-receipt'
 import { lexicalDuplicateScore, SuggestionCardController } from './lib/duplicate-review'
 import { buildAskStart } from './lib/ask-start'
@@ -362,8 +363,7 @@ export function useAsk(): {
     })
     const offErr = window.toto.onError((e: StreamError) => {
       if (!idRef.current || e.id !== idRef.current) return
-      // Cancellation detaches before IPC. Any still-owned error is real, even if its wording says
-      // "abort" or "cancel"; preserve current partial text without swallowing that failure.
+      // Cancellation detaches before IPC. A still-owned error is real even if it says "abort" or "cancel"; keep partial text, never swallow it.
       finishCurrent('incomplete', e.message)
     })
     return () => {
@@ -433,7 +433,7 @@ export function useAsk(): {
         usedScreen: req.mode === 'vision' || !!req.wantsScreenContext,
         ephemeral: req.mode === 'suggest'
       }))
-      void window.toto.ask(buildAskStart(id, req)).catch(() => {
+      void window.toto.ask({ ...buildAskStart(id, req), ...composerAttachments.takeForSend() }).catch(() => {
         // A rejected IPC start may have no stream event. Settle only its still-owned run, using local
         // copy rather than exposing arbitrary transport details. Late rejections cannot undo success.
         if (idRef.current === id) finishCurrent('incomplete', 'Could not start the response. Please try again.')
