@@ -10,7 +10,8 @@ export interface BuiltinHandlerDeps {
   eventKit?: EventKitHost
 }
 
-const productionEventKit = (): EventKitHost =>
+/** The one production EventKit host: the handler and the Apple Calendar IPC both talk to the bundled mac helper through it. */
+export const productionEventKit = (): EventKitHost =>
   createEventKitHost({
     platform: process.platform,
     helperPath: () => (macHelperPresent() ? macHelperPath() : null)

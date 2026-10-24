@@ -52,7 +52,7 @@
     "src/renderer/src/components/BrainView.tsx": 1364,
     "src/renderer/src/components/OnboardingExperience.tsx": 1631,
     "src/renderer/src/components/RecallView.tsx": 932,
-    "src/renderer/src/components/Review.tsx": 1755,
+    "src/renderer/src/components/Review.tsx": 1754,
     "src/renderer/src/features/settings/AiSection.tsx": 2278,
     "src/renderer/src/features/settings/DustSetup.tsx": 928,
     "src/renderer/src/features/settings/SettingsRoot.tsx": 1020,

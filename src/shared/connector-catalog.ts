@@ -102,6 +102,8 @@ export const CONNECTOR_CATALOG: readonly ConnectorOperation[] = Object.freeze([
     opId: 'apple.calendar.event.create',
     kind: 'apple_calendar',
     effect: 'create',
+    // Reversible: the owner can delete the event in Calendar. Still a write, so it waits for the confirm card.
+    effectClass: 'reversible_write',
     summary: 'Create an Apple Calendar event on this Mac with no attendees (no invitations)',
     // Not a provider scope: the OS permission the helper must hold. It is checked in the handler at dispatch time.
     scopes: ['EventKit.FullAccess'],
@@ -115,7 +117,7 @@ export const CONNECTOR_CATALOG: readonly ConnectorOperation[] = Object.freeze([
  * effect, scopes or input shape changed). `CONNECTOR_CATALOG_DIGEST` is pinned by a test so a change without a
  * bump fails CI.
  */
-export const CONNECTOR_CATALOG_REVISION = 3
+export const CONNECTOR_CATALOG_REVISION = 4
 
 /** Stable description of the parts of an operation a plan depends on. */
 export function describeOperation(op: ConnectorOperation): string {

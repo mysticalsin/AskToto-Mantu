@@ -168,7 +168,10 @@ export function connectorConfirmBroker(): ConnectorConfirmBroker {
   return confirmBroker
 }
 
-const CONNECTOR_LABELS: Readonly<Record<ConnectorKind, string>> = { outlook: 'Outlook' }
+const CONNECTOR_LABELS: Readonly<Record<ConnectorKind, string>> = {
+  outlook: 'Outlook',
+  apple_calendar: 'Apple Calendar'
+}
 
 /**
  * Show the confirm card for a prepared write and run it only if the owner confirms. The approval the executor sees

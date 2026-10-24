@@ -22,6 +22,7 @@ import { createMeetingRecordPreloadApi } from './meeting-record'
 import { createConnectorAccountsPreloadApi } from './connector-accounts'
 import { createAccountChoicePreloadApi } from './connector-account-choice'
 import { createConnectorConfirmPreloadApi } from './connector-confirm'
+import { createAppleCalendarPreloadApi } from './apple-calendar'
 import { createQuietPreloadApi } from './quiet'
 import { createDictationStatusPreloadApi } from './dictation-status'
 import { createComponentOffloadPreloadApi } from './component-offload'
@@ -56,6 +57,7 @@ export function createFeaturePreloadApis(ipc: IpcRenderer) {
     ...createConnectorAccountsPreloadApi(ipc),
     ...createAccountChoicePreloadApi(ipc),
     ...createConnectorConfirmPreloadApi(ipc),
+    ...createAppleCalendarPreloadApi(ipc),
     ...createQuietPreloadApi(ipc),
     ...createDictationStatusPreloadApi(ipc),
     ...createAttachmentsPreloadApi(ipc),

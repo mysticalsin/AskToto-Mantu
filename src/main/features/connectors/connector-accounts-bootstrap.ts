@@ -11,14 +11,18 @@ import { CONNECTOR_CONFIRM_IPC, type ConnectorConfirmState } from '@shared/conne
 import { registerAccountChoiceIpc } from '../../ipc/connector-account-choice-ipc'
 import { registerConnectorConfirmIpc } from '../../ipc/connector-confirm-ipc'
 import { registerConnectorAccountsIpc } from '../../ipc/connector-accounts-ipc'
+import { registerAppleCalendarIpc } from '../../ipc/apple-calendar-ipc'
+import type { EventKitHost } from '../../infra/process/eventkit-helper-host'
 import {
   accountChoiceBroker,
   configureAccountChoiceDelivery,
   configureConnectorAccountRuntime,
   configureConnectorConfirmDelivery,
   connectorCatalog,
-  connectorConfirmBroker
+  connectorConfirmBroker,
+  runConnectorWriteDetailed
 } from './connector-runtime'
+import { productionEventKit } from './connector-handlers'
 import { auditLog } from '../../logger'
 import { configureMcpCallRuntime, createMcpCallRuntime } from './mcp-call-runtime'
 
@@ -36,6 +40,8 @@ export interface ConnectorAccountsBootstrapDeps {
   /** Test seams; production persists to userData and verifies against the main-process Graph token cache. */
   accountStore?: ConnectorAccountStore
   verifyCurrentIdentity?(): Promise<GraphTokenOutcome>
+  /** Test seam for the Apple Calendar status/ask calls; production uses the bundled mac helper. */
+  eventKit?: Pick<EventKitHost, 'status' | 'ask'>
 }
 
 /** Main-only connector account lifecycle: owner/tenant partition, registry, safe account-view IPC and G60 executor. */
@@ -112,6 +118,15 @@ export function bootstrapConnectorAccounts(deps: ConnectorAccountsBootstrapDeps)
     assertMainWindow: deps.assertMainWindow,
     requireAuth: deps.requireAuth,
     broker: connectorConfirmBroker()
+  })
+
+  registerAppleCalendarIpc(deps.ipcMain, {
+    assertMainWindow: deps.assertMainWindow,
+    requireAuth: deps.requireAuth,
+    platform: process.platform,
+    eventKit: deps.eventKit ?? productionEventKit(),
+    create: (input, ownerWebContentsId) =>
+      runConnectorWriteDetailed('apple.calendar.event.create', input, { ownerWebContentsId })
   })
 
   deps.ownerSession.onRevoked((ref, reason) => {

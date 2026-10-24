@@ -16,6 +16,13 @@ vi.mock('../../auth', () => ({
 const appendTimeSavedEvent = vi.fn()
 vi.mock('../../time-saved-log', () => ({ appendTimeSavedEvent: (e: unknown) => appendTimeSavedEvent(e) }))
 vi.mock('../../logger', () => ({ auditLog: vi.fn(), mainLog: { warn: vi.fn(), info: vi.fn(), error: vi.fn() } }))
+const eventKit = {
+  status: vi.fn<() => Promise<string | null>>(),
+  ask: vi.fn<() => Promise<string | null>>(),
+  create: vi.fn<(input: unknown) => Promise<unknown>>(),
+  read: vi.fn<(id: string) => Promise<unknown>>()
+}
+vi.mock('../../infra/process/eventkit-helper-host', () => ({ createEventKitHost: () => eventKit }))
 
 import { CONNECTOR_CATALOG_REVISION } from '@shared/connector-catalog'
 import { OUTLOOK_DRAFT_CONSENT_COPY } from '../../outlook-write'
@@ -343,5 +350,80 @@ describe('account choice and the identity a handler really uses (G62)', () => {
     vi.useRealTimers()
     await runConnectorWriteDetailed('outlook.draft.create', input, ASKED)
     expect(appendTimeSavedEvent).toHaveBeenCalledOnce()
+  })
+})
+
+describe('Apple Calendar create waits for the confirm card (G65c)', () => {
+  const EVENT = { subject: 'Follow-up', body: '', startIso: '2026-10-25T10:00:00Z', endIso: '2026-10-25T10:30:00Z' }
+  const readback = {
+    kind: 'found',
+    subject: 'Follow-up',
+    startIso: EVENT.startIso,
+    endIso: EVENT.endIso,
+    cancelled: false
+  }
+
+  beforeEach(() => {
+    for (const fn of Object.values(eventKit)) fn.mockReset()
+    eventKit.status.mockResolvedValue('fullAccess')
+    eventKit.create.mockResolvedValue({ kind: 'created', id: 'ek-1' })
+    eventKit.read.mockResolvedValue(readback)
+  })
+
+  it("creates only after confirm, with the card's proposal id as the approval", async () => {
+    vi.useRealTimers()
+    const seen = answerCards(true)
+    const r = await runConnectorWriteDetailed('apple.calendar.event.create', EVENT, ASKED)
+    expect(seen).toHaveLength(1)
+    expect(seen[0]).toMatchObject({
+      effectClass: 'reversible_write',
+      connectorLabel: 'Apple Calendar',
+      subjectPreview: 'Follow-up'
+    })
+    expect(r.result).toMatchObject({ ok: true, output: { id: 'ek-1', verified: true } })
+    const receipt = (r.result as { receipt: { argsHash: string; idempotencyKey: string } }).receipt
+    expect(receipt.idempotencyKey).toBe(actionIdempotencyKey(seen[0].proposalId, seen[0].argsHash))
+    expect(appendTimeSavedEvent).not.toHaveBeenCalled()
+  })
+
+  it('a declined card never reaches EventKit', async () => {
+    vi.useRealTimers()
+    answerCards(false)
+    const r = await runConnectorWriteDetailed('apple.calendar.event.create', EVENT, ASKED)
+    expect(r.result).toMatchObject({ ok: false, reason: 'confirm_declined' })
+    expect(eventKit.status).not.toHaveBeenCalled()
+    expect(eventKit.create).not.toHaveBeenCalled()
+  })
+
+  it('without a window to show the card in, nothing runs', async () => {
+    const r = await runConnectorWriteDetailed('apple.calendar.event.create', EVENT)
+    expect(r.result).toMatchObject({ ok: false, reason: 'not_approved' })
+    expect(eventKit.create).not.toHaveBeenCalled()
+  })
+
+  it('a denied permission is the typed refusal and nothing is created or asked', async () => {
+    vi.useRealTimers()
+    answerCards(true)
+    eventKit.status.mockResolvedValue('denied')
+    const r = await runConnectorWriteDetailed('apple.calendar.event.create', EVENT, ASKED)
+    expect(r.result).toMatchObject({ ok: false, reason: 'os_permission_missing', permission: 'denied' })
+    expect(eventKit.ask).not.toHaveBeenCalled()
+    expect(eventKit.create).not.toHaveBeenCalled()
+  })
+
+  it('refuses account_unavailable when signed out', async () => {
+    configureConnectorAccountRuntime({ registry: runtimeRegistry, ensureCurrentAccount: async () => null })
+    const r = await runConnectorWriteDetailed('apple.calendar.event.create', EVENT, ASKED)
+    expect(r.result).toMatchObject({ ok: false, reason: 'account_unavailable' })
+    expect(eventKit.create).not.toHaveBeenCalled()
+  })
+
+  it('a readback that does not match is effect_uncertain', async () => {
+    vi.useRealTimers()
+    answerCards(true)
+    eventKit.read.mockResolvedValue({ ...readback, subject: 'Other' })
+    const r = await runConnectorWriteDetailed('apple.calendar.event.create', EVENT, ASKED)
+    expect(r.result).toMatchObject({ ok: false, reason: 'effect_uncertain' })
+    expect(r).toMatchObject({ ok: false, uncertain: true })
   })
 })

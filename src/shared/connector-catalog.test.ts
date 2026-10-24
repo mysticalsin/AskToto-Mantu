@@ -16,6 +16,11 @@ const PINNED: Record<number, string> = {
     'outlook.event.create|outlook|create|Calendars.ReadWrite|body,endIso,startIso,subject|endIso,id,startIso,verified'
   ].join('\n'),
   3: [
+    'outlook.calendar.today|outlook|read|read|Calendars.Read|tz|events',
+    'outlook.draft.create|outlook|create|reversible_write|Mail.ReadWrite|body,subject|id',
+    'outlook.event.create|outlook|create|reversible_write|Calendars.ReadWrite|body,endIso,startIso,subject|endIso,id,startIso,verified'
+  ].join('\n'),
+  4: [
     'apple.calendar.event.create|apple_calendar|create|reversible_write|EventKit.FullAccess|body,endIso,startIso,subject|endIso,id,startIso,verified',
     'outlook.calendar.today|outlook|read|read|Calendars.Read|tz|events',
     'outlook.draft.create|outlook|create|reversible_write|Mail.ReadWrite|body,subject|id',
@@ -56,7 +61,12 @@ describe('connector catalog', () => {
 
   it('every catalog op declares an effectClass allowed for its effect', () => {
     for (const op of CONNECTOR_CATALOG) expect(allowedClassesFor(op.effect)).toContain(op.effectClass)
-    expect(CONNECTOR_CATALOG_REVISION).toBe(3)
+    expect(CONNECTOR_CATALOG_REVISION).toBe(4)
+  })
+
+  it('Apple Calendar create is a reversible write: the owner can delete the event in Calendar', () => {
+    const op = CONNECTOR_CATALOG.find((o) => o.opId === 'apple.calendar.event.create')
+    expect(op?.effectClass).toBe('reversible_write')
   })
 
   it('requires at least one scope per operation and classes only reads as non-writes', () => {

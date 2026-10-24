@@ -30,6 +30,7 @@ import { reviewSpeakerLabel } from '@shared/speaker-summary'
 import { talkStats } from '@shared/talkstats'
 import { Markdown } from './Markdown'
 import { Chip, TextButton, Spinner } from './ui'
+import { FollowupFooter } from './FollowupFooter'
 import { AgentStatus, InlineOrb } from './AgentStatus'
 import { RecapPdfExportButton } from '../features/export/RecapPdfExportButton'
 import { ReviewEntityStrip } from './ReviewEntityStrip'
@@ -1397,9 +1398,7 @@ export const Review = memo(function Review({
                   {outlookDraftLocalError || outlookDraftSession.error}
                 </div>
               )}
-              <div className="text-[11px] text-[color:var(--color-ink-3)]">
-                Review before sending. Outlook creates a draft only. Nothing sends itself.
-              </div>
+              <FollowupFooter title={meetingMeta?.title} />
             </div>
           ) : null}
         </section>
