@@ -8,7 +8,6 @@ import {
   runQuestionFlow,
   runShadowFlow,
   type FlowSettings,
-  type ShadowFlowDeps,
   type ShadowWatermarkCommit
 } from './intervention-flow'
 import { InterventionGate, diffTranscriptLines, transcriptLineId, type TranscriptLineLike } from './intervention-gate'
@@ -124,6 +123,33 @@ export interface ShadowPregenerationArgs {
   watermarkRef: { current: { lineCount: number; at: number } }
   runSpeculative: () => string
   commitWatermark: (commit: ShadowWatermarkCommit) => void
+  /** Clock override for tests; defaults to Date.now. */
+  nowMs?: () => number
+}
+
+/** One pre-generation attempt: the body of the shadow effect, callable without React. */
+export function startShadowPregeneration(
+  latest: { readonly current: ShadowPregenerationArgs },
+  busyRef: { current: boolean }
+) {
+  return runShadowFlow({
+    gate: latest.current.gate,
+    busyRef,
+    rulesInput: () => {
+      const a = latest.current
+      return {
+        listening: a.listening,
+        settings: a.settings,
+        lastSpeaker: a.lines.length ? a.lines[a.lines.length - 1].speaker : null,
+        lineCount: a.lines.length,
+        watermark: a.watermarkRef.current,
+        nowMs: (a.nowMs ?? Date.now)(),
+        anyStreaming: a.anyStreaming
+      }
+    },
+    runSpeculative: () => latest.current.runSpeculative(),
+    commitWatermark: (commit) => latest.current.commitWatermark(commit)
+  })
 }
 
 /**
@@ -138,24 +164,6 @@ export function useShadowPregeneration(args: ShadowPregenerationArgs): void {
   const { gate, lines, listening, settings, anyStreaming } = args
 
   useEffect(() => {
-    const deps: ShadowFlowDeps = {
-      gate,
-      busyRef,
-      rulesInput: () => {
-        const a = latest.current
-        return {
-          listening: a.listening,
-          settings: a.settings,
-          lastSpeaker: a.lines.length ? a.lines[a.lines.length - 1].speaker : null,
-          lineCount: a.lines.length,
-          watermark: a.watermarkRef.current,
-          nowMs: Date.now(),
-          anyStreaming: a.anyStreaming
-        }
-      },
-      runSpeculative: () => latest.current.runSpeculative(),
-      commitWatermark: (commit) => latest.current.commitWatermark(commit)
-    }
-    void runShadowFlow(deps)
+    void startShadowPregeneration(latest, busyRef)
   }, [gate, lines, listening, settings, anyStreaming])
 }

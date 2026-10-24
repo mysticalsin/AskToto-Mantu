@@ -4,6 +4,8 @@ import { describe, expect, it, vi } from 'vitest'
 import { transcriptStateKey } from '@shared/hash'
 import { fieldContext } from './lib/ask-context'
 import { retiringMeeting } from './lib/retiring-meeting'
+import { InterventionGate } from './lib/intervention-gate'
+import { startShadowPregeneration, type ShadowPregenerationArgs } from './lib/use-intervention-wiring'
 import { readModuleSource } from '../../test-helpers/module-source'
 
 const appModule = readModuleSource(__dirname, './App')
@@ -137,13 +139,38 @@ function scheduler<T>(
   }
 }
 
-function actualSpeculationEffect(context: vm.Context): { render: () => void | undefined } {
-  const effect = hookExpressions(
-    'useEffect',
-    (callback) =>
-      callback.getText(app).includes('specWatermarkRef.current') && callback.getText(app).includes('speculative.run')
-  )
-  return scheduler<void>(effect.callback, effect.dependencies, context, (run) => run())
+// G70: the shadow pre-generation moved out of App.tsx into useShadowPregeneration. The arguments are still the
+// ACTUAL App source (evaluated here); the effect body is the real startShadowPregeneration the hook calls.
+// The settings object is replaced on every change in production, so the deps below use its fields to model a
+// change that this harness makes in place.
+function actualSpeculationEffect(context: vm.Context): { render: () => Promise<void> } {
+  const call = uniqueNode(
+    app,
+    (node) => ts.isCallExpression(node) && node.expression.getText(app) === 'useShadowPregeneration'
+  ) as ts.CallExpression
+  const argsExpression = call.arguments[0]!.getText(app)
+  const busyRef = { current: false }
+  let previous: unknown[] | undefined
+  return {
+    async render() {
+      const args = { ...evaluate<ShadowPregenerationArgs>(argsExpression, context), nowMs: () => 100_000 }
+      const s = args.settings
+      const dependencies = [
+        args.gate,
+        args.lines,
+        args.listening,
+        s?.instantSuggestions,
+        s?.providerReady,
+        s?.localSuggestReady,
+        s?.suggestEverySec,
+        args.anyStreaming
+      ]
+      const changed = !previous || dependencies.some((dependency, index) => !Object.is(dependency, previous![index]))
+      if (!changed) return
+      previous = dependencies
+      await startShadowPregeneration({ current: args }, busyRef)
+    }
+  }
 }
 
 function actualCopilotMemo(context: vm.Context): { render: () => ReactElement | undefined } {
@@ -176,12 +203,14 @@ function makeHarness() {
     streaming: false,
     error: null
   }
+  const gate = new InterventionGate({ meetingStartMs: 41 })
   const initialWatermark = {
     lineCount: MEETING_A_LINES.length,
     at: 1,
     key: transcriptStateKey(MEETING_A_TEXT),
     meetingStart: 41,
-    runId: 'spec-a'
+    runId: 'spec-a',
+    snapshot: gate.issue()
   }
   const listenStart = vi.fn((..._args: unknown[]) => {
     events.push('listen.start')
@@ -229,6 +258,7 @@ function makeHarness() {
       })
     },
     Copilot: 'Copilot',
+    interventionGate: gate,
     transcriptStateKey,
     fieldContext,
     ...updates,
@@ -308,6 +338,7 @@ function makeHarness() {
     retiringMeeting,
     window: { toto: { resetAskContext: vi.fn(() => Promise.resolve()) } }
   })
+  context.readySpeculative = callback<() => unknown>('readySpeculative', context)
   const tryAdoptSpeculative = callback<() => boolean>('tryAdoptSpeculative', context)
   context.tryAdoptSpeculative = tryAdoptSpeculative
   const retireSpeculativeMeeting = optionalCallback<() => void>('retireSpeculativeMeeting', context)
@@ -388,7 +419,7 @@ describe('actual App speculative meeting lifecycle', () => {
   it('retires A on accepted same-text replacement and lets equal-line-count B start fresh work', async () => {
     const h = makeHarness()
     try {
-      h.speculationEffect.render()
+      await h.speculationEffect.render()
       expect(selectedSuggestion(h.copilotMemo.render())?.id).toBe('spec-a')
 
       h.startListen(false)
@@ -402,7 +433,7 @@ describe('actual App speculative meeting lifecycle', () => {
         MEETING_A_LINES.map((line) => ({ ...line }))
       )
       const projectedStaleA = selectedSuggestion(h.copilotMemo.render())
-      h.speculationEffect.render()
+      await h.speculationEffect.render()
       const pendingRunId = h.runRequests.length ? `spec-b-${h.runRequests.length}` : ''
       if (pendingRunId) {
         h.setAnswer({ ...h.initialAnswer, id: pendingRunId, streaming: true })
@@ -529,15 +560,15 @@ describe('actual App speculative meeting lifecycle', () => {
       expect(h.tryAdoptSpeculative()).toBe(false)
 
       prepareEligibleGenerationCase(h, { instantSuggestions: false })
-      h.speculationEffect.render()
+      await h.speculationEffect.render()
       expect(h.runRequests).toEqual([])
 
       settings.instantSuggestions = true
-      h.speculationEffect.render()
+      await h.speculationEffect.render()
       const expected = [SPECULATIVE_REQUEST]
       expect(h.runRequests).toEqual(expected)
 
-      h.speculationEffect.render()
+      await h.speculationEffect.render()
       expect(h.runRequests).toEqual(expected)
     } finally {
       await h.settle()
@@ -654,15 +685,15 @@ describe('actual App speculative meeting lifecycle', () => {
     try {
       prepareEligibleGenerationCase(h)
       block(h)
-      h.speculationEffect.render()
+      await h.speculationEffect.render()
       expect(h.runRequests).toEqual([])
 
       release(h)
-      h.speculationEffect.render()
+      await h.speculationEffect.render()
       const expected = [SPECULATIVE_REQUEST]
       expect(h.runRequests).toEqual(expected)
 
-      h.speculationEffect.render()
+      await h.speculationEffect.render()
       expect(h.runRequests).toEqual(expected)
     } finally {
       await h.settle()
