@@ -1,11 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { z } from 'zod'
-import {
-  CONNECTOR_KINDS,
-  type AccountRef,
-  type ConnectorEffect,
-  type ConnectorKind
-} from '@shared/connector-catalog'
+import { CONNECTOR_KINDS, type AccountRef, type ConnectorEffect, type ConnectorKind } from '@shared/connector-catalog'
 import {
   ConnectorAccountHealthSchema,
   ConnectorAccountHealthSignalSchema,
@@ -17,7 +12,11 @@ import {
   type ConnectorOnboardingFlowView,
   type ConnectorOnboardingInterruption
 } from '@shared/connector-accounts'
-import { applyConnectorAccountHealthSignal, initialConnectorAccountHealth, isConnectorAccountReady } from './account-health'
+import {
+  applyConnectorAccountHealthSignal,
+  initialConnectorAccountHealth,
+  isConnectorAccountReady
+} from './account-health'
 import type { ConnectorAccountHealthRecord } from './account-health'
 import { connectorAccountScopeKey, deriveConnectorAccountRef, maskedAccountHint } from './account-ref'
 import type { AccountResolver, ConnectorAccountScope } from './account-ref'
@@ -89,7 +88,10 @@ export interface ConnectorAccountRegistry extends AccountResolver {
   beginOnboarding(input: { kind: ConnectorKind; label: string }): Promise<ConnectorOnboardingFlowView>
   listOnboardingFlows(): Promise<ConnectorOnboardingFlowView[]>
   listFlowHistory(): Promise<ConnectorOnboardingFlowView[]>
-  pausePendingFlows(reason: Extract<ConnectorOnboardingInterruption, 'app_quit' | 'sign_out'>, scope?: ConnectorAccountScope | null): Promise<void>
+  pausePendingFlows(
+    reason: Extract<ConnectorOnboardingInterruption, 'app_quit' | 'sign_out'>,
+    scope?: ConnectorAccountScope | null
+  ): Promise<void>
   resumeOnboarding(flowId: string): Promise<ConnectorFlowActionResult>
   abandonOnboarding(flowId: string): Promise<ConnectorFlowActionResult>
   completeOnboarding(
@@ -119,9 +121,11 @@ export function createConnectorAccountRegistry(deps: {
     const previous = locks.get(key) ?? Promise.resolve()
     const next = previous.then(action, action)
     locks.set(key, next)
-    void next.finally(() => {
-      if (locks.get(key) === next) locks.delete(key)
-    }).catch(() => undefined)
+    void next
+      .finally(() => {
+        if (locks.get(key) === next) locks.delete(key)
+      })
+      .catch(() => undefined)
     return next
   }
 
@@ -154,8 +158,11 @@ export function createConnectorAccountRegistry(deps: {
     await deps.store.save(kind, connectorAccountScopeKey(scope), serialize(partition))
   }
 
-  const withPartition = <T>(scope: ConnectorAccountScope, kind: ConnectorKind, action: (partition: Partition) => T | Promise<T>) =>
-    exclusive(partitionKey(scope, kind), async () => action(await loadPartition(scope, kind)))
+  const withPartition = <T>(
+    scope: ConnectorAccountScope,
+    kind: ConnectorKind,
+    action: (partition: Partition) => T | Promise<T>
+  ) => exclusive(partitionKey(scope, kind), async () => action(await loadPartition(scope, kind)))
 
   const currentScope = (): ConnectorAccountScope | null => {
     const scope = deps.currentScope()
@@ -251,7 +258,13 @@ export function createConnectorAccountRegistry(deps: {
     return record
   }
 
-  const applySignal = (partition: Partition, kind: ConnectorKind, ref: AccountRef, signal: ConnectorAccountHealthSignal, at: number): boolean => {
+  const applySignal = (
+    partition: Partition,
+    kind: ConnectorKind,
+    ref: AccountRef,
+    signal: ConnectorAccountHealthSignal,
+    at: number
+  ): boolean => {
     const account = partition.accounts.get(ref)
     if (!account || account.kind !== kind) return false
     const nextHealth = applyConnectorAccountHealthSignal(account.health, signal, at)
@@ -264,7 +277,12 @@ export function createConnectorAccountRegistry(deps: {
           saveFlow(partition, { ...withoutReason, status: 'completed', updatedAt: at })
         }
       }
-    } else if (signal === 'token_refresh_rejected' || signal === 'token_refresh_transient' || signal === 'consent_required' || signal === 'transient_failure') {
+    } else if (
+      signal === 'token_refresh_rejected' ||
+      signal === 'token_refresh_transient' ||
+      signal === 'consent_required' ||
+      signal === 'transient_failure'
+    ) {
       for (const flow of partition.flows.values()) {
         if (flow.accountRef === ref && flow.status === 'pending') {
           saveFlow(partition, { ...flow, status: 'paused', updatedAt: at })
@@ -354,7 +372,10 @@ export function createConnectorAccountRegistry(deps: {
       await Promise.all(CONNECTOR_KINDS.map((kind) => refreshKind(scope, kind)))
       return CONNECTOR_KINDS.flatMap((kind) =>
         [...(partitions.get(partitionKey(scope, kind))?.accounts.values() ?? [])].map(viewOf)
-      ).sort((a, b) => a.kind.localeCompare(b.kind) || a.label.localeCompare(b.label) || a.accountRef.localeCompare(b.accountRef))
+      ).sort(
+        (a, b) =>
+          a.kind.localeCompare(b.kind) || a.label.localeCompare(b.label) || a.accountRef.localeCompare(b.accountRef)
+      )
     },
 
     async beginOnboarding(input) {
@@ -397,9 +418,9 @@ export function createConnectorAccountRegistry(deps: {
       const scope = currentScope()
       if (!scope) return []
       await Promise.all(CONNECTOR_KINDS.map((kind) => refreshKind(scope, kind)))
-      return CONNECTOR_KINDS.flatMap((kind) => [...(partitions.get(partitionKey(scope, kind))?.flows.values() ?? [])]).sort(
-        (a, b) => a.startedAt - b.startedAt || a.flowId.localeCompare(b.flowId)
-      )
+      return CONNECTOR_KINDS.flatMap((kind) => [
+        ...(partitions.get(partitionKey(scope, kind))?.flows.values() ?? [])
+      ]).sort((a, b) => a.startedAt - b.startedAt || a.flowId.localeCompare(b.flowId))
     },
 
     async pausePendingFlows(reason, scopeOverride) {
@@ -490,7 +511,9 @@ export function createConnectorAccountRegistry(deps: {
         if (flow.status === 'abandoned') return { ok: false, reason: 'flow_expired' } as const
         if (flow.status === 'completed') {
           const account = flow.accountRef ? partition.accounts.get(flow.accountRef) : undefined
-          return account ? { ok: true, account: viewOf(account), flow } as const : { ok: false, reason: 'flow_not_found' } as const
+          return account
+            ? ({ ok: true, account: viewOf(account), flow } as const)
+            : ({ ok: false, reason: 'flow_not_found' } as const)
         }
         const account = upsertAccount(
           partition,

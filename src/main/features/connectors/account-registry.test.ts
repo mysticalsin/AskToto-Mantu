@@ -111,7 +111,9 @@ describe('connector account registry', () => {
     const flow = await registry.beginOnboarding({ kind: 'outlook', label: 'New work account' })
     clock.value = flow.expiresAt
     expect(await registry.listOnboardingFlows()).toEqual([])
-    expect(await registry.listFlowHistory()).toMatchObject([{ flowId: flow.flowId, status: 'abandoned', reason: 'timeout' }])
+    expect(await registry.listFlowHistory()).toMatchObject([
+      { flowId: flow.flowId, status: 'abandoned', reason: 'timeout' }
+    ])
     expect((await registry.listViews()).find((view) => view.accountRef === existing)?.health).toBe('healthy')
   })
 

@@ -47,9 +47,7 @@ describe('connector account bootstrap', () => {
     await bootstrap.ensureCurrentAccount('outlook')
     const flow = await bootstrap.registry.beginOnboarding({ kind: 'outlook', label: 'Work' })
     await bootstrap.ensureCurrentAccount('outlook')
-    expect(await bootstrap.registry.listOnboardingFlows()).toMatchObject([
-      { flowId: flow.flowId, status: 'paused' }
-    ])
+    expect(await bootstrap.registry.listOnboardingFlows()).toMatchObject([{ flowId: flow.flowId, status: 'paused' }])
     expect(await bootstrap.registry.listViews()).toMatchObject([{ health: 'needs_reauth' }])
   })
 })

@@ -32,12 +32,14 @@ const WRITE: ConnectorOperation = {
 
 const ACCOUNT_REF = `acct_${'A'.repeat(43)}` as AccountRef
 
-function setup(over: {
-  grant?: 'granted' | 'stale' | 'transient'
-  handler?: ConnectorHandler
-  revision?: number
-  ready?: boolean | ((effect: ConnectorEffect) => boolean)
-} = {}) {
+function setup(
+  over: {
+    grant?: 'granted' | 'stale' | 'transient'
+    handler?: ConnectorHandler
+    revision?: number
+    ready?: boolean | ((effect: ConnectorEffect) => boolean)
+  } = {}
+) {
   const publisher = createCatalogPublisher({ revision: over.revision ?? 3, operations: [READ, WRITE] })
   const write = vi.fn<ConnectorHandler>(over.handler ?? (async () => ({ ok: true, output: { id: 'draft-1' } })))
   const read = vi.fn<ConnectorHandler>(async () => ({ ok: true, output: { events: [] } }))

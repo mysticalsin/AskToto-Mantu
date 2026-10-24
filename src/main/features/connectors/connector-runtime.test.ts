@@ -76,7 +76,10 @@ describe('runConnectorWrite (Outlook IPC consumer)', () => {
 
   it('resolves the signed-in account through the owner-scoped registry before the Graph call', async () => {
     getGraphToken.mockResolvedValue('token')
-    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ id: 'AAMk2' }), { status: 201 })))
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => new Response(JSON.stringify({ id: 'AAMk2' }), { status: 201 }))
+    )
     const result = await runConnectorWriteDetailed('outlook.draft.create', { subject: 'Hi', body: 'x' })
     expect(result.ok).toBe(true)
     expect(result.result).toMatchObject({ ok: true, provenance: { accountRef: expect.stringMatching(/^acct_/) } })
