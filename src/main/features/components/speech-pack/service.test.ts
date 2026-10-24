@@ -73,7 +73,11 @@ function fakeEngine(): {
     repair,
     pause: vi.fn((id) => update(id, { status: 'paused' })),
     cancel: vi.fn((id) => update(id, { status: 'error', kind: 'cancelled' })),
-    whenIdle: async () => undefined
+    whenIdle: async () => undefined,
+    evict: vi.fn(async (id: SpeechPackComponentId) => {
+      update(id, { status: 'not-installed' })
+      return { ok: true as const, bytesFreed: 7 }
+    })
   }
   return { engine, update, enqueue }
 }
@@ -147,6 +151,37 @@ describe('explicit speech-pack service boundary', () => {
       expect(row).toMatchObject({ presence: 'bundled', blockedBy: null, installable: false, privacy: 'on-device' })
       expect(row.downloadBytes).toBeGreaterThan(0)
     }
+  })
+
+  it('reports the local model and a failed speech row as distinct, removable-aware facts (G87)', async () => {
+    const { service } = setup({
+      localModelFacts: () => ({ downloaded: true, source: 'download', reason: null, runtimeState: 'unavailable' })
+    })
+    const snapshot = await service.snapshot()
+    const local = snapshot.optionalComponents?.find((row) => row.id === 'local-llm')
+    expect(local).toMatchObject({ presence: 'installed', removable: true, failure: 'startup-failed' })
+    expect(snapshot.optionalComponents?.find((row) => row.id === 'whisper')).toMatchObject({
+      removable: false,
+      failure: null
+    })
+  })
+
+  it('treats a throwing local-model probe as unknown instead of failing the snapshot (G87)', async () => {
+    const { service } = setup({
+      localModelFacts: () => {
+        throw new Error('registry unreadable')
+      }
+    })
+    const local = (await service.snapshot()).optionalComponents?.find((row) => row.id === 'local-llm')
+    expect(local).toMatchObject({ presence: 'absent', removable: false })
+  })
+
+  it('offloads a speech component through the engine, but not while an install owns it (G87)', async () => {
+    const { service, engine } = setup()
+    expect(await service.evictSpeechComponent(WHISPER_BASE_Q8.id)).toEqual({ ok: true, bytesFreed: 7 })
+    expect(engine.evict).toHaveBeenCalledWith(WHISPER_BASE_Q8.id)
+    expect((await install(service)).ok).toBe(true)
+    expect(await service.evictSpeechComponent(WHISPER_BASE_Q8.id)).toEqual({ ok: false, reason: 'busy' })
   })
 
   it('reports every optional component absent and blocked on a lean package, and never as installable (G11)', async () => {

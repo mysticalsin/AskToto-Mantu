@@ -47,3 +47,12 @@ export {
   WHISPER_BASE_Q8,
   type SpeechPackComponentId
 } from './speech-pack/manifest'
+export {
+  createComponentOffloadService,
+  type ComponentOffloadDeps,
+  type ComponentOffloadService,
+  type OffloadTarget
+} from './offload/service'
+export { createOffloadReceiptStore, type OffloadReceiptStore } from './offload/receipts'
+export { createLocalModelTarget, createSpeechPackTarget } from './offload/targets'
+export type { LocalModelFacts } from './speech-pack/optional-components'

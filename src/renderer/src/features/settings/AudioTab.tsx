@@ -13,6 +13,7 @@ import { ManagedChip } from '../../ui/ManagedChip'
 import { Section } from '../../ui/Section'
 import { ToggleRow } from '../../ui/Toggle'
 import { AsrModelRow } from './AiSection'
+import type { OptionalComponentsBridge } from './OptionalComponentsSection'
 import type { SpeechPackBridge } from './SpeechPackSection'
 import { OnDeviceSpeechSettings } from './OnDeviceSpeechSettings'
 import { CloudSpeechSection } from './CloudSpeechSection'
@@ -422,7 +423,7 @@ export function AudioTab({
   tapControl: ReactNode
 }): JSX.Element {
   // Root wires these methods through the validated preload API; keep the local feature contract narrow.
-  const speechPackBridge: SpeechPackBridge = window.toto
+  const speechPackBridge: SpeechPackBridge & OptionalComponentsBridge = window.toto
   // Match the worker's fail-closed source selection. A failed/absent probe cannot expose a development
   // preference that has no effect in a production build.
   const [asrBundled, setAsrBundled] = useState(true)

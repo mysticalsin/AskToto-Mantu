@@ -6,6 +6,7 @@ import { ManagedChip } from '../../ui/ManagedChip'
 import { ctl } from '../../ui/ctl'
 import { WhisperQualityRow } from './AiSection'
 import { CoreAsrAssetsRow } from './CoreAsrAssetsRow'
+import { OptionalComponentsSection, type OptionalComponentsBridge } from './OptionalComponentsSection'
 import { SpeechPackSection, type SpeechPackBridge } from './SpeechPackSection'
 
 type SpeechSettings = Pick<PublicSettings, 'asrEngine' | 'asrQuality' | 'managedKeys'>
@@ -19,13 +20,14 @@ export function OnDeviceSpeechSettings({
 }: {
   settings: SpeechSettings
   patch: (p: Partial<PublicSettings>) => void
-  bridge: SpeechPackBridge
+  bridge: SpeechPackBridge & OptionalComponentsBridge
   bundled: boolean
 }): JSX.Element {
   return (
     <>
       <CoreAsrAssetsRow />
       <SpeechPackSection bridge={bridge} selectedEngine={settings.asrEngine} />
+      <OptionalComponentsSection bridge={bridge} />
       <WhisperQualityRow bundled={bundled} settings={settings} patch={patch} />
       <div className="flex flex-col gap-1.5 px-1 py-1">
         <label className="flex items-center gap-2 text-[13px] text-[color:var(--cl-foreground)]">

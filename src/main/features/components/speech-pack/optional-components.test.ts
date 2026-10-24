@@ -155,3 +155,77 @@ describe('optional component presence (G11)', () => {
     }
   })
 })
+
+describe('optional component failures and removal (G87)', () => {
+  type Facts = Parameters<typeof resolveOptionalComponents>[0]
+  const resolved = (contract: PackageRuntimeContract, over: Partial<Facts> = {}) => {
+    const rows = resolveOptionalComponents({ contract, host, installed: new Set(), ...over })
+    return Object.fromEntries(rows.map((row) => [row.id, row])) as Record<OptionalComponentId, (typeof rows)[number]>
+  }
+  const localModel = (over: Partial<NonNullable<Facts['localModel']>> = {}): NonNullable<Facts['localModel']> => ({
+    downloaded: true,
+    source: 'download',
+    reason: null,
+    runtimeState: 'stopped',
+    ...over
+  })
+
+  it('insufficient disk, digest repair, incompatible target and startup failure are distinct failures', () => {
+    const disk = resolved(development, {
+      speechRows: [{ componentId: WHISPER_BASE_Q8.id, state: 'error', requiredBytes: 900, freeBytes: 100 }]
+    })
+    const repair = resolved(development, { speechRows: [{ componentId: WHISPER_BASE_Q8.id, state: 'repair-needed' }] })
+    const failed = resolved(development, { speechRows: [{ componentId: WHISPER_BASE_Q8.id, state: 'error' }] })
+    const incompatible = resolved(verifiedFull({ arch: 'x64' }))
+    const startup = resolved(development, { localModel: localModel({ runtimeState: 'unavailable' }) })
+    expect(disk.whisper.failure).toBe('insufficient-disk')
+    expect(repair.whisper.failure).toBe('repair-needed')
+    expect(failed.whisper.failure).toBe('download-failed')
+    expect(incompatible.whisper.failure).toBe('incompatible-target')
+    expect(startup['local-llm'].failure).toBe('startup-failed')
+    expect(resolved(invalid).whisper.failure).toBe('package-invalid')
+    expect(resolved(lean()).whisper.failure).toBe('runtime-not-published')
+    expect(resolved(development).whisper.failure).toBeNull()
+  })
+
+  it('maps local model unavailable reasons to their own failure modes', () => {
+    const modeFor = (reason: NonNullable<Facts['localModel']>['reason']) =>
+      resolved(development, { localModel: localModel({ downloaded: false, reason }) })['local-llm'].failure
+    expect(modeFor('insufficient-ram')).toBe('insufficient-ram')
+    expect(modeFor('insufficient-disk')).toBe('insufficient-disk')
+    expect(modeFor('download-failed')).toBe('download-failed')
+    expect(modeFor('invalid-bundle')).toBe('repair-needed')
+    expect(modeFor('downloading')).toBeNull()
+    expect(modeFor('not-downloaded')).toBeNull()
+  })
+
+  it('a downloaded local model reports installed and removable', () => {
+    const row = resolved(development, { localModel: localModel() })['local-llm']
+    expect(row.presence).toBe('installed')
+    expect(row.removable).toBe(true)
+    expect(row.removableBytes).toBe(descriptorFor('local-llm').installedBytes)
+    expect(OptionalComponentStatusSchema.safeParse(row).success).toBe(true)
+    const modelOnly = resolved(lean(), { localModel: localModel() })['local-llm']
+    expect(modelOnly.presence).toBe('model-only')
+    expect(modelOnly.removable).toBe(true)
+  })
+
+  it('a bundled component is never removable', () => {
+    for (const contract of [legacyFull, verifiedFull()]) {
+      for (const row of Object.values(resolved(contract, { installed: new Set(['whisper', 'parakeet']) }))) {
+        expect(row.removable).toBe(false)
+      }
+    }
+    const packaged = resolved(development, { localModel: localModel({ source: 'bundled' }) })['local-llm']
+    expect(packaged.removable).toBe(false)
+    expect(resolved(development).whisper.removable).toBe(false)
+  })
+
+  it('model-only speech is removable', () => {
+    const rows = resolved(lean(), { installed: new Set(['whisper']) })
+    expect(rows.whisper.presence).toBe('model-only')
+    expect(rows.whisper.removable).toBe(true)
+    expect(rows.whisper.removableBytes).toBe(descriptorFor('whisper').installedBytes)
+    expect(rows.parakeet.removable).toBe(false)
+  })
+})

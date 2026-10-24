@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { FailureModeSchema } from './component-failure-matrix'
 
 const byteCount = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER)
 const identity = z.string().regex(/^[0-9a-f]{64}$/)
@@ -106,7 +107,13 @@ export const OptionalComponentStatusSchema = z
     installedBytes: byteCount.positive(),
     presence: z.enum(['bundled', 'installed', 'model-only', 'absent']),
     blockedBy: z.enum(['runtime-not-published', 'package-invalid', 'package-incompatible']).nullable(),
+    /** The live failure, one distinct kind (G87); null when nothing is wrong. `blockedBy` stays for compatibility. */
+    failure: FailureModeSchema.nullable(),
     installable: z.boolean(),
+    /** True only when verified optional files are on disk and may be offloaded (G87); never for a bundled component. */
+    removable: z.boolean(),
+    /** Display only: the descriptor's installed size. The offload receipt carries the measured figure. */
+    removableBytes: byteCount,
     offer: z.object({ surface: z.enum(['first-hold', 'settings']), consent: z.literal('required') }).strict()
   })
   .strict()
@@ -116,6 +123,9 @@ export const OptionalComponentStatusSchema = z
       (value.blockedBy !== null || value.presence === 'bundled' || value.presence === 'installed')
     ) {
       ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['installable'], message: 'Invalid installable state' })
+    }
+    if (value.removable && (value.presence === 'bundled' || value.presence === 'absent')) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['removable'], message: 'Invalid removable state' })
     }
   })
 
