@@ -1,0 +1,130 @@
+{
+  "synthetic": true,
+  "description": "Synthetic code-switch turn-trigger fixtures (G72, D-24). Fictional companies only.",
+  "cases": [
+    {
+      "id": "cs-01",
+      "text": "Entendi o ponto. What is the pricing for Globex",
+      "expect": {
+        "kind": "question",
+        "lang": "en"
+      }
+    },
+    {
+      "id": "cs-02",
+      "text": "Qual é o pricing do plano enterprise",
+      "expect": {
+        "kind": "question",
+        "lang": "pt-BR"
+      }
+    },
+    {
+      "id": "cs-03",
+      "text": "Acme looks good mas é muito caro",
+      "expect": {
+        "kind": "objection",
+        "lang": "pt-BR"
+      }
+    },
+    {
+      "id": "cs-04",
+      "text": "Okay mais how much does it cost",
+      "expect": {
+        "kind": "question",
+        "lang": "en"
+      }
+    },
+    {
+      "id": "cs-05",
+      "text": "Ça va. Can you share the roadmap",
+      "expect": {
+        "kind": "question",
+        "lang": "en"
+      }
+    },
+    {
+      "id": "cs-06",
+      "text": "Je comprends. Est-ce que vous avez un SLA",
+      "expect": {
+        "kind": "question",
+        "lang": "fr"
+      }
+    },
+    {
+      "id": "cs-07",
+      "text": "The demo was great pero es demasiado caro",
+      "expect": {
+        "kind": "objection",
+        "lang": "es"
+      }
+    },
+    {
+      "id": "cs-08",
+      "text": "Quanto custa o plan anual",
+      "expect": {
+        "kind": "question",
+        "lang": "pt-BR"
+      }
+    },
+    {
+      "id": "cs-09",
+      "text": "Y cuándo empezamos el onboarding",
+      "expect": {
+        "kind": "question",
+        "lang": "es"
+      }
+    },
+    {
+      "id": "cs-10",
+      "text": "Pourquoi le ROI est si bas",
+      "expect": {
+        "kind": "question",
+        "lang": "fr"
+      }
+    },
+    {
+      "id": "cs-11",
+      "text": "We love it, mais c’est trop cher",
+      "expect": {
+        "kind": "objection",
+        "lang": "fr"
+      }
+    },
+    {
+      "id": "cs-12",
+      "text": "Honestly we’re happy with Globex pero gracias",
+      "expect": {
+        "kind": "objection",
+        "lang": "en"
+      }
+    },
+    {
+      "id": "cs-13",
+      "text": "Eu acho que o roadmap está bom, né",
+      "expect": {
+        "kind": "question",
+        "lang": "pt-BR"
+      }
+    },
+    {
+      "id": "cs-14",
+      "text": "Ok, vamos seguir",
+      "expect": null
+    },
+    {
+      "id": "cs-15",
+      "text": "Sounds good. Gracias a todos",
+      "expect": null
+    },
+    {
+      "id": "cs-16",
+      "text": "Merci. Thanks for the update",
+      "expect": null
+    },
+    {
+      "id": "cs-17",
+      "text": "Qual é o",
+      "expect": null
+    }
+  ]
+}

@@ -277,7 +277,10 @@ describe.each(['parakeet', 'apple', 'whisper'] as const)('%s live caption behavi
     expect(api.lines[0]?.provisional).toBeUndefined()
     expect(api.text()).toBe(`THEM (Alice): ${fullText}`)
     expect(onQuestion).toHaveBeenCalledTimes(1)
-    expect(onQuestion).toHaveBeenLastCalledWith(expect.objectContaining({ text: fullText }))
+    expect(onQuestion).toHaveBeenLastCalledWith(
+      expect.objectContaining({ text: fullText }),
+      expect.objectContaining({ kind: 'question' })
+    )
 
     await emitCaption(engine, laterText, false)
     api = render(onQuestion, engine)

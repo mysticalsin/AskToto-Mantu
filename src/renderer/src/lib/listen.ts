@@ -107,7 +107,7 @@ import {
 } from './listen-notes'
 import { cloudTrackListeners } from './listen-cloud-track'
 import { feedEmptyIsEcho, trimQueue } from './listen-queue-policy'
-import { isQuestion } from './listen-question'
+import { classifyTurn, type TurnTrigger } from './listen-question'
 import { recognizerStatusFor, statusAfterLanguageChange, type RecognizerStatus } from './listen-recognizer-status'
 export {
   advanceLanguageProbe,
@@ -278,7 +278,7 @@ function escapeRegExp(s: string): string {
 }
 
 export function useListen(
-  onQuestion?: (line: TranscriptLine) => void,
+  onQuestion?: (line: TranscriptLine, trigger: TurnTrigger) => void,
   corrections?: { from: string; to: string }[],
   // Fired on a mid-session Parakeet→Whisper fallback. Deliberately NOT surfaced as a live error state —
   // it's a background engine swap, not something worth interrupting the meeting for — so the caller can
@@ -707,15 +707,15 @@ export function useListen(
       }
       journalCommittedLine(sessionStartedAtRef.current, line)
       // Auto-answer endpoints on the COALESCED 'them' turn (themRunRef), not a single VAD window: a 'you'
-      // line hands the turn back (clear the run); a 'them' line extends it. Fire once the joined run reads
-      // as a complete question, then consume the run so a continued sentence doesn't re-fire mid-thought.
+      // line hands the turn back; fire once the run is a complete question/objection (EN/FR/PT-BR/ES), then consume it.
       if (provisional) return line.t
       if (line.speaker === 'them') {
         themRunRef.current = themRunRef.current ? `${themRunRef.current} ${line.text}` : line.text
         if (themRunRef.current.length > 600) themRunRef.current = themRunRef.current.slice(-600) // bound memory
-        if (isQuestion(themRunRef.current)) {
+        const trigger = classifyTurn(themRunRef.current)
+        if (trigger) {
           themRunRef.current = ''
-          onQRef.current?.(line)
+          onQRef.current?.(line, trigger)
         }
       } else {
         themRunRef.current = ''

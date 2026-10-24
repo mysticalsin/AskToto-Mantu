@@ -663,3 +663,18 @@ describe('cloud them named WHO — attach upgrades + embed after final', () => {
     )
   })
 })
+
+describe('isQuestion — multilingual delegation (G72)', () => {
+  it('delegates to classifyTurn and is false for objections', async () => {
+    const { classifyTurn } = await import('@shared/turn-triggers')
+    expect(isQuestion('Pourquoi le projet Acme a pris du retard')).toBe(true)
+    expect(classifyTurn('This is too expensive for us')?.kind).toBe('objection')
+    expect(isQuestion('This is too expensive for us')).toBe(false)
+  })
+
+  it('listen-question re-exports classifyTurn', async () => {
+    const mod = await import('./listen-question')
+    const shared = await import('@shared/turn-triggers')
+    expect(mod.classifyTurn).toBe(shared.classifyTurn)
+  })
+})
