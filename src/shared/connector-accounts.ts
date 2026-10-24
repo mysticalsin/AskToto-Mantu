@@ -89,7 +89,12 @@ export type ConnectorOnboardingBeginPayload = z.infer<typeof ConnectorOnboarding
 export const ConnectorOnboardingFlowPayloadSchema = z.object({ flowId: z.string().uuid() }).strict()
 export const ConnectorOnboardingMutationResponseSchema = z.discriminatedUnion('ok', [
   z.object({ ok: z.literal(true), flow: ConnectorOnboardingFlowViewSchema }).strict(),
-  z.object({ ok: z.literal(false), error: z.enum(['auth_required', 'invalid_input', 'flow_not_found', 'flow_expired']) }).strict()
+  z
+    .object({
+      ok: z.literal(false),
+      error: z.enum(['auth_required', 'invalid_input', 'flow_not_found', 'flow_expired'])
+    })
+    .strict()
 ])
 export type ConnectorOnboardingMutationResponse = z.infer<typeof ConnectorOnboardingMutationResponseSchema>
 

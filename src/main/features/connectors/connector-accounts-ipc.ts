@@ -27,10 +27,7 @@ export interface ConnectorAccountsIpcDeps {
   ensureCurrentAccount?(): Promise<unknown>
 }
 
-export function registerConnectorAccountsIpc(
-  ipcMain: Pick<IpcMain, 'handle'>,
-  deps: ConnectorAccountsIpcDeps
-): void {
+export function registerConnectorAccountsIpc(ipcMain: Pick<IpcMain, 'handle'>, deps: ConnectorAccountsIpcDeps): void {
   const gate = (event: IpcMainInvokeEvent): boolean => {
     deps.assertMainWindow(event)
     return deps.requireAuth()

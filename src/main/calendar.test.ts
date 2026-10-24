@@ -85,13 +85,22 @@ describe('calendarTodayForConnector — observed account health signals', () => 
     await expect(calendarTodayForConnector('UTC')).resolves.toMatchObject({ healthSignal: 'consent_required' })
 
     getGraphToken.mockResolvedValue('graph-token')
-    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: false, status: 503, json: async () => ({}) })))
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({ ok: false, status: 503, json: async () => ({}) }))
+    )
     await expect(calendarTodayForConnector('UTC')).resolves.toMatchObject({ healthSignal: 'transient_failure' })
 
-    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: false, status: 403, json: async () => ({}) })))
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({ ok: false, status: 403, json: async () => ({}) }))
+    )
     await expect(calendarTodayForConnector('UTC')).resolves.toMatchObject({ healthSignal: 'consent_required' })
 
-    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, status: 200, json: async () => ({ value: [] }) })))
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({ ok: true, status: 200, json: async () => ({ value: [] }) }))
+    )
     await expect(calendarTodayForConnector('UTC')).resolves.toMatchObject({
       ok: true,
       healthSignal: 'operation_succeeded'

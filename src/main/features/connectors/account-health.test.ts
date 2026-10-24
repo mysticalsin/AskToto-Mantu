@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest'
-import { applyConnectorAccountHealthSignal, initialConnectorAccountHealth, isConnectorAccountReady } from './account-health'
+import {
+  applyConnectorAccountHealthSignal,
+  initialConnectorAccountHealth,
+  isConnectorAccountReady
+} from './account-health'
 
 describe('connector account health state machine', () => {
   it('does not report a newly registered account healthy before a real verification signal', () => {
@@ -18,11 +22,7 @@ describe('connector account health state machine', () => {
   })
 
   it('requires reauthentication for a real token or consent rejection and can recover only on a later success', () => {
-    const healthy = applyConnectorAccountHealthSignal(
-      initialConnectorAccountHealth(10),
-      'token_refresh_succeeded',
-      20
-    )
+    const healthy = applyConnectorAccountHealthSignal(initialConnectorAccountHealth(10), 'token_refresh_succeeded', 20)
     const reauth = applyConnectorAccountHealthSignal(healthy, 'consent_required', 30)
     expect(reauth).toMatchObject({ health: 'needs_reauth', reason: 'consent_required', lastCheckedAt: 30 })
     expect(isConnectorAccountReady(reauth.health, 'read')).toBe(false)

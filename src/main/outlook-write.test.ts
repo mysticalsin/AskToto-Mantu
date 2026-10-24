@@ -49,7 +49,12 @@ describe('createOutlookDraft — never send', () => {
 
   it('reports transport failures as transient health signals', async () => {
     getGraphToken.mockResolvedValue('tok')
-    vi.stubGlobal('fetch', vi.fn(async () => { throw new Error('provider detail') }))
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => {
+        throw new Error('provider detail')
+      })
+    )
     await expect(createOutlookDraftForConnector({ subject: 'Hi', body: 'Next steps' })).resolves.toMatchObject({
       ok: false,
       healthSignal: 'transient_failure'
@@ -58,7 +63,10 @@ describe('createOutlookDraft — never send', () => {
 
   it('reports real provider authorization responses as consent health signals', async () => {
     getGraphToken.mockResolvedValue('tok')
-    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: false, status: 403, json: async () => ({}) })))
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({ ok: false, status: 403, json: async () => ({}) }))
+    )
     await expect(createOutlookDraftForConnector({ subject: 'Hi', body: 'Next steps' })).resolves.toMatchObject({
       ok: false,
       needsConsent: true,
@@ -92,14 +100,22 @@ describe('createOutlookDraft — never send', () => {
   })
 
   it.each([
-    ['malformed JSON', async () => { throw new SyntaxError('provider response body') }],
+    [
+      'malformed JSON',
+      async () => {
+        throw new SyntaxError('provider response body')
+      }
+    ],
     ['null JSON', async () => null],
     ['a missing id', async () => ({ subject: 'accepted?' })],
     ['an empty id', async () => ({ id: '   ' })],
     ['a non-string id', async () => ({ id: 42 })]
   ])('does not report or audit success for a 2xx response with %s', async (_label, json) => {
     getGraphToken.mockResolvedValue('tok')
-    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, status: 201, json })))
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({ ok: true, status: 201, json }))
+    )
 
     const r = await createOutlookDraft({ subject: 'Follow-up', body: 'Next steps' })
 
@@ -120,7 +136,9 @@ describe('createOutlookDraft — never send', () => {
 
   it('treats a fetch rejection as ambiguous without leaking dependency details', async () => {
     getGraphToken.mockResolvedValue('tok')
-    const fetchMock = vi.fn(async () => { throw new Error('secret-token and provider body') })
+    const fetchMock = vi.fn(async () => {
+      throw new Error('secret-token and provider body')
+    })
     vi.stubGlobal('fetch', fetchMock)
 
     const r = await createOutlookDraft({ subject: 'Follow-up', body: 'Next steps' })
@@ -135,7 +153,10 @@ describe('createOutlookDraft — never send', () => {
 
   it('treats a 5xx response as ambiguous because the POST may already have committed', async () => {
     getGraphToken.mockResolvedValue('tok')
-    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: false, status: 502, json: async () => ({}) })))
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({ ok: false, status: 502, json: async () => ({}) }))
+    )
 
     const r = await createOutlookDraft({ subject: 'Follow-up', body: 'Next steps' })
 

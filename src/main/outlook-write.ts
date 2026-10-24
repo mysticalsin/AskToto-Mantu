@@ -103,9 +103,10 @@ export async function createOutlookDraft(input: { subject: string; body: string 
   return legacyResult(await createOutlookDraftForConnector(input))
 }
 
-export async function createOutlookDraftForConnector(
-  input: { subject: string; body: string }
-): Promise<OutlookConnectorWriteResult> {
+export async function createOutlookDraftForConnector(input: {
+  subject: string
+  body: string
+}): Promise<OutlookConnectorWriteResult> {
   const subject = (input.subject || '').trim().slice(0, 200)
   const body = (input.body || '').slice(0, 20_000)
   if (!subject && !body) return { ok: false, error: 'Add a subject or a body before creating a draft.' }

@@ -1,5 +1,11 @@
 import { randomBytes } from 'node:crypto'
-import { CONNECTOR_CATALOG, CONNECTOR_CATALOG_REVISION, type AccountRef, type ConnectorKind, type ConnectorResult } from '@shared/connector-catalog'
+import {
+  CONNECTOR_CATALOG,
+  CONNECTOR_CATALOG_REVISION,
+  type AccountRef,
+  type ConnectorKind,
+  type ConnectorResult
+} from '@shared/connector-catalog'
 import { getGraphToken } from '../../auth'
 import { auditLog } from '../../logger'
 import { OUTLOOK_DRAFT_CONSENT_COPY, OUTLOOK_EVENT_CONSENT_COPY, type OutlookWriteResult } from '../../outlook-write'
