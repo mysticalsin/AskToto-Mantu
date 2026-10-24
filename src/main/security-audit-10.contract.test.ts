@@ -398,17 +398,28 @@ describe('AUDIT-10 — remaining disk/network IPC is SSO-gated', () => {
     expect(crash).toMatch(/if \(!requireAuth\(\)\) return/)
     expect(crash.indexOf('if (!requireAuth()) return')).toBeLessThan(crash.indexOf('persistCrash'))
 
-    const check = sliceBetween('ipcMain.handle(IPC.updateCheck', 'ipcMain.handle(IPC.updateDownload')
-    expect(check).toMatch(/if \(!requireAuth\(\)\) return/)
+    // G86: the update channels moved to src/main/ipc/update-ipc.ts; the same gate order is pinned there.
+    const updateIpc = readModuleSource(__dirname, './ipc/update-ipc').text.replace(/\r\n/g, '\n')
+    const check = sliceBetween('ipcMain.handle(IPC.updateCheck', 'ipcMain.handle(IPC.updateDownload', updateIpc)
+    expect(check).toMatch(/assertMainWindow\(e\)\n\s*if \(!requireAuth\(\)\) return/)
     expect(check.indexOf('if (!requireAuth()) return')).toBeLessThan(check.indexOf('checkForUpdateNow'))
 
-    const download = sliceBetween('ipcMain.handle(IPC.updateDownload', 'ipcMain.handle(IPC.updateInstall')
-    expect(download).toMatch(/if \(!requireAuth\(\)\) return/)
+    const download = sliceBetween('ipcMain.handle(IPC.updateDownload', 'ipcMain.handle(IPC.updateInstall', updateIpc)
+    expect(download).toMatch(/assertMainWindow\(e\)\n\s*if \(!requireAuth\(\)\) return/)
     expect(download.indexOf('if (!requireAuth()) return')).toBeLessThan(download.indexOf('startUpdateDownload'))
 
-    const install = sliceBetween('ipcMain.handle(IPC.updateInstall', 'ipcMain.handle(IPC.openMailDraft')
-    expect(install).toMatch(/if \(!requireAuth\(\)\) return/)
-    expect(install.indexOf('if (!requireAuth()) return')).toBeLessThan(install.indexOf('autoUpdater'))
+    const install = sliceBetween(
+      'ipcMain.handle(IPC.updateInstall',
+      'ipcMain.handle(UPDATE_LIFECYCLE_IPC.stateGet',
+      updateIpc
+    )
+    expect(install).toMatch(/assertMainWindow\(e\)\n\s*if \(!requireAuth\(\)\) return/)
+    expect(install.indexOf('if (!requireAuth()) return')).toBeLessThan(install.indexOf('requestInstall'))
+
+    const state = sliceBetween('ipcMain.handle(UPDATE_LIFECYCLE_IPC.stateGet', 'return deps.onUpdateState', updateIpc)
+    expect(state).toMatch(/if \(!requireAuth\(\)\) return/)
+    // index.ts wires the module with the real sender check and session gate.
+    expect(indexSrc).toMatch(/registerUpdateIpc\(\{[\s\S]*?assertMainWindow[\s\S]*?requireAuth[\s\S]*?\}\)/)
   })
 
   it('licenseActivate stays ungated (license vs SSO deadlock) and still consumes its bucket', () => {
