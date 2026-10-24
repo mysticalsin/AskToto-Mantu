@@ -7,6 +7,7 @@ import {
   resolveDatabaseName,
   stripJsonComments
 } from '../scripts/migrate.mjs'
+import { USAGE_MIGRATIONS } from './usage-reconcile'
 
 const OPERATOR_ROOT = join(__dirname, '..')
 const schemaSql = readFileSync(join(OPERATOR_ROOT, 'schema.sql'), 'utf8')
@@ -85,7 +86,12 @@ describe('migrate.mjs statement parsing and idempotency contract', () => {
     // very old D1). operator_settings (task B6) is the one deliberate exception: a wholly new table
     // that has never existed anywhere else, so it is introduced directly in schema-alter.sql with
     // nothing to "agree" with in schema.sql.
-    const ALTER_ONLY_NEW_TABLES = new Set(['operator_settings', 'model_policy', 'model_policy_history'])
+    const ALTER_ONLY_NEW_TABLES = new Set([
+      'operator_settings',
+      'model_policy',
+      'model_policy_history',
+      'seat_usage_daily'
+    ])
     for (const table of fromAlter) {
       if (ALTER_ONLY_NEW_TABLES.has(table)) continue
       expect(fromSchema.has(table)).toBe(true)
@@ -196,6 +202,33 @@ describe('schema-alter.sql model_policy table (M2-0412, operator/src/model-polic
   it('is never targeted by an ALTER TABLE statement (a policy write always replaces the whole row)', () => {
     const alters = parseStatements(schemaAlterSql).filter((s) => /^ALTER TABLE model_policy\b/i.test(s))
     expect(alters).toHaveLength(0)
+  })
+})
+
+describe('schema-alter.sql seat_usage_daily table (G81, operator/src/usage-reconcile.ts)', () => {
+  const statement = () =>
+    parseStatements(schemaAlterSql).find((s) => /^CREATE TABLE IF NOT EXISTS seat_usage_daily\b/i.test(s))
+
+  it('seat_usage_daily has exactly the seven columns and composite key', () => {
+    const flat = (statement() ?? '').replace(/\s+/g, ' ')
+    expect(flat).not.toBe('')
+    const columns = [
+      'device_id TEXT NOT NULL',
+      'day INTEGER NOT NULL',
+      'meter_id TEXT NOT NULL',
+      'used INTEGER NOT NULL',
+      'asks INTEGER NOT NULL',
+      'unknown_asks INTEGER NOT NULL',
+      'reconciled_at INTEGER NOT NULL'
+    ]
+    for (const col of [...columns, 'PRIMARY KEY (device_id, day, meter_id)']) expect(flat).toContain(col)
+    expect(flat.match(/\b(?:TEXT|INTEGER)\b/g)).toHaveLength(columns.length)
+    expect(flat).not.toMatch(/preview|prompt|model|cipher/i)
+  })
+
+  it('USAGE_MIGRATIONS mirrors the schema-alter.sql statement', () => {
+    const norm = (t: string) => t.replace(/\s+/g, ' ').replace(/;\s*$/, '').trim()
+    expect(norm(USAGE_MIGRATIONS[0])).toBe(norm(statement() ?? ''))
   })
 })
 

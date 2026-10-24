@@ -70,3 +70,25 @@ export async function resolveSeatMeters(
     }
   ]
 }
+
+// --- G81: enforcement. Appended below the G79 shapes; nothing above this line is changed. ---
+
+/** Same read as the private `dailyBudget` above (kept untouched), exported for the budget route and tests. */
+export async function readDailyBudget(store: Pick<OperatorStore, 'getSetting'>): Promise<number | null> {
+  return dailyBudget(store)
+}
+
+export type ManagedBudgetCheck = { ok: true } | { ok: false; meter: SeatMeter }
+
+/** Refuses only when the meter is known and exhausted. `used === null` (unmigrated D1) never blocks,
+ *  and no budget or no `operator_keys` entitlement means no meter, so nothing to enforce. */
+export async function checkManagedBudget(
+  store: Pick<OperatorStore, 'getSetting' | 'getIssuedLicense' | 'listTiers' | 'sumSeatManagedTokensSince'>,
+  seat: Pick<SeatRow, 'approval' | 'license' | 'license_jti'>,
+  deviceId: string,
+  now: number
+): Promise<ManagedBudgetCheck> {
+  const [meter] = await resolveSeatMeters(store, seat, deviceId, now)
+  if (!meter || meter.used === null || meter.used < meter.limit) return { ok: true }
+  return { ok: false, meter }
+}

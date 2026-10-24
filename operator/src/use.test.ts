@@ -7,7 +7,13 @@ import { sha256Hex } from './crypto'
 import type { D1DatabaseLike } from './d1'
 import { ingestCanonical, OPERATOR_HMAC_HEADERS } from '../../src/shared/operator-hmac'
 import { memoryStore } from './store'
-import { TEST_INGEST_SECRET, TEST_PROMPT_KEY, TEST_ADMIN_EMAILS, TEST_VAULT_KEY, syntheticProviderKey } from './test-fixtures'
+import {
+  TEST_INGEST_SECRET,
+  TEST_PROMPT_KEY,
+  TEST_ADMIN_EMAILS,
+  TEST_VAULT_KEY,
+  syntheticProviderKey
+} from './test-fixtures'
 import { tokenPatternForTests } from './redact'
 import { parseUseBody, withProviderTimeout } from './use'
 import { PORTAL_CF_DEEPSEEK_FLASH, PORTAL_CF_DEEPSEEK_PRO } from '../../src/shared/ask-routing'
@@ -17,7 +23,8 @@ import { MODEL_POLICY_CAPABILITIES } from '../../src/shared/model-policy'
 const NOW = 1_725_000_000_000
 const SECRET = syntheticProviderKey('anthropic')
 const OPENAI_SECRET = syntheticProviderKey('openai')
-const SCREENSHOT_PNG = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=='
+const SCREENSHOT_PNG =
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=='
 
 function env(): Env {
   return {
@@ -112,9 +119,24 @@ async function addCloudflareKey(store: ReturnType<typeof memoryStore>) {
 
 describe('parseUseBody', () => {
   it('rejects missing screenshots, CLI, Dust, and image payloads hidden in text', () => {
-    expect(parseUseBody(JSON.stringify({ provider: 'anthropic', model: 'claude', mode: 'vision', messages: [{ role: 'user', content: 'hi' }] })).ok).toBe(false)
-    expect(parseUseBody(JSON.stringify({ provider: 'claude-cli', model: 'sonnet', messages: [{ role: 'user', content: 'hi' }] })).ok).toBe(false)
-    expect(parseUseBody(JSON.stringify({ provider: 'dust', model: 'agent', messages: [{ role: 'user', content: 'hi' }] })).ok).toBe(false)
+    expect(
+      parseUseBody(
+        JSON.stringify({
+          provider: 'anthropic',
+          model: 'claude',
+          mode: 'vision',
+          messages: [{ role: 'user', content: 'hi' }]
+        })
+      ).ok
+    ).toBe(false)
+    expect(
+      parseUseBody(
+        JSON.stringify({ provider: 'claude-cli', model: 'sonnet', messages: [{ role: 'user', content: 'hi' }] })
+      ).ok
+    ).toBe(false)
+    expect(
+      parseUseBody(JSON.stringify({ provider: 'dust', model: 'agent', messages: [{ role: 'user', content: 'hi' }] })).ok
+    ).toBe(false)
     expect(
       parseUseBody(
         JSON.stringify({
@@ -136,14 +158,18 @@ describe('parseUseBody', () => {
   })
 
   it('accepts a bounded explicit PNG screenshot and keeps the latest user question with long history', () => {
-    const result = parseUseBody(JSON.stringify({
-      provider: 'openai', model: 'gpt-4o-mini', mode: 'vision',
-      image: { mimeType: 'image/png', data: SCREENSHOT_PNG },
-      messages: [
-        ...Array.from({ length: 25 }, (_, i) => ({ role: 'user', content: `old question ${i}` })),
-        { role: 'user', content: 'Read this screen, not an old question.' }
-      ]
-    }))
+    const result = parseUseBody(
+      JSON.stringify({
+        provider: 'openai',
+        model: 'gpt-4o-mini',
+        mode: 'vision',
+        image: { mimeType: 'image/png', data: SCREENSHOT_PNG },
+        messages: [
+          ...Array.from({ length: 25 }, (_, i) => ({ role: 'user', content: `old question ${i}` })),
+          { role: 'user', content: 'Read this screen, not an old question.' }
+        ]
+      })
+    )
     expect(result.ok).toBe(true)
     if (!result.ok) return
     expect(result.req).toMatchObject({ image: { mimeType: 'image/png', data: SCREENSHOT_PNG } })
@@ -163,10 +189,15 @@ describe('parseUseBody', () => {
     ['invalid file', { mimeType: 'image/png', data: btoa('a text file is not a screenshot') }, 'vision'],
     ['oversize file', { mimeType: 'image/png', data: 'A'.repeat(5_500_004) }, 'vision']
   ])('rejects %s without returning the image content in an error', (_name, image, mode) => {
-    const result = parseUseBody(JSON.stringify({
-      provider: 'openai', model: 'gpt-4o-mini', mode, image,
-      messages: [{ role: 'user', content: 'Read this screen.' }]
-    }))
+    const result = parseUseBody(
+      JSON.stringify({
+        provider: 'openai',
+        model: 'gpt-4o-mini',
+        mode,
+        image,
+        messages: [{ role: 'user', content: 'Read this screen.' }]
+      })
+    )
     expect(result).toMatchObject({ ok: false, status: 400 })
     expect(JSON.stringify(result)).not.toContain(SCREENSHOT_PNG)
   })
@@ -181,7 +212,11 @@ describe('HMAC POST /v1/use', () => {
       new Request('https://operator.test/v1/use', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ provider: 'anthropic', model: 'claude-haiku-4-5-20251001', messages: [{ role: 'user', content: 'hi' }] })
+        body: JSON.stringify({
+          provider: 'anthropic',
+          model: 'claude-haiku-4-5-20251001',
+          messages: [{ role: 'user', content: 'hi' }]
+        })
       }),
       env(),
       {},
@@ -204,11 +239,16 @@ describe('HMAC POST /v1/use', () => {
         }),
         { status: 200, headers: { 'content-type': 'application/json' } }
       )
-    const res = await handleRequest(await signedRequest('/v1/use', body, 'use-ok'), env(), {}, {
-      store,
-      now: NOW,
-      providerFetch
-    })
+    const res = await handleRequest(
+      await signedRequest('/v1/use', body, 'use-ok'),
+      env(),
+      {},
+      {
+        store,
+        now: NOW,
+        providerFetch
+      }
+    )
     expect(res.status).toBe(200)
     const json = (await res.json()) as { ok: boolean; text?: string; secret?: string; cipher?: string }
     expect(json).toEqual({ ok: true, text: 'ok from Operator', inputTokens: 12, outputTokens: 3 })
@@ -237,7 +277,12 @@ describe('HMAC POST /v1/use', () => {
   })
 
   it.each([
-    { label: 'an explicit deep Cloudflare request', provider: 'cloudflare', model: PORTAL_CF_DEEPSEEK_PRO, tier: 'deep' },
+    {
+      label: 'an explicit deep Cloudflare request',
+      provider: 'cloudflare',
+      model: PORTAL_CF_DEEPSEEK_PRO,
+      tier: 'deep'
+    },
     { label: 'a legacy Portal Pro Cloudflare request', provider: 'cloudflare', model: PORTAL_CF_DEEPSEEK_PRO },
     { label: 'a base Flash Cloudflare request', provider: 'cloudflare', model: PORTAL_CF_DEEPSEEK_FLASH, tier: 'base' },
     { label: 'a base Anthropic request', provider: 'anthropic', model: 'claude-haiku-4-5-20251001', tier: 'base' }
@@ -257,8 +302,14 @@ describe('HMAC POST /v1/use', () => {
         return reviewedGatewayReply()
       }
       return provider === 'anthropic'
-        ? new Response(JSON.stringify({ content: [{ type: 'text', text: 'unexpected upstream call' }] }), { status: 200, headers: { 'content-type': 'application/json' } })
-        : new Response(JSON.stringify({ choices: [{ message: { content: 'unexpected upstream call' } }] }), { status: 200, headers: { 'content-type': 'application/json' } })
+        ? new Response(JSON.stringify({ content: [{ type: 'text', text: 'unexpected upstream call' }] }), {
+            status: 200,
+            headers: { 'content-type': 'application/json' }
+          })
+        : new Response(JSON.stringify({ choices: [{ message: { content: 'unexpected upstream call' } }] }), {
+            status: 200,
+            headers: { 'content-type': 'application/json' }
+          })
     })
     const body = JSON.stringify({
       provider,
@@ -267,11 +318,16 @@ describe('HMAC POST /v1/use', () => {
       messages: [{ role: 'user', content: 'Use the Operator-funded vault key.' }]
     })
 
-    const res = await handleRequest(await signedRequest('/v1/use', body, 'use-not-entitled'), env(), {}, {
-      store,
-      now: NOW,
-      providerFetch
-    })
+    const res = await handleRequest(
+      await signedRequest('/v1/use', body, 'use-not-entitled'),
+      env(),
+      {},
+      {
+        store,
+        now: NOW,
+        providerFetch
+      }
+    )
 
     expect(res.status).toBe(403)
     expect(await res.json()).toMatchObject({ ok: false, code: 'not-entitled' })
@@ -304,7 +360,12 @@ describe('HMAC POST /v1/use', () => {
     })
     const providerFetch: typeof fetch = async () =>
       new Response(JSON.stringify({ content: [{ type: 'text', text: 'hi' }] }), { status: 200 })
-    await handleRequest(await signedRequest('/v1/use', body, 'use-event'), env(), {}, { store, now: NOW, providerFetch })
+    await handleRequest(
+      await signedRequest('/v1/use', body, 'use-event'),
+      env(),
+      {},
+      { store, now: NOW, providerFetch }
+    )
     const events = await store.listEvents(10)
     expect(events.some((e) => e.kind === 'use' && e.detail === 'use anthropic')).toBe(true)
     expect(JSON.stringify(events)).not.toContain(SECRET)
@@ -320,9 +381,13 @@ describe('HMAC POST /v1/use', () => {
       const url = String(input)
       calls.push(url)
       if (url.includes('/ai-gateway/gateways')) {
-        return new Response(JSON.stringify({
-          success: true, result: { id: 'default', collect_logs: true, cache_ttl: 0, logpush: false }
-        }), { status: 200, headers: { 'content-type': 'application/json' } })
+        return new Response(
+          JSON.stringify({
+            success: true,
+            result: { id: 'default', collect_logs: true, cache_ttl: 0, logpush: false }
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } }
+        )
       }
       throw new Error('must not call the chat-completions endpoint when privacy is unverified')
     }
@@ -332,9 +397,16 @@ describe('HMAC POST /v1/use', () => {
       tier: 'base',
       messages: [{ role: 'user', content: 'hi' }]
     })
-    const res = await handleRequest(await signedRequest('/v1/use', body, 'use-unsafe-gateway'), env(), {}, {
-      store, now: NOW, providerFetch
-    })
+    const res = await handleRequest(
+      await signedRequest('/v1/use', body, 'use-unsafe-gateway'),
+      env(),
+      {},
+      {
+        store,
+        now: NOW,
+        providerFetch
+      }
+    )
     expect(res.status).toBe(503)
     expect(await res.json()).toMatchObject({ ok: false, code: 'GATEWAY_CONFIGURATION_UNSAFE', readiness: 'BLOCKED' })
     expect(calls.some((u) => u.includes('/ai/v1/chat/completions'))).toBe(false)
@@ -347,15 +419,27 @@ describe('HMAC POST /v1/use', () => {
     const methods: string[] = []
     const providerFetch: typeof fetch = async (_input, init) => {
       methods.push(String(init?.method))
-      return new Response(JSON.stringify({ success: false }), { status: 404, headers: { 'content-type': 'application/json' } })
+      return new Response(JSON.stringify({ success: false }), {
+        status: 404,
+        headers: { 'content-type': 'application/json' }
+      })
     }
     const body = JSON.stringify({
-      provider: 'cloudflare', model: PORTAL_CF_DEEPSEEK_FLASH, tier: 'base',
+      provider: 'cloudflare',
+      model: PORTAL_CF_DEEPSEEK_FLASH,
+      tier: 'base',
       messages: [{ role: 'user', content: 'hi' }]
     })
-    const res = await handleRequest(await signedRequest('/v1/use', body, 'use-missing-gateway'), env(), {}, {
-      store, now: NOW, providerFetch
-    })
+    const res = await handleRequest(
+      await signedRequest('/v1/use', body, 'use-missing-gateway'),
+      env(),
+      {},
+      {
+        store,
+        now: NOW,
+        providerFetch
+      }
+    )
     expect(res.status).toBe(503)
     expect(await res.json()).toMatchObject({ code: 'GATEWAY_REVIEW_REQUIRED', readiness: 'UNREVIEWED' })
     expect(methods).toEqual(['GET'])
@@ -370,16 +454,26 @@ describe('HMAC POST /v1/use', () => {
       if (String(input).includes('/ai-gateway/gateways')) return reviewedGatewayReply()
       inferenceHeaders = new Headers(init?.headers)
       return new Response(JSON.stringify({ choices: [{ message: { content: 'ok' } }] }), {
-        status: 200, headers: { 'content-type': 'application/json' }
+        status: 200,
+        headers: { 'content-type': 'application/json' }
       })
     }
     const body = JSON.stringify({
-      provider: 'cloudflare', model: PORTAL_CF_DEEPSEEK_FLASH, tier: 'base',
+      provider: 'cloudflare',
+      model: PORTAL_CF_DEEPSEEK_FLASH,
+      tier: 'base',
       messages: [{ role: 'user', content: 'hi' }]
     })
-    const res = await handleRequest(await signedRequest('/v1/use', body, 'use-aig-headers'), env(), {}, {
-      store, now: NOW, providerFetch
-    })
+    const res = await handleRequest(
+      await signedRequest('/v1/use', body, 'use-aig-headers'),
+      env(),
+      {},
+      {
+        store,
+        now: NOW,
+        providerFetch
+      }
+    )
     expect(res.status).toBe(200)
     expect(res.headers.get('cache-control')).toBe('no-store')
     expect(inferenceHeaders?.get('cf-aig-collect-log')).toBe('true')
@@ -399,13 +493,23 @@ describe('HMAC POST /v1/use', () => {
       messages: [{ role: 'user', content: 'hi' }]
     })
     const providerFetch: typeof fetch = async () =>
-      new Response(JSON.stringify({
-        content: [{ type: 'text', text: 'ok' }],
-        usage: { input_tokens: 5, output_tokens: 2 }
-      }), { status: 200, headers: { 'content-type': 'application/json' } })
-    const res = await handleRequest(await signedRequest('/v1/use', body, 'use-client-ask'), env(), {}, {
-      store, now: NOW, providerFetch
-    })
+      new Response(
+        JSON.stringify({
+          content: [{ type: 'text', text: 'ok' }],
+          usage: { input_tokens: 5, output_tokens: 2 }
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } }
+      )
+    const res = await handleRequest(
+      await signedRequest('/v1/use', body, 'use-client-ask'),
+      env(),
+      {},
+      {
+        store,
+        now: NOW,
+        providerFetch
+      }
+    )
     expect(res.status).toBe(200)
     expect(await store.getAsk(clientAskId)).toMatchObject({
       device_id: 'device-use',
@@ -428,13 +532,23 @@ describe('HMAC POST /v1/use', () => {
       messages: [{ role: 'user', content: 'hi' }]
     })
     const providerFetch: typeof fetch = async () =>
-      new Response(JSON.stringify({
-        content: [{ type: 'text', text: 'ok' }],
-        usage: { input_tokens: 12.5, output_tokens: -3 }
-      }), { status: 200, headers: { 'content-type': 'application/json' } })
-    const res = await handleRequest(await signedRequest('/v1/use', body, 'use-fractional'), env(), {}, {
-      store, now: NOW, providerFetch
-    })
+      new Response(
+        JSON.stringify({
+          content: [{ type: 'text', text: 'ok' }],
+          usage: { input_tokens: 12.5, output_tokens: -3 }
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } }
+      )
+    const res = await handleRequest(
+      await signedRequest('/v1/use', body, 'use-fractional'),
+      env(),
+      {},
+      {
+        store,
+        now: NOW,
+        providerFetch
+      }
+    )
     expect(res.status).toBe(200)
     const json = await res.json()
     expect(json).not.toHaveProperty('inputTokens')
@@ -496,12 +610,17 @@ describe('M2-0412 fleet model policy enforcement on /v1/use (server-side, cannot
     }
   }
 
-  async function dbWithPolicy(overrides: Partial<Record<string, { provider: string; model: string }>> = {}): Promise<D1DatabaseLike> {
+  async function dbWithPolicy(
+    overrides: Partial<Record<string, { provider: string; model: string }>> = {}
+  ): Promise<D1DatabaseLike> {
     const raw = new DatabaseSync(':memory:')
     for (const stmt of MODEL_POLICY_MIGRATIONS) raw.exec(stmt)
     const db = sqliteD1(raw)
     const capabilities = Object.fromEntries(
-      MODEL_POLICY_CAPABILITIES.map((k) => [k, { provider: 'anthropic', model: 'claude-haiku-4-5-20251001', fallbacks: [] }])
+      MODEL_POLICY_CAPABILITIES.map((k) => [
+        k,
+        { provider: 'anthropic', model: 'claude-haiku-4-5-20251001', fallbacks: [] }
+      ])
     )
     await writeModelPolicy(db, { ...capabilities, ...overrides }, 'owner@example.test', NOW)
     return db
@@ -522,11 +641,16 @@ describe('M2-0412 fleet model policy enforcement on /v1/use (server-side, cannot
         status: 200,
         headers: { 'content-type': 'application/json' }
       })
-    const res = await handleRequest(await signedRequest('/v1/use', body, 'use-policy-ok'), { ...env(), DB: db }, {}, {
-      store,
-      now: NOW,
-      providerFetch
-    })
+    const res = await handleRequest(
+      await signedRequest('/v1/use', body, 'use-policy-ok'),
+      { ...env(), DB: db },
+      {},
+      {
+        store,
+        now: NOW,
+        providerFetch
+      }
+    )
     expect(res.status).toBe(200)
   })
 
@@ -541,11 +665,16 @@ describe('M2-0412 fleet model policy enforcement on /v1/use (server-side, cannot
       messages: [{ role: 'user', content: 'hi' }]
     })
     const providerFetch: typeof fetch = async () => new Response('should never be reached', { status: 500 })
-    const res = await handleRequest(await signedRequest('/v1/use', body, 'use-policy-blocked'), { ...env(), DB: db }, {}, {
-      store,
-      now: NOW,
-      providerFetch
-    })
+    const res = await handleRequest(
+      await signedRequest('/v1/use', body, 'use-policy-blocked'),
+      { ...env(), DB: db },
+      {},
+      {
+        store,
+        now: NOW,
+        providerFetch
+      }
+    )
     expect(res.status).toBe(403)
     const responseBody = (await res.json()) as { ok: boolean; code: string }
     expect(responseBody.ok).toBe(false)
@@ -566,11 +695,16 @@ describe('M2-0412 fleet model policy enforcement on /v1/use (server-side, cannot
       messages: [{ role: 'user', content: 'hi' }]
     })
     const providerFetch: typeof fetch = async () => new Response('should never be reached', { status: 500 })
-    const res = await handleRequest(await signedRequest('/v1/use', body, 'use-policy-forged-capability'), { ...env(), DB: db }, {}, {
-      store,
-      now: NOW,
-      providerFetch
-    })
+    const res = await handleRequest(
+      await signedRequest('/v1/use', body, 'use-policy-forged-capability'),
+      { ...env(), DB: db },
+      {},
+      {
+        store,
+        now: NOW,
+        providerFetch
+      }
+    )
     expect(res.status).toBe(403)
     expect(((await res.json()) as { code: string }).code).toBe('model_not_allowed')
   })
@@ -591,11 +725,16 @@ describe('M2-0412 fleet model policy enforcement on /v1/use (server-side, cannot
         status: 200,
         headers: { 'content-type': 'application/json' }
       })
-    const res = await handleRequest(await signedRequest('/v1/use', body, 'use-policy-recap-ok'), { ...env(), DB: db }, {}, {
-      store,
-      now: NOW,
-      providerFetch
-    })
+    const res = await handleRequest(
+      await signedRequest('/v1/use', body, 'use-policy-recap-ok'),
+      { ...env(), DB: db },
+      {},
+      {
+        store,
+        now: NOW,
+        providerFetch
+      }
+    )
     expect(res.status).toBe(200)
   })
 
@@ -615,11 +754,106 @@ describe('M2-0412 fleet model policy enforcement on /v1/use (server-side, cannot
         status: 200,
         headers: { 'content-type': 'application/json' }
       })
-    const res = await handleRequest(await signedRequest('/v1/use', body, 'use-policy-unmanaged'), { ...env(), DB: sqliteD1(raw) }, {}, {
-      store,
-      now: NOW,
-      providerFetch
-    })
+    const res = await handleRequest(
+      await signedRequest('/v1/use', body, 'use-policy-unmanaged'),
+      { ...env(), DB: sqliteD1(raw) },
+      {},
+      {
+        store,
+        now: NOW,
+        providerFetch
+      }
+    )
     expect(res.status).toBe(200)
+  })
+})
+
+describe('G81 managed token budget on /v1/use', () => {
+  const askRow = (tokens: number) => ({
+    id: 'g81-use-ask',
+    device_id: 'device-use',
+    ts: NOW - 1000,
+    mode: 'answer',
+    skill_id: null,
+    skill_version: null,
+    provider: 'anthropic',
+    model: null,
+    ttft_ms: null,
+    total_ms: null,
+    input_tokens: tokens,
+    output_tokens: 0,
+    cache_read: null,
+    cache_write: null,
+    cache_uncached: null,
+    cache_status: null,
+    cache_ttl: null,
+    outcome: 'answered',
+    rating: null,
+    prompt_cipher: null,
+    prompt_iv: null,
+    preview: null,
+    question_type: null,
+    path_tag: 'portal-direct'
+  })
+  const body = JSON.stringify({
+    provider: 'anthropic',
+    model: 'claude-haiku-4-5-20251001',
+    messages: [{ role: 'user', content: 'Say ok.' }]
+  })
+
+  it('handleUse returns 429 meter_exhausted before vault unlock', async () => {
+    const store = memoryStore()
+    await addAnthropicKey(store)
+    await approveDevice(store)
+    await store.putSetting('dailyTokenBudgetPerSeat', '100', 'owner', NOW)
+    await store.insertAsk(askRow(100))
+    const vault = vi.spyOn(store, 'listVaultRows')
+    const providerFetch = vi.fn(async () => new Response('{}', { status: 200 }))
+    const res = await handleRequest(
+      await signedRequest('/v1/use', body, 'use-over'),
+      env(),
+      {},
+      {
+        store,
+        now: NOW,
+        providerFetch: providerFetch as unknown as typeof fetch
+      }
+    )
+    expect(res.status).toBe(429)
+    expect(await res.json()).toMatchObject({ ok: false, error: 'meter_exhausted', meter: { used: 100, limit: 100 } })
+    expect(vault).not.toHaveBeenCalled()
+    expect(providerFetch).not.toHaveBeenCalled()
+    const audits = await store.listAudit(20, { action: 'meter_exhausted' })
+    expect(audits).toHaveLength(1)
+    expect(audits[0]).toMatchObject({ actor: 'device-use', detail: 'managed_tokens' })
+  })
+
+  it('serves the use when below budget', async () => {
+    const store = memoryStore()
+    await addAnthropicKey(store)
+    await approveDevice(store)
+    await store.putSetting('dailyTokenBudgetPerSeat', '100', 'owner', NOW)
+    await store.insertAsk(askRow(99))
+    const providerFetch: typeof fetch = async () =>
+      new Response(JSON.stringify({ content: [{ type: 'text', text: 'ok' }] }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' }
+      })
+    const res = await handleRequest(
+      await signedRequest('/v1/use', body, 'use-under'),
+      env(),
+      {},
+      { store, now: NOW, providerFetch }
+    )
+    expect(res.status).toBe(200)
+  })
+
+  it('an unapproved seat gets 403 and never learns the meter (check order: seat before budget)', async () => {
+    const store = memoryStore()
+    await addAnthropicKey(store)
+    await store.putSetting('dailyTokenBudgetPerSeat', '1', 'owner', NOW)
+    const res = await handleRequest(await signedRequest('/v1/use', body, 'use-noseat'), env(), {}, { store, now: NOW })
+    expect(res.status).toBe(403)
+    expect(JSON.stringify(await res.json())).not.toContain('meter')
   })
 })

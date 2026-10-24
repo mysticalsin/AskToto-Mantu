@@ -431,3 +431,18 @@ ALTER TABLE issued_licenses ADD COLUMN origin TEXT;
 ALTER TABLE issued_licenses ADD COLUMN supersedes TEXT;
 ALTER TABLE seats ADD COLUMN enroll_method TEXT;
 ALTER TABLE seats ADD COLUMN sso_verified_email TEXT;
+
+-- Métis 2.12 (G81): per-seat daily managed-token usage, recomputed from `asks` by the nightly cron and the admin
+-- reconcile route (operator/src/usage-reconcile.ts). A wholly new table, same documented exception as operator_settings
+-- above (migrate.contract.test.ts). Counts only: never a prompt, preview or model. Not pruned by retention.ts.
+-- WRITTEN, NOT APPLIED: the owner runs `npm run migrate:operator`; until then reconcile answers 503 `not migrated`.
+CREATE TABLE IF NOT EXISTS seat_usage_daily (
+  device_id TEXT NOT NULL,
+  day INTEGER NOT NULL,
+  meter_id TEXT NOT NULL,
+  used INTEGER NOT NULL,
+  asks INTEGER NOT NULL,
+  unknown_asks INTEGER NOT NULL,
+  reconciled_at INTEGER NOT NULL,
+  PRIMARY KEY (device_id, day, meter_id)
+);

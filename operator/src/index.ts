@@ -39,7 +39,7 @@ import {
 import { handleSpeechTrackOpen, SPEECH_TRACK_DESCRIPTOR_HEADER, SPEECH_TRACK_GRANT_HEADER } from './routes/speech-track'
 import { SpeechSessionDurableObject } from './speech/relay-session'
 import { readSpeechBody } from './speech/contracts'
-import { pruneRetention } from './retention'
+import { runNightly } from './cron'
 import { d1SchemaStatus } from './routes/admin-core'
 import { looksLikeSecret } from './redact'
 import type { AskRow, OperatorStore, SeatRow } from './store'
@@ -937,10 +937,7 @@ export default {
       return
     }
     const store: OperatorStore = d1Store(env.DB)
-    // `pruneRetention` closes stale sessions itself as its last step, so the cron needs only the one
-    // call; `db` is only for the two raw-table prunes (`integration_grants`, `mcp_calls`) that live
-    // outside `OperatorStore`.
-    const result = await pruneRetention(store, Date.now(), {}, { db: env.DB })
-    console.log(JSON.stringify({ t: 'retention', ...result }))
+    // Retention (which closes stale sessions as its last step), then G81 usage reconciliation; see cron.ts.
+    await runNightly(store, env.DB, Date.now())
   }
 }

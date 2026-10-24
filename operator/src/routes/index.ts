@@ -18,6 +18,7 @@ import { registerMcpGatewayRoutes } from './mcp-gateway'
 import { registerModelPolicyRoutes } from './model-policy'
 import { registerAdminSpeechEvidenceRoutes } from './admin-speech-evidence'
 import { registerEnrollAdminRoutes } from './enroll-admin'
+import { registerMetersRoutes } from './meters'
 
 registerAdminCoreRoutes()
 registerLiveRoutes()
@@ -34,3 +35,4 @@ registerMcpGatewayRoutes()
 registerModelPolicyRoutes()
 registerAdminSpeechEvidenceRoutes()
 registerEnrollAdminRoutes()
+registerMetersRoutes()

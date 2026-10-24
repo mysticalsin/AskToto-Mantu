@@ -18,6 +18,7 @@ import {
   openaiMessages,
   OPERATOR_KEYS_NOT_ENTITLED,
   parseUseBody,
+  refuseIfMeterExhausted,
   screenshotGatewayHeaders,
   type UseRequest
 } from './use'
@@ -39,7 +40,11 @@ function policyCapabilityForAsk(req: UseRequest): 'askChat' | 'recap' {
   return req.mode === 'recap' ? 'recap' : 'askChat'
 }
 
-async function providerRefusedResponse(upstream: Response, secrets: readonly string[], screenshot = false): Promise<Response> {
+async function providerRefusedResponse(
+  upstream: Response,
+  secrets: readonly string[],
+  screenshot = false
+): Promise<Response> {
   const raw = screenshot ? '' : await upstream.text().catch(() => '')
   if (screenshot) await upstream.body?.cancel().catch(() => undefined)
   const fields = providerRefusedPayload(upstream.status, raw, secrets)
@@ -67,7 +72,11 @@ function withAskTimeout(providerFetch: typeof fetch, callerSignal?: AbortSignal)
   }) as typeof fetch
 }
 
-function upstreamUrl(provider: string, accountId: string | undefined, baseUrl: string): string | { error: string; status: number } {
+function upstreamUrl(
+  provider: string,
+  accountId: string | undefined,
+  baseUrl: string
+): string | { error: string; status: number } {
   if (provider === 'cloudflare') {
     const id = (accountId || '').trim()
     if (!id) return { error: 'Operator cannot issue a use', status: 503 }
@@ -104,7 +113,8 @@ function upstreamInit(
     'content-type': 'application/json',
     authorization: `Bearer ${secret}`
   }
-  if (provider === 'cloudflare') Object.assign(headers, { 'cf-aig-gateway-id': 'default' }, screenshotGatewayHeaders(req))
+  if (provider === 'cloudflare')
+    Object.assign(headers, { 'cf-aig-gateway-id': 'default' }, screenshotGatewayHeaders(req))
   return {
     headers,
     body: JSON.stringify({
@@ -510,6 +520,8 @@ export async function handleAsk(
   if (!(await seatHasEntitlement(store, seat, now, 'operator_keys'))) {
     return fail(OPERATOR_KEYS_NOT_ENTITLED, 403, { code: 'not-entitled' })
   }
+  const exhausted = await refuseIfMeterExhausted(store, seat, deviceId, now)
+  if (exhausted) return exhausted
   let req = parsed.req
   if (req.provider === 'cloudflare') {
     if (req.model.startsWith('workers-ai/')) return fail('model not allowed', 400)
@@ -553,7 +565,10 @@ export async function handleAsk(
     })
   } catch (error) {
     if (error instanceof GatewayPrivacyError) {
-      return fail('Cloudflare gateway privacy is not verified.', 503, { code: error.code, readiness: readinessForError(error) })
+      return fail('Cloudflare gateway privacy is not verified.', 503, {
+        code: error.code,
+        readiness: readinessForError(error)
+      })
     }
     return fail('Operator cannot issue a use', 503)
   }

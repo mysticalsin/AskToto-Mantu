@@ -49,8 +49,12 @@ function freshSettingsDb(): DatabaseSync {
 }
 
 function env(): Env {
-  return { OPERATOR_INGEST_SECRET: TEST_INGEST_SECRET, OPERATOR_PROMPT_KEY: TEST_PROMPT_KEY,
-    ADMIN_EMAILS: TEST_ADMIN_EMAILS, OPERATOR_SKILL_PRIVATE_KEY: '' }
+  return {
+    OPERATOR_INGEST_SECRET: TEST_INGEST_SECRET,
+    OPERATOR_PROMPT_KEY: TEST_PROMPT_KEY,
+    ADMIN_EMAILS: TEST_ADMIN_EMAILS,
+    OPERATOR_SKILL_PRIVATE_KEY: ''
+  }
 }
 
 const ownerAccess = { getIdentity: async () => ({ email: 'owner@example.test' }) }
@@ -204,6 +208,65 @@ describe('GET/PATCH /v1/admin/settings.json', () => {
       { store: memoryStore(), now: NOW }
     )
     expect(res.status).toBe(400)
+  })
+
+  describe('G81: dailyTokenBudgetPerSeat is owner-only (fails closed)', () => {
+    const adminAccess = { getIdentity: async () => ({ email: 'admin@example.test' }) }
+    const patchBudget = async (
+      access: { getIdentity: () => Promise<{ email: string }> },
+      ownerEmails: string | undefined,
+      body: Record<string, unknown>
+    ) => {
+      const db = sqliteD1(freshSettingsDb())
+      const store = memoryStore()
+      const res = await handleRequest(
+        new Request('https://operator.test/v1/admin/settings.json', {
+          method: 'PATCH',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify(body)
+        }),
+        { ...env(), ...(ownerEmails === undefined ? {} : { OWNER_EMAILS: ownerEmails }), DB: db },
+        { access },
+        { store, now: NOW }
+      )
+      return { res, db, store }
+    }
+
+    it('admin non-owner PATCH dailyTokenBudgetPerSeat → 403 OWNER_REQUIRED and value unchanged', async () => {
+      const { res, db, store } = await patchBudget(adminAccess, 'owner@example.test', { dailyTokenBudgetPerSeat: 500 })
+      expect(res.status).toBe(403)
+      expect(await res.json()).toEqual({ ok: false, error: 'OWNER_REQUIRED' })
+      expect((await readOperatorSettings(db)).values.dailyTokenBudgetPerSeat).toBeNull()
+      expect(await store.listAudit(10, { action: 'settings-update' })).toHaveLength(0)
+    })
+
+    it('a mixed PATCH containing the budget key writes nothing for a non-owner', async () => {
+      const { res, db } = await patchBudget(adminAccess, 'owner@example.test', {
+        currency: 'EUR',
+        dailyTokenBudgetPerSeat: 500
+      })
+      expect(res.status).toBe(403)
+      expect((await readOperatorSettings(db)).values.currency).toBe('USD')
+    })
+
+    it('owner may change it', async () => {
+      const { res, db } = await patchBudget(ownerAccess, 'owner@example.test', { dailyTokenBudgetPerSeat: 500 })
+      expect(res.status).toBe(200)
+      expect((await readOperatorSettings(db)).values.dailyTokenBudgetPerSeat).toBe(500)
+    })
+
+    it('with OWNER_EMAILS unset nobody may change it', async () => {
+      const a = await patchBudget(ownerAccess, undefined, { dailyTokenBudgetPerSeat: 500 })
+      expect(a.res.status).toBe(403)
+      const b = await patchBudget(adminAccess, '', { dailyTokenBudgetPerSeat: 500 })
+      expect(b.res.status).toBe(403)
+    })
+
+    it('admin may still PATCH currency', async () => {
+      const { res, db } = await patchBudget(adminAccess, 'owner@example.test', { currency: 'EUR' })
+      expect(res.status).toBe(200)
+      expect((await readOperatorSettings(db)).values.currency).toBe('EUR')
+    })
   })
 
   it('requires admin auth', async () => {

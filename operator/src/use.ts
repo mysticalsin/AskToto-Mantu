@@ -1,11 +1,17 @@
 import { PROVIDERS, requiresUserBaseUrl, type ProviderId } from '../../src/shared/providers'
 import { operatorVisionModel, parseOperatorImage, type OperatorImage } from '../../src/shared/operator-vision'
-import { GatewayPrivacyError, gatewayPrivacyHeaders, readinessForError, verifyDefaultGatewayPrivacy } from './ai-gateway'
+import {
+  GatewayPrivacyError,
+  gatewayPrivacyHeaders,
+  readinessForError,
+  verifyDefaultGatewayPrivacy
+} from './ai-gateway'
 import { decryptVault } from './crypto'
 import { seatAuthorizedForKeys, SEAT_NOT_APPROVED } from './fleet'
 import { enforceModelPolicy } from './model-policy'
 import { looksLikeSecret, providerRefusedPayload } from './redact'
-import type { OperatorStore, VaultKeyRow } from './store'
+import { checkManagedBudget } from './meters'
+import type { OperatorStore, SeatRow, VaultKeyRow } from './store'
 import { persistProxyAsk, proxyTokenCount } from './ask-meter'
 import { seatHasEntitlement } from './tiers'
 import { operatorCallableProvider } from './provider-guard'
@@ -26,8 +32,8 @@ const PROVIDER_FETCH_TIMEOUT_MS = 60_000
  *  every call site having to remember to pass one. */
 export function withProviderTimeout(providerFetch: typeof fetch): typeof fetch {
   return ((input: RequestInfo | URL, init?: RequestInit) => {
-    const callerSignal = init?.signal === null ? undefined :
-      init?.signal ?? (input instanceof Request ? input.signal : undefined)
+    const callerSignal =
+      init?.signal === null ? undefined : (init?.signal ?? (input instanceof Request ? input.signal : undefined))
     const signals = [callerSignal, AbortSignal.timeout(PROVIDER_FETCH_TIMEOUT_MS)].filter(
       (signal): signal is AbortSignal => Boolean(signal)
     )
@@ -36,7 +42,6 @@ export function withProviderTimeout(providerFetch: typeof fetch): typeof fetch {
     return providerFetch(input, { ...init, redirect: 'manual', signal: AbortSignal.any(signals) })
   }) as typeof fetch
 }
-
 
 export type UseMessage = { role: 'user' | 'assistant'; content: string }
 
@@ -93,6 +98,20 @@ function json(data: unknown, status = 200): Response {
 
 function fail(error: string, status: number, extra?: Record<string, unknown>): Response {
   return json({ ok: false, error, ...extra }, status)
+}
+
+/** G81: runs after HMAC, seat approval and entitlement, and before any vault unlock or provider call. Returns the
+ *  429 to send when the seat's managed-token meter is exhausted (the audit row carries only the device and the meter id). */
+export async function refuseIfMeterExhausted(
+  store: OperatorStore,
+  seat: SeatRow,
+  deviceId: string,
+  now: number
+): Promise<Response | null> {
+  const check = await checkManagedBudget(store, seat, deviceId, now)
+  if (check.ok) return null
+  await store.audit(crypto.randomUUID(), now, deviceId, 'meter_exhausted', null, check.meter.id)
+  return fail('meter_exhausted', 429, { meter: check.meter })
 }
 
 function clip(raw: string, cap: number): string {
@@ -161,7 +180,8 @@ export function parseUseBody(bodyText: string): { ok: true; req: UseRequest } | 
   }
   let image: OperatorImage | undefined
   if (body.image != null || body.vision === true || body.mode === 'vision') {
-    if (body.mode !== 'vision') return { ok: false, error: 'A screenshot requires an explicit screen Ask.', status: 400 }
+    if (body.mode !== 'vision')
+      return { ok: false, error: 'A screenshot requires an explicit screen Ask.', status: 400 }
     const parsedImage = parseOperatorImage(body.image)
     if (!parsedImage.ok) return { ok: false, error: parsedImage.error, status: 400 }
     image = parsedImage.image
@@ -180,7 +200,12 @@ export function parseUseBody(bodyText: string): { ok: true; req: UseRequest } | 
   }
   if (image) {
     const visionModel = operatorVisionModel(provider, model)
-    if (!visionModel) return { ok: false, error: 'This managed model cannot read screenshots. Choose a supported vision model in Settings.', status: 400 }
+    if (!visionModel)
+      return {
+        ok: false,
+        error: 'This managed model cannot read screenshots. Choose a supported vision model in Settings.',
+        status: 400
+      }
     model = visionModel
   }
   const system = typeof body.system === 'string' ? clip(body.system, SYSTEM_CAP) : ''
@@ -203,9 +228,14 @@ export function parseUseBody(bodyText: string): { ok: true; req: UseRequest } | 
     messages.push({ role, content })
   }
   if (!messages.length) return { ok: false, error: 'messages required', status: 400 }
-  if (image && messages.at(-1)?.role !== 'user') return { ok: false, error: 'A screenshot requires a final user question.', status: 400 }
-  const temperature = typeof body.temperature === 'number' && Number.isFinite(body.temperature) ? body.temperature : undefined
-  const maxTokens = typeof body.maxTokens === 'number' && Number.isFinite(body.maxTokens) ? Math.min(8192, Math.max(16, Math.floor(body.maxTokens))) : undefined
+  if (image && messages.at(-1)?.role !== 'user')
+    return { ok: false, error: 'A screenshot requires a final user question.', status: 400 }
+  const temperature =
+    typeof body.temperature === 'number' && Number.isFinite(body.temperature) ? body.temperature : undefined
+  const maxTokens =
+    typeof body.maxTokens === 'number' && Number.isFinite(body.maxTokens)
+      ? Math.min(8192, Math.max(16, Math.floor(body.maxTokens)))
+      : undefined
   let tier: 'base' | 'deep' | undefined
   if (typeof (body as { tier?: unknown }).tier === 'string') {
     const t = String((body as { tier: string }).tier).trim()
@@ -218,7 +248,11 @@ export function parseUseBody(bodyText: string): { ok: true; req: UseRequest } | 
   }
   const rawMode = typeof body.mode === 'string' ? body.mode : ''
   const mode =
-    rawMode === 'answer' || rawMode === 'vision' || rawMode === 'suggest' || rawMode === 'summary' || rawMode === 'recap'
+    rawMode === 'answer' ||
+    rawMode === 'vision' ||
+    rawMode === 'suggest' ||
+    rawMode === 'summary' ||
+    rawMode === 'recap'
       ? rawMode
       : undefined
   return {
@@ -241,22 +275,32 @@ export function parseUseBody(bodyText: string): { ok: true; req: UseRequest } | 
 export function openaiMessages(req: UseRequest): unknown[] {
   return [
     ...(req.system ? [{ role: 'system', content: req.system }] : []),
-    ...req.messages.map((message, index) => req.image && index === req.messages.length - 1
-      ? { role: message.role, content: [
-          { type: 'text', text: message.content },
-          { type: 'image_url', image_url: { url: `data:${req.image.mimeType};base64,${req.image.data}` } }
-        ] }
-      : message)
+    ...req.messages.map((message, index) =>
+      req.image && index === req.messages.length - 1
+        ? {
+            role: message.role,
+            content: [
+              { type: 'text', text: message.content },
+              { type: 'image_url', image_url: { url: `data:${req.image.mimeType};base64,${req.image.data}` } }
+            ]
+          }
+        : message
+    )
   ]
 }
 
 export function anthropicMessages(req: UseRequest): unknown[] {
-  return req.messages.map((message, index) => req.image && index === req.messages.length - 1
-    ? { role: message.role, content: [
-        { type: 'image', source: { type: 'base64', media_type: req.image.mimeType, data: req.image.data } },
-        { type: 'text', text: message.content }
-      ] }
-    : message)
+  return req.messages.map((message, index) =>
+    req.image && index === req.messages.length - 1
+      ? {
+          role: message.role,
+          content: [
+            { type: 'image', source: { type: 'base64', media_type: req.image.mimeType, data: req.image.data } },
+            { type: 'text', text: message.content }
+          ]
+        }
+      : message
+  )
 }
 
 /** Keep usage metadata but never retain screenshot OR meeting-text payloads in AI Gateway logs/cache. */
@@ -299,7 +343,11 @@ function anthropicText(data: unknown): { text: string; inputTokens?: number; out
   const body = data as { content?: unknown; usage?: { input_tokens?: unknown; output_tokens?: unknown } }
   const blocks = Array.isArray(body.content) ? body.content : []
   const text = blocks
-    .map((b) => (b && typeof b === 'object' && (b as { type?: unknown; text?: unknown }).type === 'text' ? String((b as { text?: unknown }).text ?? '') : ''))
+    .map((b) =>
+      b && typeof b === 'object' && (b as { type?: unknown; text?: unknown }).type === 'text'
+        ? String((b as { text?: unknown }).text ?? '')
+        : ''
+    )
     .join('')
     .trim()
   if (!text) return null
@@ -427,9 +475,23 @@ export async function handleUse(
   if (!(await seatHasEntitlement(store, seat, now, 'operator_keys'))) {
     return fail(OPERATOR_KEYS_NOT_ENTITLED, 403, { code: 'not-entitled' })
   }
-  const refusal = await enforceModelPolicy(env.DB, policyCapabilityForUse(parsed.req), parsed.req.provider, parsed.req.model)
+  const exhausted = await refuseIfMeterExhausted(store, seat, deviceId, now)
+  if (exhausted) return exhausted
+  const refusal = await enforceModelPolicy(
+    env.DB,
+    policyCapabilityForUse(parsed.req),
+    parsed.req.provider,
+    parsed.req.model
+  )
   if (refusal) {
-    await store.audit(crypto.randomUUID(), now, deviceId, 'model-policy.blocked', null, `${parsed.req.provider}/${parsed.req.model}`)
+    await store.audit(
+      crypto.randomUUID(),
+      now,
+      deviceId,
+      'model-policy.blocked',
+      null,
+      `${parsed.req.provider}/${parsed.req.model}`
+    )
     return fail(refusal.error, refusal.status, { code: refusal.code })
   }
   const unlocked = await decryptActiveLlmSecret(store, env.OPERATOR_VAULT_KEY, parsed.req.provider)

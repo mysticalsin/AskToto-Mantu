@@ -33,6 +33,11 @@ export function clearRoutes(): void {
   routes.length = 0
 }
 
+/** Test-only: the registered table, so the RBAC matrix can prove every admin route has a row. */
+export function listRoutes(): readonly RouteDef<unknown>[] {
+  return routes
+}
+
 function matchPattern(pattern: RegExp | string, pathname: string): RouteMatch | null {
   if (typeof pattern === 'string') {
     return pattern === pathname ? { params: {} } : null

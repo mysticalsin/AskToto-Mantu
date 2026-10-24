@@ -12,6 +12,7 @@
  * `density` and `reducedMotion` do have defaults (a currency label and two UI preferences), which is
  * a different thing from inventing a dollar amount.
  */
+import { isOwnerEmail } from '../access'
 import type { D1DatabaseLike } from '../d1'
 import { json } from '../http'
 import { auditLog, type AdminCtx } from './admin-ctx'
@@ -68,7 +69,10 @@ export { INVALID as INVALID_SETTING_VALUE }
 
 /** Pure validation, shared by the read path (defensive against a hand-edited row) and the PATCH
  *  route (defensive against a bad request body). Returns the coerced value, or the `INVALID` sentinel. */
-export function validateSettingValue(key: SettingsKey, raw: unknown): OperatorSettingsValue[SettingsKey] | typeof INVALID {
+export function validateSettingValue(
+  key: SettingsKey,
+  raw: unknown
+): OperatorSettingsValue[SettingsKey] | typeof INVALID {
   switch (key) {
     case 'hourlyRate':
       if (raw === null) return null
@@ -184,6 +188,12 @@ export function registerSettingsRoutes(): void {
       const body = (await request.json().catch(() => ({}))) as Record<string, unknown>
       const known = SETTINGS_KEYS.filter((k) => Object.prototype.hasOwnProperty.call(body, k))
       if (!known.length) return json({ ok: false, error: 'no recognised settings key in body' }, 400)
+      // G81: the per-seat budget decides who can spend managed AI, so it is owner-only and fails closed
+      // (an unset OWNER_EMAILS means nobody). Checked before anything is written, so a mixed PATCH writes nothing.
+      if (known.includes('dailyTokenBudgetPerSeat') && !isOwnerEmail(ctx.email, ctx.env)) {
+        await auditLog(ctx, 'settings-update.denied', null, 'dailyTokenBudgetPerSeat requires an owner')
+        return json({ ok: false, error: 'OWNER_REQUIRED' }, 403)
+      }
       const before = await readOperatorSettings(ctx.env.DB)
       const result = await writeOperatorSettingsPatch(ctx.env.DB, body, ctx.email, ctx.now)
       if (!result.ok) {

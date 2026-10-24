@@ -1438,3 +1438,59 @@ describe('M2-0412 fleet model policy enforcement (server-side, cannot be bypasse
     expect(res.status).toBe(200)
   })
 })
+
+describe('G81 managed token budget on /v1/ask', () => {
+  const askRow = (tokens: number) => ({
+    id: 'g81-ask-ask',
+    device_id: 'device-ask',
+    ts: NOW - 1000,
+    mode: 'answer',
+    skill_id: null,
+    skill_version: null,
+    provider: 'openai',
+    model: null,
+    ttft_ms: null,
+    total_ms: null,
+    input_tokens: tokens,
+    output_tokens: 0,
+    cache_read: null,
+    cache_write: null,
+    cache_uncached: null,
+    cache_status: null,
+    cache_ttl: null,
+    outcome: 'answered',
+    rating: null,
+    prompt_cipher: null,
+    prompt_iv: null,
+    preview: null,
+    question_type: null,
+    path_tag: 'portal-cf'
+  })
+
+  it('handleAsk returns 429 meter_exhausted before any provider fetch', async () => {
+    const store = memoryStore()
+    await addProviderKey(store, 'openai', OPENAI_SECRET)
+    await approveDevice(store)
+    await store.putSetting('dailyTokenBudgetPerSeat', '100', 'owner', NOW)
+    await store.insertAsk(askRow(100))
+    const vault = vi.spyOn(store, 'listVaultRows')
+    const providerFetch = vi.fn(async () => new Response('{}', { status: 200 }))
+    const res = await askProviderWithStore(store, 'openai', providerFetch as unknown as typeof fetch, 'ask-over')
+    expect(res.status).toBe(429)
+    expect(await res.json()).toMatchObject({ ok: false, error: 'meter_exhausted', meter: { used: 100, limit: 100 } })
+    expect(vault).not.toHaveBeenCalled()
+    expect(providerFetch).not.toHaveBeenCalled()
+    const audits = await store.listAudit(20, { action: 'meter_exhausted' })
+    expect(audits).toHaveLength(1)
+    expect(audits[0]).toMatchObject({ actor: 'device-ask', detail: 'managed_tokens' })
+  })
+
+  it('an unapproved seat gets 403 and never learns the meter (check order: seat before budget)', async () => {
+    const store = memoryStore()
+    await addProviderKey(store, 'openai', OPENAI_SECRET)
+    await store.putSetting('dailyTokenBudgetPerSeat', '1', 'owner', NOW)
+    const res = await askProviderWithStore(store, 'openai', vi.fn() as unknown as typeof fetch, 'ask-noseat')
+    expect(res.status).toBe(403)
+    expect(JSON.stringify(await res.json())).not.toContain('meter')
+  })
+})
