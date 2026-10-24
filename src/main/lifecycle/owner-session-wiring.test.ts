@@ -4,6 +4,7 @@ import { CloudSpeechSegmentEventSchema } from '@shared/cloud-speech'
 import { OWNER_SESSION_IPC } from '@shared/contracts/owner-session'
 import { CONNECTOR_ACCOUNTS_IPC } from '@shared/connector-accounts'
 import { ASSISTANT_IPC } from '@shared/assistants'
+import { CUSTOM_MCP_IPC } from '@shared/custom-mcp'
 import { DICTATION_MEMORY_IPC } from '@shared/dictation-memory'
 import { USER_MEMORY_IPC } from '@shared/user-memory'
 import { IPC } from '@shared/ipc'
@@ -74,6 +75,7 @@ describe('owner session wiring', () => {
     expect(ipcMain.handle.mock.calls.map((call) => call[0])).toEqual([
       OWNER_SESSION_IPC.status,
       ...Object.values(CONNECTOR_ACCOUNTS_IPC),
+      ...Object.values(CUSTOM_MCP_IPC),
       SESSION_CONTEXT_IPC.appendLine,
       IPC.appendMeetingJournal,
       ...Object.values(DICTATION_MEMORY_IPC),
@@ -126,6 +128,7 @@ describe('owner session wiring', () => {
           length:
             3 +
             Object.values(CONNECTOR_ACCOUNTS_IPC).length +
+            Object.values(CUSTOM_MCP_IPC).length +
             Object.values(DICTATION_MEMORY_IPC).length +
             4 +
             Object.values(ASSISTANT_IPC).length +
