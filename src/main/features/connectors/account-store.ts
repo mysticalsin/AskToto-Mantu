@@ -15,9 +15,22 @@ function assertStoreKey(kind: ConnectorKind, scopeKey: string): void {
   }
 }
 
-function within(base: string, target: string): boolean {
+export function within(base: string, target: string): boolean {
   const path = relative(base, target)
   return path !== '' && path !== '..' && !path.startsWith(`..${sep}`) && !isAbsolute(path)
+}
+
+/** Atomic 0600 JSON write (temp file + rename) into a 0700 directory. */
+export async function writeJsonAtomic(path: string, state: unknown): Promise<void> {
+  const temp = `${path}.${process.pid}.tmp`
+  await mkdir(dirname(path), { recursive: true, mode: 0o700 })
+  try {
+    await writeFile(temp, JSON.stringify(state), { mode: 0o600 })
+    await rename(temp, path)
+  } catch (error) {
+    await rm(temp, { force: true }).catch(() => undefined)
+    throw error
+  }
 }
 
 export function createFileConnectorAccountStore(userDataPath: () => string): ConnectorAccountStore {
@@ -42,16 +55,7 @@ export function createFileConnectorAccountStore(userDataPath: () => string): Con
     },
 
     async save(kind, scopeKey, state) {
-      const path = pathFor(kind, scopeKey)
-      const temp = `${path}.${process.pid}.tmp`
-      await mkdir(dirname(path), { recursive: true, mode: 0o700 })
-      try {
-        await writeFile(temp, JSON.stringify(state), { mode: 0o600 })
-        await rename(temp, path)
-      } catch (error) {
-        await rm(temp, { force: true }).catch(() => undefined)
-        throw error
-      }
+      await writeJsonAtomic(pathFor(kind, scopeKey), state)
     }
   }
 }

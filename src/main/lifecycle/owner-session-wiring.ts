@@ -27,6 +27,7 @@ import { bindMeetingSpeechInvalidation, bootstrapMeetingSpeech } from './meeting
 import { bootMainMemoryPartitions } from './memory-partition-wiring'
 import { createMainOwnerSessionAuthority, type OwnerSessionAuthority } from './owner-session-authority'
 import { bootstrapConnectorAccounts } from '../features/connectors'
+import { bootstrapCustomMcp } from '../features/custom-mcp'
 
 export interface OwnerSessionWiringDeps {
   ipcMain: Pick<IpcMain, 'handle' | 'on'>
@@ -90,6 +91,13 @@ export function createOwnerSessionWiring(deps: OwnerSessionWiringDeps): OwnerSes
     ownerSession,
     userDataPath: () => app.getPath('userData'),
     onWillQuit: (listener) => app.once('will-quit', listener)
+  })
+  bootstrapCustomMcp({
+    ipcMain,
+    assertMainWindow,
+    requireAuth: () => requireAuth(),
+    ownerSession,
+    userDataPath: () => app.getPath('userData')
   })
   const transcriptRevision = createMainTranscriptRevision(
     (frame) => ownerSession.current(frame),

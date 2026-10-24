@@ -9,7 +9,7 @@ import {
 import { getGraphTokenOutcome } from '../../auth'
 import { auditLog } from '../../logger'
 import { OUTLOOK_DRAFT_CONSENT_COPY, OUTLOOK_EVENT_CONSENT_COPY, type OutlookWriteResult } from '../../outlook-write'
-import type { AccountResolver } from './account-ref'
+import type { ExecutorAccountResolver } from './account-ref'
 import type { ConnectorAccountRegistry } from './account-registry'
 import { createCatalogPublisher } from './catalog-publisher'
 import {
@@ -64,10 +64,14 @@ export async function ensureCurrentConnectorAccount(kind: ConnectorKind): Promis
   return accountRuntime.ensureCurrentAccount(kind)
 }
 
-const registeredAccounts: AccountResolver = {
-  resolve: (kind, requested) => accountRuntime?.registry.resolve(kind, requested) ?? null,
-  isReady: (kind, ref, effect) => accountRuntime?.registry.isReady(kind, ref, effect) ?? false,
-  observe: async (kind, ref, signal) => accountRuntime?.registry.observe(kind, ref, signal) ?? false
+// The built-in catalog has no `custom-mcp` operations: those run through their own per-registration executors.
+const registeredAccounts: ExecutorAccountResolver = {
+  resolve: (kind, requested) =>
+    kind === 'custom-mcp' ? null : (accountRuntime?.registry.resolve(kind, requested) ?? null),
+  isReady: (kind, ref, effect) =>
+    kind === 'custom-mcp' ? false : (accountRuntime?.registry.isReady(kind, ref, effect) ?? false),
+  observe: async (kind, ref, signal) =>
+    kind === 'custom-mcp' ? false : (accountRuntime?.registry.observe(kind, ref, signal) ?? false)
 }
 
 let executor: ConnectorExecutor | null = null
@@ -103,7 +107,7 @@ export async function runConnectorWriteDetailed(
   }
   let accountRef: AccountRef | null = null
   try {
-    accountRef = await ensureCurrentConnectorAccount(op.kind)
+    accountRef = op.kind === 'custom-mcp' ? null : await ensureCurrentConnectorAccount(op.kind)
   } catch {
     accountRef = null
   }

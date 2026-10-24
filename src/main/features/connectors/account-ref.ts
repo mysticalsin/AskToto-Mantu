@@ -1,5 +1,5 @@
 import { createHmac } from 'node:crypto'
-import type { AccountRef, ConnectorEffect, ConnectorKind } from '@shared/connector-catalog'
+import type { AccountRef, ConnectorEffect, ConnectorKind, ExecutorConnectorKind } from '@shared/connector-catalog'
 import type { ConnectorAccountHealth, ConnectorAccountHealthSignal } from '@shared/connector-accounts'
 
 export interface ConnectorAccountScope {
@@ -13,6 +13,13 @@ export interface AccountResolver {
   isReady(kind: ConnectorKind, accountRef: AccountRef, effect: ConnectorEffect): boolean
   /** Records only a result observed from the provider or its token refresh path. */
   observe(kind: ConnectorKind, accountRef: AccountRef, signal: ConnectorAccountHealthSignal): Promise<boolean>
+}
+
+/** What the executor needs: the same three questions, for every kind it can run (including runtime `custom-mcp`). */
+export interface ExecutorAccountResolver {
+  resolve(kind: ExecutorConnectorKind, requestedAccountRef?: AccountRef): AccountRef | null
+  isReady(kind: ExecutorConnectorKind, accountRef: AccountRef, effect: ConnectorEffect): boolean
+  observe(kind: ExecutorConnectorKind, accountRef: AccountRef, signal: ConnectorAccountHealthSignal): Promise<boolean>
 }
 
 const KEY = /^[0-9a-f]{64}$/
@@ -32,7 +39,7 @@ function accountSalt(scope: ConnectorAccountScope): string {
 /** HMAC makes refs stable within one verified owner/tenant while hiding provider identity and tenant values. */
 export function deriveConnectorAccountRef(
   scope: ConnectorAccountScope,
-  kind: ConnectorKind,
+  kind: ExecutorConnectorKind,
   providerAccountId: string
 ): AccountRef {
   const identity = providerAccountId.trim()

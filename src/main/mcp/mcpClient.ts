@@ -77,7 +77,7 @@ function isLinkLocalIPv4(ip: string): boolean {
  * otherwise bypass BLOCKED_HOSTS entirely, since URL's own hostname string never matches the plain
  * dotted-decimal form. Returns the embedded IPv4 address if `host` is one of these, else null.
  */
-function ipv4MappedAddress(host: string): string | null {
+export function ipv4MappedAddress(host: string): string | null {
   const dotted = host.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/i)
   if (dotted) return dotted[1]
   const hex = host.match(/^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/i)
@@ -93,7 +93,7 @@ function ipv4MappedAddress(host: string): string | null {
  * A cloud-metadata host name or address, including an IPv4-mapped IPv6 spelling of one (the network
  * stack routes that to the embedded IPv4 host).
  */
-function isCloudMetadataAddress(host: string): boolean {
+export function isCloudMetadataAddress(host: string): boolean {
   const ipv4 = ipv4MappedAddress(host) ?? host
   return BLOCKED_HOSTS.has(host) || BLOCKED_HOSTS.has(ipv4) || isLinkLocalIPv4(ipv4)
 }
@@ -130,10 +130,27 @@ class CloudMetadataAddressError extends Error {
   readonly code = 'ECLOUDMETADATA'
 }
 
-async function resolveAllowed(hostname: string): Promise<LookupAddress[]> {
+/** An optional extra per-address check (custom MCP, G63). Returns the refusal, or null to allow. */
+export type AddressGuard = (ip: string) => Error | null
+
+/** Raised when an `AddressGuard` refuses a resolved address; carries no host or address text. */
+export class AddressRefusedError extends Error {
+  readonly code = 'EADDRGUARD'
+  constructor(readonly reason: string) {
+    super('address refused by policy')
+  }
+}
+
+async function resolveAllowed(hostname: string, guard?: AddressGuard): Promise<LookupAddress[]> {
   const addresses = await lookup(hostname, { all: true })
   if (addresses.some((a) => isCloudMetadataAddress(a.address))) {
     throw new CloudMetadataAddressError(`${hostname} resolves to a cloud metadata address`)
+  }
+  if (guard) {
+    for (const a of addresses) {
+      const refusal = guard(a.address)
+      if (refusal) throw new AddressRefusedError(refusal.message)
+    }
   }
   return addresses
 }
@@ -151,12 +168,12 @@ async function resolveAllowed(hostname: string): Promise<LookupAddress[]> {
  * forms are handled. A pinned tunnel calls this for an IP-literal host as well, and `lookup` returns the
  * literal unchanged — validateEndpointUrl has already refused a metadata literal before this ever runs.
  */
-function sessionLookup(): LookupFunction {
+function sessionLookup(guard?: AddressGuard): LookupFunction {
   const pinned = new Map<string, Promise<LookupAddress[]>>()
   return (hostname, options, callback) => {
     let answer = pinned.get(hostname)
     if (!answer) {
-      answer = resolveAllowed(hostname)
+      answer = resolveAllowed(hostname, guard)
       pinned.set(hostname, answer)
     }
     answer.then(
@@ -234,7 +251,8 @@ async function withClient<T>(
   apiKey: string,
   extraHeaders: Record<string, string>,
   timeoutMs: number,
-  fn: (client: Client, opts: RequestOptions) => Promise<T>
+  fn: (client: Client, opts: RequestOptions) => Promise<T>,
+  options: { headers?: Record<string, string>; addressGuard?: AddressGuard } = {}
 ): Promise<T> {
   // MCP SDK statically imported (NOT `await import()`): the main process is bytecode-compiled and dynamic
   // import throws "A dynamic import callback was not specified" under bytecode, which broke every BidStack
@@ -247,12 +265,12 @@ async function withClient<T>(
   // tunnels at the same pinned answer. Pinning therefore never bypasses a corporate proxy Plane/ClickUp
   // MCP are reached through, and the proxy never re-resolves the host. Throws UnpinnableProxyError on a
   // SOCKS env proxy — connectMcpNow/pushToMcp's callers already wrap this in try/catch.
-  const dispatcher = routeDispatcher(sessionLookup())
+  const dispatcher = routeDispatcher(sessionLookup(options.addressGuard))
   // Fresh client + transport for this one call — never reused across calls, matching how dust.ts
   // creates a fresh DustAPI per stream.
   const transport = new StreamableHTTPClientTransport(new URL(endpointUrl), {
     requestInit: {
-      headers: { Authorization: `Bearer ${apiKey}`, ...extraHeaders }
+      headers: options.headers ?? { Authorization: `Bearer ${apiKey}`, ...extraHeaders }
     },
     // Every request on this transport, including the SDK's own event-stream GET (which never sees
     // `requestInit` above), refuses a redirect — forced here, not left to `requestInit`, so it actually
@@ -292,6 +310,26 @@ async function withClient<T>(
       /* best-effort */
     }
   }
+}
+
+/**
+ * Custom MCP seam (G63): the same session, redirect refusal, DNS pin and timeouts as every built-in
+ * connection, with caller-supplied headers (replacing the bearer default) and an optional per-address guard
+ * applied to every resolved address.
+ */
+export function withMcpClient<T>(
+  endpointUrl: string,
+  headers: Record<string, string>,
+  timeoutMs: number,
+  fn: (client: Client, opts: RequestOptions) => Promise<T>,
+  options: { addressGuard?: AddressGuard } = {}
+): Promise<T> {
+  return withClient(endpointUrl, '', {}, timeoutMs, fn, { headers, addressGuard: options.addressGuard })
+}
+
+/** True when `e` or one of its causes is an address-guard refusal. */
+export function isAddressRefusal(e: unknown): boolean {
+  return errorChain(e).some((c) => c instanceof AddressRefusedError || c instanceof CloudMetadataAddressError)
 }
 
 export interface McpConnectResult {

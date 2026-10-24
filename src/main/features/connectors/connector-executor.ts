@@ -1,6 +1,6 @@
 import {
   type AccountRef,
-  type ConnectorKind,
+  type ExecutorConnectorKind,
   type ConnectorProvenance,
   type ConnectorRefusalReason,
   type ConnectorResult,
@@ -8,7 +8,7 @@ import {
 } from '@shared/connector-catalog'
 import type { ConnectorAccountHealthSignal } from '@shared/connector-accounts'
 import { ACTION_OBSERVATION_MAX_CHARS, actionDigest, actionIdempotencyKey, isArgsHash } from '../../action-guard'
-import type { AccountResolver } from './account-ref'
+import type { ExecutorAccountResolver } from './account-ref'
 import type { CatalogPublisher } from './catalog-publisher'
 
 /** What the owner approved. Main mints it; the arguments are bound by `argsHash`. */
@@ -43,7 +43,7 @@ export type ConnectorHandlers = Readonly<Record<string, ConnectorHandler>>
 /** Typed seam for G31 grants: does the account still hold the scopes this op needs, right now? */
 export interface ConnectorGrantSeam {
   check(input: {
-    connectorKind: ConnectorKind
+    connectorKind: ExecutorConnectorKind
     opId: string
     scopes: readonly string[]
     accountRef: AccountRef
@@ -80,7 +80,7 @@ export interface ConnectorExecutorDeps {
   catalog: CatalogPublisher
   handlers: ConnectorHandlers
   grants: ConnectorGrantSeam
-  accounts: AccountResolver
+  accounts: ExecutorAccountResolver
   writeGate: ConnectorWriteGate
   /** Metadata only: opId, revision, outcome. Never input or output content. */
   audit?: (event: string, metadata: Record<string, string | number | boolean>) => void

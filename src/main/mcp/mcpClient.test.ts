@@ -34,9 +34,7 @@ import { z } from 'zod'
  * node:dns/promises, so registered hosts are answered from the queue and counted; a mock of the other
  * module would never be consulted at all.
  */
-const dnsHosts = vi.hoisted(
-  () => new Map<string, { queue: { address: string; family: number }[][]; calls: number }>()
-)
+const dnsHosts = vi.hoisted(() => new Map<string, { queue: { address: string; family: number }[][]; calls: number }>())
 
 function mockDnsHost(hostname: string, answers: string[][]): void {
   dnsHosts.set(hostname, {
@@ -78,7 +76,7 @@ vi.mock('../logger', () => ({
 }))
 
 import { installProxyAwareFetch } from '../net/install-proxy'
-import { connectMcp, pushToMcp } from './mcpClient'
+import { AddressRefusedError, connectMcp, pushToMcp, withMcpClient } from './mcpClient'
 
 const API_KEY = 'test-mcp-key-123'
 const LABEL = 'Polo Pre-Sales'
@@ -404,7 +402,12 @@ describe('mcpClient — against a real local Streamable HTTP mock (not a live Bi
   it('refuses IPv4-mapped IPv6 forms of the cloud-metadata address (SSRF denylist bypass)', async () => {
     // Both forms resolve/route to the same host as 169.254.169.254 — the OS network stack treats an
     // IPv4-mapped IPv6 literal as that IPv4 address, so a plain-string hostname check alone misses them.
-    const dotted = await connectMcp('http://[::ffff:169.254.169.254]/latest/meta-data/', API_KEY, NO_EXTRA_HEADERS, LABEL)
+    const dotted = await connectMcp(
+      'http://[::ffff:169.254.169.254]/latest/meta-data/',
+      API_KEY,
+      NO_EXTRA_HEADERS,
+      LABEL
+    )
     expect(dotted.ok).toBe(false)
     expect(dotted.error).toMatch(/cloud metadata/i)
 
@@ -457,7 +460,14 @@ describe('mcpClient — extraHeaders (Plane-shaped: bearer + X-Workspace-slug)',
 
   it('pushToMcp also carries extraHeaders on a real call', async () => {
     const args = { title: 'Renewal', date: '2026-06-30', summary: 'Notes.' }
-    const r = await pushToMcp(mock.url, API_KEY, { 'X-Workspace-slug': 'acme-corp' }, 'push_meeting_recap', args, 'Plane')
+    const r = await pushToMcp(
+      mock.url,
+      API_KEY,
+      { 'X-Workspace-slug': 'acme-corp' },
+      'push_meeting_recap',
+      args,
+      'Plane'
+    )
     expect(r.ok).toBe(true)
     expect(mock.calls.at(-1)).toEqual(args)
   })
@@ -602,12 +612,21 @@ describe("mcpClient — refuses every redirect, including the SDK's own event-st
 // (system route: every host; env route: every host outside NO_PROXY) undici's ProxyAgent resolves and dials
 // the target itself, so neither the metadata refusal nor the DNS-rebinding pin ran at all. The fix pins the
 // proxy's own tunnel to the address `lookup` resolved instead of letting the proxy resolve the host name.
-const PROXY_ROUTE_ENV_KEYS = ['HTTP_PROXY', 'http_proxy', 'HTTPS_PROXY', 'https_proxy', 'ALL_PROXY', 'all_proxy'] as const
+const PROXY_ROUTE_ENV_KEYS = [
+  'HTTP_PROXY',
+  'http_proxy',
+  'HTTPS_PROXY',
+  'https_proxy',
+  'ALL_PROXY',
+  'all_proxy'
+] as const
 type ProxyRouteEnvKey = (typeof PROXY_ROUTE_ENV_KEYS)[number]
 const PROXY_ENV_KEYS = [...PROXY_ROUTE_ENV_KEYS, 'NO_PROXY', 'no_proxy']
 const SOCKS_PROXY_URLS = ['socks5://127.0.0.1:1', 'socks://127.0.0.1:1'] as const
 const SOCKS_PROXY_CASES = PROXY_ROUTE_ENV_KEYS.flatMap((envKey, envIndex) =>
-  SOCKS_PROXY_URLS.map((proxyUrl, schemeIndex) => [envKey, proxyUrl, envIndex * SOCKS_PROXY_URLS.length + schemeIndex] as const)
+  SOCKS_PROXY_URLS.map(
+    (proxyUrl, schemeIndex) => [envKey, proxyUrl, envIndex * SOCKS_PROXY_URLS.length + schemeIndex] as const
+  )
 )
 
 describe('mcpClient — the metadata refusal and the DNS pin hold on every proxy route (M2-0222)', () => {
@@ -665,41 +684,42 @@ describe('mcpClient — the metadata refusal and the DNS pin hold on every proxy
     await useRoute({})
   })
 
-  it.each(ROUTES)(
-    '$slug: refuses a host resolving to a cloud-metadata address before any tunnel or request',
-    async ({ slug, use }) => {
-      await use()
-      const host = `metadata-${slug}.mcp.test`
-      mockDnsHost(host, [['169.254.169.254']])
-      const beforeTargets = proxy.targets.length
-      const beforeRequests = mock.requests()
+  it.each(ROUTES)('$slug: refuses a host resolving to a cloud-metadata address before any tunnel or request', async ({
+    slug,
+    use
+  }) => {
+    await use()
+    const host = `metadata-${slug}.mcp.test`
+    mockDnsHost(host, [['169.254.169.254']])
+    const beforeTargets = proxy.targets.length
+    const beforeRequests = mock.requests()
 
-      const r = await connectMcp(`http://${host}:${mockPort}/mcp`, API_KEY, NO_EXTRA_HEADERS, LABEL)
+    const r = await connectMcp(`http://${host}:${mockPort}/mcp`, API_KEY, NO_EXTRA_HEADERS, LABEL)
 
-      expect(r.ok).toBe(false)
-      expect(r.error).toMatch(/cloud metadata/i)
-      expect(proxy.targets.length).toBe(beforeTargets)
-      expect(mock.requests()).toBe(beforeRequests)
-    }
-  )
+    expect(r.ok).toBe(false)
+    expect(r.error).toMatch(/cloud metadata/i)
+    expect(proxy.targets.length).toBe(beforeTargets)
+    expect(mock.requests()).toBe(beforeRequests)
+  })
 
-  it.each(ROUTES)(
-    '$slug: dials, or tunnels to, only the address it pinned, consulting the resolver once',
-    async ({ slug, tunnels, use }) => {
-      await use()
-      const host = `rebind-${slug}.mcp.test`
-      mockDnsHost(host, [['127.0.0.1'], ['169.254.169.254']])
-      const beforeTargets = proxy.targets.length
+  it.each(ROUTES)('$slug: dials, or tunnels to, only the address it pinned, consulting the resolver once', async ({
+    slug,
+    tunnels,
+    use
+  }) => {
+    await use()
+    const host = `rebind-${slug}.mcp.test`
+    mockDnsHost(host, [['127.0.0.1'], ['169.254.169.254']])
+    const beforeTargets = proxy.targets.length
 
-      const r = await connectMcp(`http://${host}:${mockPort}/mcp`, API_KEY, NO_EXTRA_HEADERS, LABEL)
+    const r = await connectMcp(`http://${host}:${mockPort}/mcp`, API_KEY, NO_EXTRA_HEADERS, LABEL)
 
-      expect(r.ok).toBe(true)
-      expect(r.tools).toContain('push_meeting_recap')
-      expect(dnsCallCount(host)).toBe(1)
-      const newTargets = proxy.targets.slice(beforeTargets)
-      expect([...new Set(newTargets)]).toEqual(tunnels ? [`127.0.0.1:${mockPort}`] : [])
-    }
-  )
+    expect(r.ok).toBe(true)
+    expect(r.tools).toContain('push_meeting_recap')
+    expect(dnsCallCount(host)).toBe(1)
+    const newTargets = proxy.targets.slice(beforeTargets)
+    expect([...new Set(newTargets)]).toEqual(tunnels ? [`127.0.0.1:${mockPort}`] : [])
+  })
 
   it('system: tunnels to the IPv4 answer when the host also has an IPv6 one', async () => {
     await useRoute({ system: proxy.url })
@@ -736,21 +756,20 @@ describe('mcpClient — the metadata refusal and the DNS pin hold on every proxy
     }
   })
 
-  it.each(SOCKS_PROXY_CASES)(
-    'env %s %s proxy is refused with an actionable message and sends nothing',
-    async (envKey, proxyUrl, caseIndex) => {
-      await useRoute({ env: proxyUrl, envKey })
-      const host = `socks-route-${caseIndex}.mcp.test`
-      mockDnsHost(host, [['127.0.0.1']])
-      const before = mock.requests()
+  it.each(
+    SOCKS_PROXY_CASES
+  )('env %s %s proxy is refused with an actionable message and sends nothing', async (envKey, proxyUrl, caseIndex) => {
+    await useRoute({ env: proxyUrl, envKey })
+    const host = `socks-route-${caseIndex}.mcp.test`
+    mockDnsHost(host, [['127.0.0.1']])
+    const before = mock.requests()
 
-      const r = await connectMcp(`http://${host}:${mockPort}/mcp`, API_KEY, NO_EXTRA_HEADERS, LABEL)
+    const r = await connectMcp(`http://${host}:${mockPort}/mcp`, API_KEY, NO_EXTRA_HEADERS, LABEL)
 
-      expect(r.ok).toBe(false)
-      expect(r.error).toMatch(/SOCKS/)
-      expect(mock.requests()).toBe(before)
-    }
-  )
+    expect(r.ok).toBe(false)
+    expect(r.error).toMatch(/SOCKS/)
+    expect(mock.requests()).toBe(before)
+  })
 
   it('env: an HTTP_PROXY SOCKS route is refused even when HTTPS_PROXY selects env boot mode', async () => {
     await useRoute({ env: proxy.url, envKey: 'HTTPS_PROXY', extraEnv: { HTTP_PROXY: 'socks5://127.0.0.1:1' } })
@@ -765,5 +784,47 @@ describe('mcpClient — the metadata refusal and the DNS pin hold on every proxy
     expect(r.error).toMatch(/SOCKS/)
     expect(mock.requests()).toBe(beforeRequests)
     expect(proxy.targets.length).toBe(beforeTargets)
+  })
+})
+
+describe('mcpClient — optional address guard for custom MCP (G63)', () => {
+  let mock: Awaited<ReturnType<typeof startMockMcp>>
+  let mockPort: number
+
+  beforeAll(async () => {
+    mock = await startMockMcp()
+    mockPort = Number(new URL(mock.url).port)
+  })
+  afterAll(async () => {
+    await mock.close()
+  })
+
+  const listTools = (url: string, guard?: (ip: string) => Error | null) =>
+    withMcpClient(
+      url,
+      { Authorization: `Bearer ${API_KEY}` },
+      5_000,
+      async (client, opts) => (await client.listTools(undefined, opts)).tools.length,
+      { addressGuard: guard }
+    )
+  const refusePrivate = (ip: string): Error | null =>
+    ip.startsWith('127.') ? new Error('private address refused') : null
+
+  it('addressGuard refuses a resolved private address (rebinding) before any request is sent', async () => {
+    mockDnsHost('rebind-guarded.mcp.test', [['127.0.0.1']])
+    const before = mock.requests()
+    const error = await listTools(`http://rebind-guarded.mcp.test:${mockPort}/mcp`, refusePrivate).catch(
+      (e: unknown) => e
+    )
+    expect(error).toBeInstanceOf(Error)
+    const chain: unknown[] = []
+    for (let c: unknown = error; c instanceof Error && !chain.includes(c); c = c.cause) chain.push(c)
+    expect(chain.some((c) => c instanceof AddressRefusedError)).toBe(true)
+    expect(mock.requests()).toBe(before)
+  })
+
+  it('default guard unchanged for existing connections (loopback still reachable without a guard)', async () => {
+    mockDnsHost('unguarded.mcp.test', [['127.0.0.1']])
+    expect(await listTools(`http://unguarded.mcp.test:${mockPort}/mcp`)).toBeGreaterThan(0)
   })
 })

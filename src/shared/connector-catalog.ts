@@ -13,6 +13,9 @@ import { z } from 'zod'
 export const CONNECTOR_KINDS = ['outlook'] as const
 export type ConnectorKind = (typeof CONNECTOR_KINDS)[number]
 
+/** Kinds the executor can run. `custom-mcp` (G63) is registered by the owner at runtime, so it is not in CONNECTOR_KINDS. */
+export type ExecutorConnectorKind = ConnectorKind | 'custom-mcp'
+
 /** What an operation does to the account. Everything except `read` must pass the ActionGuard. */
 export const CONNECTOR_EFFECTS = ['read', 'create', 'send', 'modify', 'delete'] as const
 export type ConnectorEffect = (typeof CONNECTOR_EFFECTS)[number]
@@ -26,7 +29,7 @@ export type AccountRef = string & { readonly __brand: 'ConnectorAccountRef' }
 
 export interface ConnectorOperation {
   opId: string
-  kind: ConnectorKind
+  kind: ExecutorConnectorKind
   effect: ConnectorEffect
   /** One line for confirm cards and logs. */
   summary: string
@@ -115,7 +118,7 @@ export type ConnectorRefusalReason =
 
 /** Where a result came from. Carried on every successful and failed call. */
 export interface ConnectorProvenance {
-  connectorKind: ConnectorKind
+  connectorKind: ExecutorConnectorKind
   accountRef: AccountRef
   opId: string
   revision: number
