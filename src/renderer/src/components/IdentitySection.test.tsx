@@ -24,7 +24,7 @@ describe('MQA-304 — one working licence activation surface', () => {
     expect(source).toContain(
       '<IdentitySection managedTier={checking ? (plan?.lastKnownTier ?? null) : (status?.tier ?? null)} />'
     )
-    expect(source).toContain("aria-label=\"Métis licence key\"")
+    expect(source).toContain('aria-label="Métis licence key"')
     const identity = readFileSync(join(__dirname, 'IdentitySection.tsx'), 'utf8')
     expect(identity).not.toMatch(/memberLicenseActivate|memberLicenseImportFile/)
   })

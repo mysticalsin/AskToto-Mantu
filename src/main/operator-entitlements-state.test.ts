@@ -51,7 +51,11 @@ describe('operatorGate (unconfigured seat)', () => {
 describe('operatorGate (configured seat)', () => {
   it('MQA-294 does not restore an earlier in-memory grant after resetting a connection', async () => {
     const mod = await importFresh()
-    mod.recordOperatorHeartbeatResult(true, { tier: 'metis', entitlements: { operator_keys: true }, integrationsVersion: 0 })
+    mod.recordOperatorHeartbeatResult(true, {
+      tier: 'metis',
+      entitlements: { operator_keys: true },
+      integrationsVersion: 0
+    })
     mockSettings = { ...BASE_SETTINGS }
     mod.resetOperatorEntitlementsState()
     expect(mod.operatorGate('operator_keys').allowed).toBe(false)
@@ -60,13 +64,21 @@ describe('operatorGate (configured seat)', () => {
     const mod = await importFresh()
     mockSettings = { ...BASE_SETTINGS, operatorIngestSecret: '', operatorLicenseToken: 'METIS-OP-1.licensed-seat' }
     expect(mod.operatorGate('operator_keys').allowed).toBe(false)
-    mod.recordOperatorHeartbeatResult(true, { tier: 'metis', entitlements: { operator_keys: true }, integrationsVersion: 0 })
+    mod.recordOperatorHeartbeatResult(true, {
+      tier: 'metis',
+      entitlements: { operator_keys: true },
+      integrationsVersion: 0
+    })
     expect(mod.operatorGate('operator_keys').allowed).toBe(true)
   })
 
   it('does not carry a previous licence grant into a new licence', async () => {
     const mod = await importFresh()
-    mod.recordOperatorHeartbeatResult(true, { tier: 'metis', entitlements: { operator_keys: true }, integrationsVersion: 0 })
+    mod.recordOperatorHeartbeatResult(true, {
+      tier: 'metis',
+      entitlements: { operator_keys: true },
+      integrationsVersion: 0
+    })
     mockSettings = { ...BASE_SETTINGS, operatorLicenseToken: 'METIS-OP-1.replacement' }
     expect(mod.operatorGate('operator_keys').allowed).toBe(false)
   })
@@ -82,7 +94,15 @@ describe('operatorGate (configured seat)', () => {
     const mod = await importFresh()
     mod.recordOperatorHeartbeatResult(true, {
       tier: 'metis',
-      entitlements: { ask: true, listen: true, recap: true, crm_push: true, operator_keys: true, intelligence: true, integrations: true },
+      entitlements: {
+        ask: true,
+        listen: true,
+        recap: true,
+        crm_push: true,
+        operator_keys: true,
+        intelligence: true,
+        integrations: true
+      },
       integrationsVersion: 2
     })
     expect(mod.operatorGate('listen')).toEqual({ allowed: true })
@@ -92,7 +112,11 @@ describe('operatorGate (configured seat)', () => {
 
   it('persists the snapshot to settings so it survives across module instances (cold start)', async () => {
     const mod = await importFresh()
-    mod.recordOperatorHeartbeatResult(true, { tier: 'metis-light', entitlements: { ask: true, intelligence: true }, integrationsVersion: 1 })
+    mod.recordOperatorHeartbeatResult(true, {
+      tier: 'metis-light',
+      entitlements: { ask: true, intelligence: true },
+      integrationsVersion: 1
+    })
     // Fresh module instance, same underlying mockSettings — simulates a relaunch reading the persisted copy.
     const mod2 = await importFresh()
     expect(mod2.operatorGate('intelligence')).toEqual({ allowed: true })
@@ -101,7 +125,11 @@ describe('operatorGate (configured seat)', () => {
 
   it('a failed heartbeat leaves the existing snapshot untouched (grace keeps counting from the last success)', async () => {
     const mod = await importFresh()
-    mod.recordOperatorHeartbeatResult(true, { tier: 'metis', entitlements: { ask: true, listen: true }, integrationsVersion: 1 })
+    mod.recordOperatorHeartbeatResult(true, {
+      tier: 'metis',
+      entitlements: { ask: true, listen: true },
+      integrationsVersion: 1
+    })
     mod.recordOperatorHeartbeatResult(false, { tier: 'metis-light', entitlements: {}, integrationsVersion: 99 })
     expect(mod.operatorGate('listen')).toEqual({ allowed: true })
     expect(mod.operatorIntegrationsVersion()).toBe(1)
@@ -112,7 +140,11 @@ describe('operatorGate (configured seat)', () => {
     try {
       const mod = await importFresh()
       const t0 = Date.now()
-      mod.recordOperatorHeartbeatResult(true, { tier: 'metis', entitlements: { ask: true, listen: true, crm_push: true }, integrationsVersion: 1 }, t0)
+      mod.recordOperatorHeartbeatResult(
+        true,
+        { tier: 'metis', entitlements: { ask: true, listen: true, crm_push: true }, integrationsVersion: 1 },
+        t0
+      )
       vi.setSystemTime(t0 + OPERATOR_ENTITLEMENT_GRACE_MS + 1)
       expect(mod.operatorGate('ask').allowed).toBe(true)
       const gated = mod.operatorGate('listen')
@@ -125,7 +157,11 @@ describe('operatorGate (configured seat)', () => {
 
   it('refuses a feature the reported tier does not include, naming the tier', async () => {
     const mod = await importFresh()
-    mod.recordOperatorHeartbeatResult(true, { tier: 'metis-light', entitlements: { ask: true, intelligence: true }, integrationsVersion: 0 })
+    mod.recordOperatorHeartbeatResult(true, {
+      tier: 'metis-light',
+      entitlements: { ask: true, intelligence: true },
+      integrationsVersion: 0
+    })
     const gated = mod.operatorGate('crm_push')
     expect(gated.allowed).toBe(false)
     expect(gated.reason).toBe('Your Métis Light license does not include CRM push.')
@@ -142,7 +178,11 @@ describe('operatorGate (configured seat)', () => {
 describe('setOperatorEntitlementsSnapshotForTests', () => {
   it('overrides the in-memory snapshot directly, without touching settings', async () => {
     const mod = await importFresh()
-    mod.setOperatorEntitlementsSnapshotForTests({ tier: 'metis', entitlements: { ...emptyOperatorEntitlements(), ask: true, listen: true }, at: Date.now() })
+    mod.setOperatorEntitlementsSnapshotForTests({
+      tier: 'metis',
+      entitlements: { ...emptyOperatorEntitlements(), ask: true, listen: true },
+      at: Date.now()
+    })
     expect(mod.operatorGate('listen')).toEqual({ allowed: true })
   })
 })
@@ -159,7 +199,11 @@ describe('G79 array entitlements, meters and plan snapshot', () => {
   }
   it('a Worker heartbeat with array entitlements grants operator_keys', async () => {
     const mod = await importFresh()
-    mod.recordOperatorHeartbeatResult(true, { tier: 'metis', entitlements: ['ask', 'operator_keys'], integrationsVersion: 0 })
+    mod.recordOperatorHeartbeatResult(true, {
+      tier: 'metis',
+      entitlements: ['ask', 'operator_keys'],
+      integrationsVersion: 0
+    })
     expect(mod.operatorEntitled('operator_keys')).toBe(true)
   })
   it('records meters and clears them on a denial (json null)', async () => {
