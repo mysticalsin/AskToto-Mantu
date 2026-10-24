@@ -8,13 +8,15 @@ export function pathsFromClipboardFormats(platform: NodeJS.Platform, read: (form
       return wide
     }
     const format = platform === 'darwin' ? 'public.file-url' : 'text/uri-list'
-    return read(format)
-      .toString('utf8')
-      .split(/\r?\n/)
-      .map((line) => line.replace(/\u0000/g, '').trim())
-      .filter((line) => line.startsWith('file://'))
-      // POSIX formats are decoded as POSIX paths whatever the host OS (tests run these on Windows too).
-      .map((line) => fileURLToPath(line, { windows: false }))
+    return (
+      read(format)
+        .toString('utf8')
+        .split(/\r?\n/)
+        .map((line) => line.replace(/\u0000/g, '').trim())
+        .filter((line) => line.startsWith('file://'))
+        // POSIX formats are decoded as POSIX paths whatever the host OS (tests run these on Windows too).
+        .map((line) => fileURLToPath(line, { windows: false }))
+    )
   } catch {
     return []
   }
