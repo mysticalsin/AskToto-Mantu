@@ -181,8 +181,8 @@ const hostedCi = process.env.CI === 'true' && process.env.GITHUB_ACTIONS === 'tr
 // Q06 added the POSIX read-only Open-copy case to history-actions.test.ts: +1 on win32 only.
 // Q12 added the POSIX-only canned-stderr ffmpeg stand-in case: +1 on win32 only.
 // V08 added three real-FIFO cases to qa-voice-hooks.test.ts (POSIX named pipes): +3 on win32 only.
-// G89 added one real-Windows OCR "unavailable" case (screen-ocr/engine.win32.test.ts): +1 on darwin and linux.
-const BASELINE = { win32: 49, darwin: hostedCi ? 35 : 10, linux: hostedCi ? 30 : 33 }
+// G89 added one real-Windows OCR "unavailable" case (screen-ocr/engine.win32.test.ts): +1 on darwin; hosted linux is unchanged.
+const BASELINE = { win32: 49, darwin: hostedCi ? 35 : 10, linux: hostedCi ? 29 : 33 }
 // windows/baseline.contract.test.ts skips its four pwsh-driven cases only off hosted CI on a host with no
 // `pwsh`; on hosted CI they must run, so the allowance never applies there.
 const PWSH_BASELINE_SKIPS = 4
