@@ -48,6 +48,7 @@ function setup(
     revision?: number
     ready?: boolean | ((effect: ConnectorEffect) => boolean)
     candidates?: AccountResolverCandidate[]
+    executable?: AccountRef[]
   } = {}
 ) {
   const publisher = createCatalogPublisher({ revision: over.revision ?? 3, operations: [READ, WRITE] })
@@ -67,6 +68,7 @@ function setup(
     handlers: { 'outlook.calendar.today': read, 'outlook.draft.create': write },
     grants,
     accounts,
+    ...(over.executable ? { executableAccounts: async () => over.executable ?? [] } : {}),
     writeGate: createActionGuardWriteGate(),
     audit
   })
@@ -254,6 +256,56 @@ describe('connector executor', () => {
       expect.objectContaining({ reason: 'account_ambiguous', candidateCount: 3 })
     )
     expect(JSON.stringify(audit.mock.calls)).not.toMatch(/acct_|example\.test/)
+  })
+
+  it('refuses a resolved account that is not the identity the handler acts as; nothing runs', async () => {
+    const { executor, write, grants, audit } = setup({ candidates: [CANDIDATE, OTHER], executable: [ACCOUNT_REF] })
+    const r = await executor.execute({
+      opId: 'outlook.draft.create',
+      revision: 3,
+      input: { subject: 'x' },
+      accountRef: OTHER_REF,
+      approval: approval('outlook.draft.create', 3, { subject: 'x' })
+    })
+    expect(r).toMatchObject({
+      ok: false,
+      reason: 'account_unavailable',
+      provenance: { accountRule: 'explicit_owner_choice' }
+    })
+    expect(write).not.toHaveBeenCalled()
+    expect(grants.check).not.toHaveBeenCalled()
+    expect(audit).toHaveBeenCalledWith(
+      'connector.refused',
+      expect.objectContaining({ reason: 'account_unavailable', accountRule: 'explicit_owner_choice' })
+    )
+  })
+
+  it('resolves to the one executable account instead of asking, and refuses when nobody is signed in', async () => {
+    const both = setup({ candidates: [CANDIDATE, OTHER], executable: [OTHER_REF] })
+    const r = await both.executor.execute({ opId: 'outlook.calendar.today', revision: 3, input: {} })
+    expect(r).toMatchObject({ ok: true, provenance: { accountRef: OTHER_REF, accountRule: 'only_executable_account' } })
+    const signedOut = setup({ candidates: [CANDIDATE, OTHER], executable: [] })
+    expect(await signedOut.executor.execute({ opId: 'outlook.calendar.today', revision: 3, input: {} })).toMatchObject({
+      ok: false,
+      reason: 'account_unavailable'
+    })
+    expect(signedOut.read).not.toHaveBeenCalled()
+  })
+
+  it('a card lists non-executable accounts as not selectable with a sign-in reason', async () => {
+    const third = { ...OTHER, accountRef: `acct_${'D'.repeat(43)}` as AccountRef, label: 'Third' }
+    const fourth = { ...OTHER, accountRef: `acct_${'E'.repeat(43)}` as AccountRef, label: 'Fourth' }
+    const { executor, write } = setup({
+      candidates: [CANDIDATE, OTHER, third, fourth],
+      executable: [ACCOUNT_REF, OTHER_REF, third.accountRef]
+    })
+    const r = await executor.execute({ opId: 'outlook.draft.create', revision: 3, input: {} })
+    expect(r).toMatchObject({ ok: false, reason: 'account_ambiguous' })
+    const byLabel = Object.fromEntries((!r.ok && r.choices ? r.choices : []).map((c) => [c.label, c]))
+    expect(byLabel.Work).toMatchObject({ selectable: true })
+    expect(byLabel.Work).not.toHaveProperty('reason')
+    expect(byLabel.Fourth).toMatchObject({ selectable: false, reason: 'sign_in' })
+    expect(write).not.toHaveBeenCalled()
   })
 
   it('excludes an unhealthy account from the automatic pick when exactly one healthy account remains', async () => {

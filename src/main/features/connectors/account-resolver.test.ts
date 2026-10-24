@@ -97,6 +97,27 @@ describe('account resolver', () => {
     expect(isAccountSelectable('degraded', 'read')).toBe(true)
   })
 
+  it('with an executable set, picks the single executable account among several healthy ones', () => {
+    const candidates = [cand(A, 'healthy'), cand(B, 'healthy')]
+    expect(resolveAccount({ candidates, effect: 'create', executable: new Set([B]) })).toEqual({
+      ok: true,
+      accountRef: B,
+      rule: 'only_executable_account'
+    })
+    expect(resolveAccount({ candidates, effect: 'create', executable: new Set() })).toEqual({
+      ok: false,
+      reason: 'no_account'
+    })
+    expect(resolveAccount({ candidates: [cand(A, 'healthy')], effect: 'create', executable: new Set([B]) })).toEqual({
+      ok: false,
+      reason: 'no_account'
+    })
+    expect(resolveAccount({ candidates, effect: 'create', executable: new Set([A, B]) })).toMatchObject({
+      ok: false,
+      reason: 'ambiguous'
+    })
+  })
+
   it('reports no_account with nothing connected', () => {
     expect(resolveAccount({ candidates: [], effect: 'read' })).toEqual({ ok: false, reason: 'no_account' })
     expect(resolveAccount({ candidates: [cand(A, 'disconnected')], effect: 'read' })).toEqual({

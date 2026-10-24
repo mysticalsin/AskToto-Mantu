@@ -3,7 +3,12 @@ import type { AccountChoiceCard as AccountChoiceCardState, AccountChoiceOption }
 import type { ConnectorAccountHealth } from '@shared/connector-accounts'
 
 /** What the row says about an account that cannot be picked or has not been verified yet. */
-export function accountOptionNote(health: ConnectorAccountHealth, selectable: boolean): string | null {
+export function accountOptionNote(
+  health: ConnectorAccountHealth,
+  selectable: boolean,
+  reason?: 'sign_in'
+): string | null {
+  if (reason === 'sign_in') return 'Sign in with this account to use it'
   if (health === 'connecting') return 'Verified when you use it'
   if (selectable) return null
   if (health === 'needs_reauth') return 'Needs attention. Reconnect it in Settings.'
@@ -75,7 +80,7 @@ export function AccountChoiceCard({
         </p>
         <ul className="m-0 mt-3 flex list-none flex-col gap-2 p-0">
           {card.options.map((option) => {
-            const note = accountOptionNote(option.health, option.selectable)
+            const note = accountOptionNote(option.health, option.selectable, option.reason)
             return (
               <li key={option.accountRef}>
                 <button

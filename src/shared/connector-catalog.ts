@@ -123,6 +123,7 @@ export const ACCOUNT_RESOLUTION_RULES = [
   'explicit_owner_choice',
   'source_item_account',
   'only_account',
+  'only_executable_account',
   'single_healthy_account'
 ] as const
 export type AccountResolutionRule = (typeof ACCOUNT_RESOLUTION_RULES)[number]
@@ -151,6 +152,8 @@ export interface ConnectorAccountChoiceOption {
   health: 'connecting' | 'healthy' | 'degraded' | 'needs_reauth' | 'disconnected'
   /** Ready for this operation's effect right now (G61 readiness). Unready accounts are shown, never pickable. */
   selectable: boolean
+  /** `sign_in`: connected, but not the identity the connector will actually use right now. */
+  reason?: 'sign_in'
 }
 
 export type ConnectorResult =

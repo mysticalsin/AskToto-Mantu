@@ -20,7 +20,9 @@ export const AccountChoiceOptionSchema = z
     maskedHint: z.string().max(120).optional(),
     health: ConnectorAccountHealthSchema,
     /** False when the account cannot run this operation right now (it needs attention). Shown, never pickable. */
-    selectable: z.boolean()
+    selectable: z.boolean(),
+    /** Why an account cannot be picked even though it is connected: it is not the signed-in identity. */
+    reason: z.enum(['sign_in']).optional()
   })
   .strict()
 export type AccountChoiceOption = z.infer<typeof AccountChoiceOptionSchema>
