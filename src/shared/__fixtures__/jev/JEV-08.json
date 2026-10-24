@@ -1,0 +1,30 @@
+{
+  "schemaVersion": 1,
+  "id": "JEV-08",
+  "title": "Stop, resume, meeting switch, sign-out and revocation reject prior-scope work",
+  "synthetic": true,
+  "language": "en",
+  "meetingType": "internal",
+  "requires": ["stale-drop"],
+  "steps": [
+    { "kind": "final", "utteranceId": "u1", "revision": 1, "speaker": "them", "text": "What is the plan for the release?", "lang": "en", "tMs": 1000 },
+    { "kind": "scope", "change": "stop", "tMs": 2000 },
+    { "kind": "candidate", "cardKey": "card-1", "text": "Ship on Friday.", "tMs": 2500, "forUtteranceId": "u1" },
+    { "kind": "scope", "change": "resume", "tMs": 3000 },
+    { "kind": "candidate", "cardKey": "card-2", "text": "Ship on Friday after QA.", "tMs": 3500, "forUtteranceId": "u1" },
+    { "kind": "scope", "change": "meeting-switch", "tMs": 4000 },
+    { "kind": "candidate", "cardKey": "card-3", "text": "Hold the release.", "tMs": 4500, "forUtteranceId": "u1" },
+    { "kind": "scope", "change": "sign-out", "tMs": 5000 },
+    { "kind": "candidate", "cardKey": "card-4", "text": "Notify the team.", "tMs": 5500, "forUtteranceId": "u1" },
+    { "kind": "scope", "change": "permission-revoked", "tMs": 6000 },
+    { "kind": "candidate", "cardKey": "card-5", "text": "Update the checklist.", "tMs": 6500, "forUtteranceId": "u1" }
+  ],
+  "labels": [
+    { "at": 2, "warranted": false, "reason": "scope-revoked" },
+    { "at": 4, "warranted": false, "reason": "scope-revoked" },
+    { "at": 6, "warranted": false, "reason": "scope-revoked" },
+    { "at": 8, "warranted": false, "reason": "scope-revoked" },
+    { "at": 10, "warranted": false, "reason": "scope-revoked" }
+  ],
+  "expect": { "maxCards": 0, "mustStaleDrop": ["u1"] }
+}

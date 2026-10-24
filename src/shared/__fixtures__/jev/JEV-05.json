@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "id": "JEV-05",
+  "title": "Topic switch from threads to tree inversion; the older card never resurfaces",
+  "synthetic": true,
+  "language": "en",
+  "meetingType": "technical",
+  "requires": ["stale-drop"],
+  "steps": [
+    { "kind": "final", "utteranceId": "u1", "revision": 1, "speaker": "them", "text": "Can you explain how threads share memory?", "lang": "en", "tMs": 1000 },
+    { "kind": "final", "utteranceId": "u2", "revision": 1, "speaker": "them", "text": "Agora vamos falar de inversão de árvore binária.", "lang": "pt-BR", "tMs": 5000 },
+    { "kind": "candidate", "cardKey": "card-threads", "text": "Threads share one address space.", "tMs": 6000, "forUtteranceId": "u1" },
+    { "kind": "final", "utteranceId": "u3", "revision": 1, "speaker": "them", "text": "Como você inverteria uma árvore binária?", "lang": "pt-BR", "tMs": 20000 },
+    { "kind": "candidate", "cardKey": "card-tree", "text": "Swap left and right children recursively.", "tMs": 21000, "forUtteranceId": "u3" }
+  ],
+  "labels": [
+    { "at": 2, "warranted": false, "reason": "stale-evidence" },
+    { "at": 4, "warranted": true, "reason": "direct-question", "useful": true }
+  ],
+  "expect": { "mustStaleDrop": ["u1"], "finalCardKey": "card-tree" }
+}

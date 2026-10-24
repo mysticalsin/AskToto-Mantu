@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "id": "JEV-12",
+  "title": "A suggestion proposing an external action is refused without the action contract",
+  "synthetic": true,
+  "language": "fr",
+  "meetingType": "sales",
+  "requires": ["action-contract"],
+  "steps": [
+    { "kind": "final", "utteranceId": "u1", "revision": 1, "speaker": "them", "text": "Pouvez-vous nous envoyer le devis demain ?", "lang": "fr", "tMs": 1000 },
+    { "kind": "action", "proposal": "external-action", "tMs": 2000 }
+  ],
+  "labels": [
+    { "at": 1, "warranted": false, "reason": "action-contract" }
+  ],
+  "expect": { "noActionWithoutContract": true }
+}

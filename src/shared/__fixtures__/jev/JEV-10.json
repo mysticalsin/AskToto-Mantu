@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "id": "JEV-10",
+  "title": "Local-only, offline and custom-provider modes make no classifier calls",
+  "synthetic": true,
+  "language": "en",
+  "meetingType": "technical",
+  "requires": ["network-boundary"],
+  "steps": [
+    { "kind": "network", "mode": "local-only" },
+    { "kind": "final", "utteranceId": "u1", "revision": 1, "speaker": "them", "text": "How does the cache invalidate?", "lang": "en", "tMs": 1000 },
+    { "kind": "network", "mode": "offline" },
+    { "kind": "final", "utteranceId": "u2", "revision": 1, "speaker": "them", "text": "Why is the index rebuilt nightly?", "lang": "en", "tMs": 20000 },
+    { "kind": "network", "mode": "custom-provider" },
+    { "kind": "final", "utteranceId": "u3", "revision": 1, "speaker": "them", "text": "When does the lock expire?", "lang": "en", "tMs": 40000 }
+  ],
+  "labels": [
+    { "at": 1, "warranted": true, "reason": "network-boundary", "useful": true },
+    { "at": 3, "warranted": true, "reason": "network-boundary", "useful": true },
+    { "at": 5, "warranted": true, "reason": "network-boundary", "useful": true }
+  ],
+  "expect": { "maxClassifierCalls": 0 }
+}

@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "id": "JEV-03",
+  "title": "Thinking pause versus an explicit request for help",
+  "synthetic": true,
+  "language": "pt-BR",
+  "meetingType": "interview",
+  "requires": ["classifier"],
+  "steps": [
+    { "kind": "final", "utteranceId": "u1", "revision": 1, "speaker": "them", "text": "Hmm, deixa eu pensar um pouco aqui.", "lang": "pt-BR", "tMs": 1000 },
+    { "kind": "pause", "ms": 4000 },
+    { "kind": "classifier", "outcome": "ok", "scores": { "question": 0.1, "objection": 0.05, "hesitation": 0.7, "decision": 0 } },
+    { "kind": "final", "utteranceId": "u2", "revision": 1, "speaker": "them", "text": "Você pode me ajudar com isso?", "lang": "pt-BR", "tMs": 9000 },
+    { "kind": "classifier", "outcome": "ok", "scores": { "question": 0.95, "objection": 0, "hesitation": 0.1, "decision": 0 } }
+  ],
+  "labels": [
+    { "at": 2, "warranted": false, "reason": "silence" },
+    { "at": 3, "warranted": true, "reason": "indirect-request", "useful": true }
+  ],
+  "expect": { "maxCards": 1 }
+}
