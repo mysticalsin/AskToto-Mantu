@@ -27,12 +27,12 @@ export async function createFromPreview(
  */
 export async function resumeWithReconcile(
   api: RoutinesApi,
-  confirm: ConfirmFn,
+  askConfirm: ConfirmFn,
   view: Pick<RoutineView, 'routineId' | 'title'>
 ): Promise<MutationResult | null> {
   const first = await api.resume(view.routineId)
   if (first.ok || first.reason !== 'reconciliation_required') return first
-  const checked = await confirm({
+  const checked = await askConfirm({
     title: 'Resume',
     message: `A run of "${view.title}" was interrupted and its result is unclear. Check what it did, then resume.`,
     confirmLabel: 'I checked, resume'
@@ -42,10 +42,10 @@ export async function resumeWithReconcile(
 
 export async function deleteWithConfirm(
   api: RoutinesApi,
-  confirm: ConfirmFn,
+  askConfirm: ConfirmFn,
   view: Pick<RoutineView, 'routineId' | 'title'>
 ): Promise<MutationResult | null> {
-  const yes = await confirm({
+  const yes = await askConfirm({
     title: 'Delete',
     message: `Delete "${view.title}"? It will not run again.`,
     confirmLabel: 'Delete',
@@ -57,11 +57,11 @@ export async function deleteWithConfirm(
 /** A scheduled task can act on the owner's behalf, so running it now is confirmed. Reminders and read-only checks are not. */
 export async function runNowWithConfirm(
   api: RoutinesApi,
-  confirm: ConfirmFn,
+  askConfirm: ConfirmFn,
   view: Pick<RoutineView, 'routineId' | 'title' | 'purpose'>
 ): Promise<MutationResult | null> {
   if (view.purpose === 'scheduled_task') {
-    const yes = await confirm({
+    const yes = await askConfirm({
       title: 'Run now',
       message: `Run "${view.title}" now? It does the task it was set up for.`,
       confirmLabel: 'Run now'
