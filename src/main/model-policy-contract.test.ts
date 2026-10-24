@@ -428,11 +428,13 @@ describe('M2-0412 — capabilities with no model-routed call site are a document
     )
     const ttsFiles = files.filter((f) => /text-to-speech|synthesizeSpeech|ttsStream/i.test(src(join('src/main', f))))
     // G27's on-device path is the only place speech is synthesized: the typed adapter and its process host.
-    expect(ttsFiles.map((f) => f.replace(/\\/g, '/')).sort()).toEqual([
-      'features/spoken-replies/tts-adapter.ts',
-      'infra/process/tts-process-host.ts'
+    expect(ttsFiles.map((f) => f.replace(/\\/g, '/').replace(/\.ts$/, '')).sort()).toEqual([
+      'features/spoken-replies/tts-adapter',
+      'infra/process/tts-process-host'
     ])
-    for (const f of files.filter((f) => /features\/spoken-replies\/|infra\/process\/tts-process-host/.test(f.replace(/\\/g, '/')))) {
+    for (const f of files.filter((f) =>
+      /features\/spoken-replies\/|infra\/process\/tts-process-host/.test(f.replace(/\\/g, '/'))
+    )) {
       const text = src(join('src/main', f))
       expect(text, f).not.toMatch(/resolveModelTier|PROVIDERS\[|createStream|\bfetch\(|https?:\/\/|WebSocket/)
     }
