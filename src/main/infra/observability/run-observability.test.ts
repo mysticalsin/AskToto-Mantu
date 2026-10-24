@@ -95,6 +95,29 @@ describe('startRunObservability', () => {
     })
   })
 
+  it('G84: records this launch\'s version receipt in userData through the injected seam', () => {
+    const recordLaunchVersion = vi.fn(() => Promise.resolve(null))
+    startRunObservability({
+      userData: '/fake/userData',
+      version: '2.12.0',
+      platform: 'darwin',
+      arch: 'arm64',
+      audit: vi.fn(),
+      powerMonitor: fakePowerMonitor(),
+      deps: {
+        beginRunWatch: vi.fn(() => ({ bootId: 'b', prior: fakePrior({}) })),
+        recordLaunchVersion,
+        startStallMonitor: vi.fn(() => fakeStallMonitor()),
+        setIntervalFn: vi.fn(() => 1 as unknown as ReturnType<typeof setInterval>),
+        clearIntervalFn: vi.fn()
+      }
+    })
+    expect(recordLaunchVersion).toHaveBeenCalledExactlyOnceWith({
+      logPath: expect.stringMatching(/upgrade-receipts\.jsonl$/),
+      version: '2.12.0'
+    })
+  })
+
   it('passes the starting UV_THREADPOOL_SIZE value through verbatim', () => {
     const audit = vi.fn()
     startRunObservability({

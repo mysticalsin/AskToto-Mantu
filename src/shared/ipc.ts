@@ -219,9 +219,9 @@ export const IPC = {
   recallSetPushMarker: 'recall:set-push-marker',
   recallBackfillSpeakers: 'recall:backfillSpeakers',
   recallDeleteAll: 'recall:deleteAll',
-  // Support diagnosability: copy the log trail (main + audit + crash dumps + boot sentinel) into a
-  // user-chosen folder — the ONLY way that data reaches support, since nothing uploads by design.
+  // Copy the redacted log trail into a user-chosen folder: the ONLY way it reaches support (nothing uploads).
   diagnosticsExport: 'diagnostics:export',
+  diagnosticsPreview: 'diagnostics:preview', // G84: read-only preview of exactly what that export writes
   exportReveal: 'export:reveal', // G58: open/reveal a finished export by receipt id
   debriefSave: 'debrief:save',
   brainCommitmentSettle: 'brain:commitmentSettle',
