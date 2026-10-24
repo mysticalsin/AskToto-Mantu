@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import type { MeetingRecord, RecordItem } from '@shared/meeting-record'
-import { MeetingRecordList, setOp } from './MeetingRecordPanel'
+import { MeetingRecordList, RecordItemEditor, recordEditKey, setOp } from './MeetingRecordPanel'
 
 const item = (over: Partial<RecordItem> = {}): RecordItem => ({
   id: 'decision:a',
@@ -50,5 +50,49 @@ describe('MeetingRecordPanel', () => {
       id: 'action:c',
       owner: 'Sam'
     })
+  })
+
+  it('names every row action with its item (G91)', () => {
+    const long = 'Launch Project Lumen in a staged rollout across every region we operate in this year'
+    const out = html(record([item({ text: long })]))
+    expect(out).toContain(`aria-label="Edit: ${long.slice(0, 59)}…"`)
+    expect(out).toContain(`aria-label="Delete: ${long.slice(0, 59)}…"`)
+    expect(out).toContain('aria-label="Add decision"')
+    expect(out).toContain('aria-label="Add open question"')
+    expect(out).toContain('aria-label="Add action"')
+  })
+
+  it('section titles are headings that label their lists (G91)', () => {
+    const out = html(record([item()]))
+    const heading = out.match(/<h3 id="([^"]+)"[^>]*>Decisions<\/h3>/)
+    expect(heading).not.toBeNull()
+    expect(out).toContain(`aria-labelledby="${heading?.[1]}"`)
+  })
+
+  it('recordEditKey: Escape cancels, Enter saves single-line, Cmd+Enter saves multiline, IME composition is ignored (G91)', () => {
+    expect(recordEditKey({ key: 'Escape' }, false)).toBe('cancel')
+    expect(recordEditKey({ key: 'Escape' }, true)).toBe('cancel')
+    expect(recordEditKey({ key: 'Enter' }, false)).toBe('save')
+    expect(recordEditKey({ key: 'Enter', shiftKey: true }, false)).toBeNull()
+    expect(recordEditKey({ key: 'Enter' }, true)).toBeNull()
+    expect(recordEditKey({ key: 'Enter', metaKey: true }, true)).toBe('save')
+    expect(recordEditKey({ key: 'Enter', ctrlKey: true }, true)).toBe('save')
+    expect(recordEditKey({ key: 'Enter', isComposing: true }, false)).toBeNull()
+    expect(recordEditKey({ key: 'Escape', isComposing: true }, false)).toBeNull()
+    expect(recordEditKey({ key: 'a' }, false)).toBeNull()
+  })
+
+  it('edit form autofocuses the text field and names its buttons (G91)', () => {
+    const out = renderToStaticMarkup(
+      <RecordItemEditor
+        item={item()}
+        draft={{ text: 'x', owner: '', dueText: '' }}
+        onDraft={noop}
+        onSave={noop}
+        onCancel={noop}
+      />
+    )
+    expect(out).toContain('aria-label="Save edit"')
+    expect(out).toContain('aria-label="Cancel edit"')
   })
 })
