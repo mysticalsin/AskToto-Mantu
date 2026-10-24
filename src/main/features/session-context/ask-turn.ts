@@ -1,4 +1,5 @@
 import { ContractError } from '@shared/kernel/contract-data'
+import { AttachmentSendError } from '@shared/attachments'
 import { IPC } from '@shared/ipc'
 import { isModeSkillIntegrityError } from '@shared/mode-skills'
 import type { CounterMetricId } from '@shared/responsiveness-metrics'
@@ -12,9 +13,13 @@ export const ANSWER_TIMEOUT_MESSAGE = 'This answer took too long and was stopped
 /** Shown instead of silently ignoring a third request while one answer runs and two more are waiting. */
 export const QUEUE_BUSY_MESSAGE = 'Métis is still working on earlier requests. Try again in a moment.'
 
-/** What a request that could not start tells the renderer: a skill integrity failure names itself, the rest do not. */
+/** What a request that could not start tells the renderer: a skill integrity failure or a refused composer attachment (G54, owner-safe copy) names itself, the rest do not. */
 export const askStartFailureMessage = (err: unknown): string =>
-  isModeSkillIntegrityError(err) ? (err instanceof Error ? err.message : String(err)) : 'Could not start the answer.'
+  isModeSkillIntegrityError(err) || err instanceof AttachmentSendError
+    ? err instanceof Error
+      ? err.message
+      : String(err)
+    : 'Could not start the answer.'
 
 /** A live suggestion that has not landed in this long is no longer about the moment it was asked in. */
 export const SUGGEST_JOB_TIMEOUT_MS = 30_000

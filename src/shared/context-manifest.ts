@@ -10,10 +10,10 @@ import { CONTEXT_AUTHORITIES, CONTEXT_ORIGINS } from './context-authority'
  *
  * `via` says why a record was there: `ask` is part of the ask itself (the typed or spoken question, the meeting
  * transcript tail, a screenshot the owner attached, a memory slice); `ambient` is the background screen reader's
- * cached description; `snapshot` is a screen or document capture the owner explicitly asked for; `grant` is a whole
+ * cached description; `attachment` is a file or image the owner attached to this turn in the composer; `snapshot` is a screen or document capture the owner explicitly asked for; `grant` is a whole
  * document the owner granted for the session.
  */
-export const CONTEXT_VIA = ['ask', 'ambient', 'snapshot', 'grant'] as const
+export const CONTEXT_VIA = ['ask', 'ambient', 'snapshot', 'grant', 'attachment'] as const
 export type ContextVia = (typeof CONTEXT_VIA)[number]
 
 export const ContextManifestEntrySchema = z

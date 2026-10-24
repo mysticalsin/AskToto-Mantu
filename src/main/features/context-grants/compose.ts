@@ -3,6 +3,7 @@ import { app, type IpcMain } from 'electron'
 import type { ScreenObservationIdentity, ScreenScope } from '@shared/screen-observation'
 import { currentPartitionId, onMemoryPartitionChange } from '../../memory-partition/memory-access'
 import { decryptSecret, encryptSecret } from '../../secrets'
+import { createAttachmentSources } from './attachment-sources'
 import { createSnapshotObserver } from './observe'
 import { createContextGrants, type ContextGrants } from './wiring'
 
@@ -40,6 +41,7 @@ export function composeContextGrants(deps: ComposeContextGrantsDeps): ContextGra
       return deps.screenObservation.generation()
     },
     sessionId: deps.sessionId,
+    attachmentSources: createAttachmentSources(() => [app.getPath('userData')]),
     seal: encryptSecret,
     open: decryptSecret,
     onOwnerChange: onMemoryPartitionChange,

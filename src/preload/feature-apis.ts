@@ -24,6 +24,7 @@ import { createQuietPreloadApi } from './quiet'
 import { createDictationStatusPreloadApi } from './dictation-status'
 import { createComponentOffloadPreloadApi } from './component-offload'
 import { createEntitlementPlanPreloadApi } from './entitlement-plan'
+import { createAttachmentsPreloadApi } from './attachments'
 
 /** The preload bridges that are one self-contained feature each, composed here so index.ts stays under its size cap. */
 export function createFeaturePreloadApis(ipc: IpcRenderer) {
