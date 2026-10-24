@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { IpcMain, IpcMainInvokeEvent } from 'electron'
 import { SETTINGS_OS_STATE_IPC } from '@shared/contracts/settings-os-state'
+import { QUIET_IPC } from '@shared/quiet-ipc'
 
 vi.mock('electron', () => ({ app: {}, ipcMain: { handle: vi.fn() }, shell: {}, Notification: {} }))
 vi.mock('../recall', () => ({ countExpiredMeetings: vi.fn(async () => 0) }))
@@ -9,7 +10,18 @@ import { applyLoginItem, registerSettingsSystemIpc, type SettingsSystemOs } from
 
 type Handler = (event: IpcMainInvokeEvent, ...args: unknown[]) => unknown
 
-function setup(options: { os?: Partial<SettingsSystemOs>; auth?: boolean; refresh?: () => boolean | null } = {}) {
+function setup(
+  options: {
+    os?: Partial<SettingsSystemOs>
+    auth?: boolean
+    refresh?: () => boolean | null
+    screenShare?: () => { available: boolean; state: 'sharing' | 'not-sharing' | 'unknown' }
+    focus?: () => { voice: 'active' | 'inactive' | 'unknown'; text: 'active' | 'inactive' | 'unknown' }
+    quietMode?: 'off' | 'calls-and-screen-sharing' | 'always'
+    onQuietReleased?: (batch: unknown) => void
+    now?: () => number
+  } = {}
+) {
   const handlers = new Map<string, Handler>()
   const assertMainWindow = vi.fn()
   const os: SettingsSystemOs = {
@@ -30,7 +42,12 @@ function setup(options: { os?: Partial<SettingsSystemOs>; auth?: boolean; refres
     requireAuth: () => options.auth ?? true,
     refreshLoginItem: options.refresh ?? (() => true),
     os,
-    countExpired
+    countExpired,
+    getQuietMode: options.quietMode !== undefined ? () => options.quietMode! : undefined,
+    readScreenShare: options.screenShare,
+    readFocus: options.focus,
+    onQuietReleased: options.onQuietReleased,
+    now: options.now
   })
   const call = (channel: string, ...args: unknown[]) => handlers.get(channel)?.(event, ...args)
   return { handlers, assertMainWindow, os, countExpired, call }
@@ -41,14 +58,39 @@ const event = { sender: {} } as IpcMainInvokeEvent
 beforeEach(() => vi.clearAllMocks())
 
 describe('settings system IPC', () => {
-  it('registers three channels and checks the main-window sender on each', async () => {
+  it('registers OS and quiet channels and checks the main-window sender on each', async () => {
     const { handlers, assertMainWindow, call } = setup()
-    expect([...handlers.keys()].sort()).toEqual(Object.values(SETTINGS_OS_STATE_IPC).sort())
-    for (const channel of Object.values(SETTINGS_OS_STATE_IPC)) {
+    const channels = [...Object.values(SETTINGS_OS_STATE_IPC), QUIET_IPC.policyGet, QUIET_IPC.outputOffer]
+    expect([...handlers.keys()].sort()).toEqual(channels.sort())
+    for (const channel of channels) {
       assertMainWindow.mockClear()
       await call(channel, 'loginItems')
       expect(assertMainWindow, channel).toHaveBeenCalledWith(event)
     }
+  })
+
+  it('reads injected Focus and screen-share signals and coalesces deferred output until they end', async () => {
+    let sharing = true
+    let now = 100
+    const released = vi.fn()
+    const f = setup({
+      screenShare: () => ({ available: true, state: sharing ? 'sharing' : 'not-sharing' }),
+      focus: () => ({ voice: 'inactive', text: 'inactive' }),
+      onQuietReleased: released,
+      now: () => now
+    })
+    expect(await f.call(QUIET_IPC.policyGet)).toMatchObject({ toast: 'defer', sound: 'drop' })
+    expect(await f.call(QUIET_IPC.outputOffer, 'toast')).toBe('defer')
+    expect(await f.call(QUIET_IPC.outputOffer, 'toast')).toBe('defer')
+    sharing = false
+    now = 250
+    await f.call(QUIET_IPC.policyGet)
+    expect(released).toHaveBeenCalledOnce()
+    expect(released).toHaveBeenCalledWith({ channels: ['toast'], startedAtMs: 100, releasedAtMs: 250 })
+  })
+
+  it('returns drop for an unrecognized quiet output channel', async () => {
+    expect(await setup().call(QUIET_IPC.outputOffer, 'untrusted-channel')).toBe('drop')
   })
 
   it('a sender that fails the main-window check gets nothing', async () => {

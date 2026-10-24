@@ -25,7 +25,7 @@ export function useAppSoundCues(
     const streaming = a?.streaming ?? false
     if (prevStreamingRef.current && !streaming && a) {
       // Only chime on a real completion/error — not when the user cancelled (streaming cleared, no error).
-      if (!cancelled.current && (soundCues ?? true)) {
+      if (!cancelled.current && a.outputIntent !== 'ambient' && (soundCues ?? true)) {
         playCue(a.error ? 'error' : 'ready')
       }
     }

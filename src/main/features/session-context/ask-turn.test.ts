@@ -148,6 +148,48 @@ describe('a stale snapshot never publishes', () => {
   })
 })
 
+describe('ambient output quiet gate', () => {
+  it('drops an ambient turn before work starts while a direct owner request still publishes', async () => {
+    const sent: Sent[] = []
+    const quietAction = vi.fn(() => 'drop' as const)
+    const turns = createAskTurns({
+      send: (channel, payload) => void sent.push({ channel, payload: payload as Record<string, unknown> }),
+      streams: new Map(),
+      quietAction: () => quietAction()
+    })
+
+    await expect(
+      turns.begin({ id: 'ambient', mode: 'suggest', handle: null, outputIntent: 'ambient' })
+    ).resolves.toBeNull()
+    expect(sent).toEqual([{ channel: IPC.streamDone, payload: { id: 'ambient' } }])
+    expect(quietAction).toHaveBeenCalledOnce()
+
+    const direct = await turns.begin({ id: 'direct', mode: 'answer', handle: null, outputIntent: 'direct' })
+    expect(direct?.send(IPC.streamDelta, { id: 'direct', text: 'owner requested this' })).toBe(true)
+    expect(sent.some((entry) => entry.channel === IPC.streamDelta && entry.payload.id === 'direct')).toBe(true)
+    expect(quietAction).toHaveBeenCalledOnce()
+  })
+
+  it('stops an in-flight ambient stream and completes it without exposing another chunk', async () => {
+    const w = world()
+    const quietAction = vi.fn<() => 'allow' | 'defer' | 'drop'>(() => 'allow')
+    const askTurns = createAskTurns({
+      send: (channel, payload) => void w.sent.push({ channel, payload: payload as Record<string, unknown> }),
+      streams: w.streams,
+      quietAction
+    })
+    const live = need(
+      await askTurns.begin({ id: 'ambient-live', mode: 'suggest', handle: w.handle(), outputIntent: 'ambient' })
+    )
+    const abort = w.stream('ambient-live')
+    quietAction.mockReturnValue('drop')
+    expect(live.send(IPC.streamDelta, { id: 'ambient-live', text: 'suppressed content' })).toBe(false)
+    expect(abort).toHaveBeenCalledOnce()
+    expect(w.delivered('ambient-live', IPC.streamDelta)).toBe(0)
+    expect(w.delivered('ambient-live', IPC.streamDone)).toBe(1)
+  })
+})
+
 describe('the queue admits one ask and two waiting, then refuses', () => {
   it('a third pending ask is refused with a clear message, and the earlier ones are untouched', async () => {
     const w = world()

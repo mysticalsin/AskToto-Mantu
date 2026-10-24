@@ -60,6 +60,7 @@ export const assistPrompt = (): string =>
 /** The once-per-meeting No-Decision Honk: a transcript-derived nudge, redacted by main, refused without a transcript. */
 export const noDecisionAsk = (): AskRequest => ({
   mode: 'answer',
+  outputIntent: 'ambient',
   prompt: buildNoDecisionPrompt(TRANSCRIPT_SLOT) + GUARD_LINE,
   redactPrompt: true,
   context: promptContext('conversation', 4000)
