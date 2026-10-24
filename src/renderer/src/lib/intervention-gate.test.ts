@@ -10,6 +10,43 @@ function gate(report?: (record: InterventionShadowRecord) => void): Intervention
   return new InterventionGate({ meetingStartMs: 1_000, report })
 }
 
+describe('InterventionGate proactive controls (G77)', () => {
+  it('recordHeld pushes a held/hold record with a sanitized reason and no text', () => {
+    const seen: InterventionShadowRecord[] = []
+    const g = gate((r) => seen.push(r))
+    g.recordHeld('question', 'mode-manual')
+    g.recordHeld('question', 'what is the price? secret')
+    expect(seen[0]).toEqual({
+      path: 'question',
+      status: 'held',
+      shouldGenerate: false,
+      reason: 'mode-manual',
+      outcome: 'hold',
+      generation: g.generation,
+      contextRevision: g.contextRevision
+    })
+    expect(seen[1].reason).toMatch(/^[A-Za-z0-9_.:-]{1,64}$/)
+    expect(g.records()).toHaveLength(2)
+  })
+
+  it('exposes the session id of the current meeting', () => {
+    const g = gate()
+    expect(g.sessionId).toBe('meeting-1000')
+    g.startMeeting(2_000)
+    expect(g.sessionId).toBe('meeting-2000')
+  })
+
+  it('playbook-change bumps generation and makes prior snapshots stale', async () => {
+    const g = gate()
+    const { snapshot } = await g.decide('question', rules(true), 't1')
+    const before = g.generation
+    g.observe({ kind: 'scope', change: 'playbook-change' })
+    expect(g.generation).toBe(before + 1)
+    expect(g.isCurrent(snapshot)).toBe(false)
+    expect(g.isHardInvalidated(snapshot)).toBe(true)
+  })
+})
+
 describe('InterventionGate', () => {
   it('disabled policy returns the existing-rules decision unchanged', async () => {
     const g = gate()

@@ -39,5 +39,13 @@ export const AUDIO_TAB_KEYWORDS: string[] = [
   'speak',
   'voice',
   'speed',
-  'preview voice'
+  'preview voice',
+  // Proactive controls (G77)
+  'when métis speaks up',
+  'when metis speaks up',
+  'automatic cards',
+  'only when i ask',
+  'interruption',
+  'auto-answer',
+  'questions'
 ]

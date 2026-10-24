@@ -11,6 +11,7 @@ import {
   type ShadowWatermarkCommit
 } from './intervention-flow'
 import { InterventionGate, diffTranscriptLines, transcriptLineId, type TranscriptLineLike } from './intervention-gate'
+import { ProactiveControls, playbookFingerprint, syncPlaybook } from './proactive-controls'
 
 /**
  * React glue for the InterventionGate (G70). The decisions live in intervention-flow.ts and
@@ -81,6 +82,17 @@ export function useQuestionIntervention(args: QuestionInterventionArgs): (line: 
   latest.current = args
   const lastSuggestAtRef = useRef(0)
   const liveSnapshotRef = useRef<InterventionSnapshot | null>(null)
+  const controlsRef = useRef<ProactiveControls | null>(null)
+  if (!controlsRef.current) controlsRef.current = new ProactiveControls(Date.now)
+  const controls = controlsRef.current
+  const playbookBaselineRef = useRef<string | null>(null)
+  // G77: null until settings load, so the first loaded playbook is the baseline and never a change.
+  const fingerprint = args.settings ? playbookFingerprint(args.settings) : null
+
+  useEffect(() => {
+    if (fingerprint === null) return
+    syncPlaybook({ baseline: playbookBaselineRef, fingerprint, gate: args.gate, controls })
+  }, [args.gate, controls, fingerprint])
 
   useEffect(() => {
     cancelStaleLive({
@@ -89,29 +101,34 @@ export function useQuestionIntervention(args: QuestionInterventionArgs): (line: 
       streaming: !!args.suggest.answer?.streaming,
       cancel: () => void latest.current.suggest.cancel()
     })
-  }, [args.gate, args.lines, args.listening, args.suggest.answer?.streaming])
+  }, [args.gate, args.lines, args.listening, args.suggest.answer?.streaming, fingerprint])
 
-  return useCallback((line: TranscriptLine): void => {
-    const a = latest.current
-    void runQuestionFlow(
-      {
-        gate: a.gate,
-        nowMs: Date.now,
-        lastSuggestAtRef,
-        settings: a.settings,
-        suggestStreaming: () => !!latest.current.suggest.answer?.streaming,
-        focusCopilot: a.focusCopilot,
-        readySpeculative: a.readySpeculative,
-        showSpeculative: a.showSpeculative,
-        runSuggest: (snapshot) => {
-          liveSnapshotRef.current = snapshot
-          a.suggest.run({ mode: 'suggest', outputIntent: 'ambient', context: fieldContext('conversation') })
+  return useCallback(
+    (line: TranscriptLine): void => {
+      const a = latest.current
+      void runQuestionFlow(
+        {
+          gate: a.gate,
+          nowMs: Date.now,
+          lastSuggestAtRef,
+          settings: a.settings,
+          suggestStreaming: () => !!latest.current.suggest.answer?.streaming,
+          focusCopilot: a.focusCopilot,
+          readySpeculative: a.readySpeculative,
+          showSpeculative: a.showSpeculative,
+          runSuggest: (snapshot) => {
+            liveSnapshotRef.current = snapshot
+            a.suggest.run({ mode: 'suggest', outputIntent: 'ambient', context: fieldContext('conversation') })
+          },
+          offerQuiet: (channel) => window.toto.quietOutputOffer(channel),
+          controls,
+          triggerText: line.text
         },
-        offerQuiet: (channel) => window.toto.quietOutputOffer(channel)
-      },
-      transcriptLineId(line.t)
-    )
-  }, [])
+        transcriptLineId(line.t)
+      )
+    },
+    [controls]
+  )
 }
 
 export interface ShadowPregenerationArgs {

@@ -1,7 +1,9 @@
 import type { InterventionExistingRules, InterventionSnapshot } from '@shared/intervention-contract'
 import type { InterventionOutcome } from '@shared/intervention-shadow'
 import type { QuietAction } from '@shared/quiet-mode-settings'
+import { DEFAULT_INTERRUPTION_MODE, type InterruptionMode } from '@shared/proactive-settings'
 import type { InterventionGate } from './intervention-gate'
+import type { ProactiveControls, Reservation } from './proactive-controls'
 
 /**
  * The question and shadow paths of the live copilot, decided through the InterventionGate (G70). Pure and
@@ -18,6 +20,12 @@ export interface FlowSettings {
   localFallbackReady?: boolean
   instantSuggestions?: boolean
   suggestEverySec?: number
+  /** G77: when Métis may show a card unasked. Absent = today's behaviour (`questions`). */
+  interruptionMode?: InterruptionMode
+  /** The active playbook (mode, its prompt, its custom-mode entry); read only for the G77 invalidation fingerprint. */
+  mode?: string
+  modePrompts?: Record<string, string>
+  customModes?: readonly { id: string; label: string }[]
 }
 
 const DEFAULT_SUGGEST_EVERY_SEC = 8
@@ -91,18 +99,61 @@ export interface QuestionFlowDeps {
   runSuggest: (snapshot: InterventionSnapshot) => void
   /** G68: asks main whether an unsolicited card may be shown now. */
   offerQuiet: (channel: 'proactiveSuggestion') => Promise<QuietAction>
+  /** G77: mode profile, trigger budget and novelty ring for this window's meeting. */
+  controls: ProactiveControls
+  /** The detected question's text; used only in memory for the novelty check, never recorded or logged. */
+  triggerText: string
 }
 
 export async function runQuestionFlow(deps: QuestionFlowDeps, triggerLineId: string): Promise<QuestionFlowOutcome> {
-  const { gate } = deps
+  const { gate, controls } = deps
+  const mode = deps.settings?.interruptionMode ?? DEFAULT_INTERRUPTION_MODE
+  const profile = controls.profile(mode)
+  // G77: the mode is a hard control, checked before any policy decision.
+  if (!profile.autoTriggers.includes('question')) {
+    gate.recordHeld('question', 'mode-manual', triggerLineId)
+    return 'hold'
+  }
   const now = deps.nowMs()
   const previousClaim = deps.lastSuggestAtRef.current
-  const rules = existingRulesForQuestion({
+  let rules = existingRulesForQuestion({
     settings: deps.settings,
     streaming: deps.suggestStreaming(),
     nowMs: now,
     lastSuggestAtMs: previousClaim
   })
+  let reservation: Reservation | null = null
+  if (rules.shouldGenerate) {
+    // The budget is a hard limit, taken before evaluate. A pending reservation counts, so two triggers never share the last slot.
+    reservation = controls.reserve(gate.sessionId, mode)
+    if (!reservation) {
+      gate.recordHeld('question', 'budget', triggerLineId)
+      return 'hold'
+    }
+    // Novelty is a heuristic: it goes through decide as an existing rule, like every other soft gate.
+    if (controls.noveltyOf(gate.sessionId, deps.triggerText) < profile.minNovelty) {
+      controls.release(reservation)
+      reservation = null
+      rules = rule(false, 'novelty')
+    }
+  }
+  try {
+    return await decideAndShow(deps, triggerLineId, rules, previousClaim, now, reservation)
+  } finally {
+    // Every exit that did not commit refunds the slot (release is a no-op once committed).
+    if (reservation) controls.release(reservation)
+  }
+}
+
+async function decideAndShow(
+  deps: QuestionFlowDeps,
+  triggerLineId: string,
+  rules: InterventionExistingRules,
+  previousClaim: number,
+  now: number,
+  reservation: Reservation | null
+): Promise<QuestionFlowOutcome> {
+  const { gate, controls } = deps
   if (rules.shouldGenerate) deps.lastSuggestAtRef.current = now // claim before the await
   const { decision, snapshot } = await gate.decide('question', rules, triggerLineId)
   if (!decision.shouldGenerate || deps.suggestStreaming()) {
@@ -127,6 +178,7 @@ export async function runQuestionFlow(deps: QuestionFlowDeps, triggerLineId: str
         return 'stale-drop'
       }
       deps.showSpeculative()
+      if (reservation) controls.commit(reservation, deps.triggerText)
       gate.record({ path: 'question', decision, outcome: 'adopt' })
       return 'adopt'
     }
@@ -138,6 +190,7 @@ export async function runQuestionFlow(deps: QuestionFlowDeps, triggerLineId: str
     // The bridge failed: fall through to the ambient run, whose gate is applied by main.
   }
   deps.runSuggest(snapshot)
+  if (reservation) controls.commit(reservation, deps.triggerText)
   gate.record({ path: 'question', decision, outcome: 'generate' })
   return 'generate'
 }
