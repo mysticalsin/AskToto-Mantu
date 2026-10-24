@@ -13,7 +13,8 @@ export function pathsFromClipboardFormats(platform: NodeJS.Platform, read: (form
       .split(/\r?\n/)
       .map((line) => line.replace(/\u0000/g, '').trim())
       .filter((line) => line.startsWith('file://'))
-      .map((line) => fileURLToPath(line))
+      // POSIX formats are decoded as POSIX paths whatever the host OS (tests run these on Windows too).
+      .map((line) => fileURLToPath(line, { windows: false }))
   } catch {
     return []
   }
