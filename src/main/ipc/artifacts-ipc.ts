@@ -6,7 +6,7 @@ import {
   type ArtifactActionResult,
   type TurnArtifacts
 } from '@shared/artifact'
-import type { ArtifactService } from '../features/artifacts/service'
+import type { ArtifactService, CopyPayload, PreviewDoc } from '../features/artifacts/service'
 
 export interface ArtifactsIpcDeps {
   ipcMain: Pick<IpcMain, 'handle' | 'on'>
@@ -16,6 +16,10 @@ export interface ArtifactsIpcDeps {
   service: ArtifactService
   /** The OS drag icon. A drag needs one on every platform. */
   dragIcon(): Electron.NativeImage | string
+  /** Opens the sandboxed preview window (src/main/windows/). */
+  showPreview(doc: PreviewDoc): void
+  /** Writes to the system clipboard; throws when it cannot. */
+  writeClipboard(payload: CopyPayload): void
 }
 
 const SIGNED_OUT = { ok: false, reason: 'signed-out' } as const
@@ -42,7 +46,9 @@ export function registerArtifactsIpc(deps: ArtifactsIpcDeps): void {
   for (const [channel, action] of [
     [ARTIFACT_IPC.open, (id: string) => service.open(id)],
     [ARTIFACT_IPC.reveal, (id: string) => service.reveal(id)],
-    [ARTIFACT_IPC.arm, (id: string) => service.arm(id)]
+    [ARTIFACT_IPC.arm, (id: string) => service.arm(id)],
+    [ARTIFACT_IPC.preview, (id: string) => service.preview(id, deps.showPreview)],
+    [ARTIFACT_IPC.copy, (id: string) => service.copy(id, deps.writeClipboard)]
   ] as const) {
     ipcMain.handle(channel, async (event, raw): Promise<ArtifactActionResult> => {
       gate(event)

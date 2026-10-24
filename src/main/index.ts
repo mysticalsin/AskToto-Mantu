@@ -267,6 +267,7 @@ import {
   shouldWatchOverlayCursor
 } from './island/cursor-watch'
 import { pinWindowOnAllWorkspaces } from './overlay-workspace-pinning'
+import { installLinkPolicy } from './features/links'
 import { createOverlayReconciler } from './features/overlay-state'
 import { getDisplayMetrics, registerDisplayMetricsInvalidation } from './island/metrics'
 import {
@@ -3263,13 +3264,7 @@ function createWindow(targetDisplay?: Electron.Display): void {
 
   // Security: never let model-output links navigate the trusted renderer or open child windows
   // that inherit the privileged preload. External https links open in the real browser instead.
-  win.webContents.setWindowOpenHandler(({ url }) => {
-    if (/^https:\/\//i.test(url)) void shell.openExternal(url)
-    return { action: 'deny' }
-  })
-  win.webContents.on('will-navigate', (e, url) => {
-    if (url !== win?.webContents.getURL()) e.preventDefault()
-  })
+  installLinkPolicy(win.webContents)
   win.webContents.on('did-start-navigation', (_event, _url, isInPlace, isMainFrame) => {
     if (win === self && isMainFrame && !isInPlace) hardStopInputSession('owner-replaced')
   })

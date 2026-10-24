@@ -11,6 +11,14 @@ function setup(opts: { signedIn?: boolean; mainWindow?: boolean } = {}) {
     open: vi.fn(async () => ({ ok: true }) as const),
     reveal: vi.fn(async () => ({ ok: true }) as const),
     arm: vi.fn(async () => ({ ok: true }) as const),
+    preview: vi.fn(async (_id: string, show: (d: { title: string; html: string }) => void) => {
+      show({ title: 'n.md', html: '<p>x</p>' })
+      return { ok: true } as const
+    }),
+    copy: vi.fn(async (_id: string, write: (p: { kind: 'text'; text: string }) => void) => {
+      write({ kind: 'text', text: 'hi' })
+      return { ok: true } as const
+    }),
     dragStart: vi.fn((_id: string, begin: (i: { file: string }) => void) => {
       begin({ file: '/recorded/file.md' })
       return { ok: true } as const
@@ -19,6 +27,8 @@ function setup(opts: { signedIn?: boolean; mainWindow?: boolean } = {}) {
   const assertMainWindow = vi.fn(() => {
     if (opts.mainWindow === false) throw new Error('not main window')
   })
+  const showPreview = vi.fn()
+  const writeClipboard = vi.fn()
   registerArtifactsIpc({
     ipcMain: {
       handle: (c: string, h: never) => void handlers.set(c, h),
@@ -27,11 +37,13 @@ function setup(opts: { signedIn?: boolean; mainWindow?: boolean } = {}) {
     assertMainWindow,
     requireAuth: () => opts.signedIn !== false,
     service,
-    dragIcon: () => 'icon'
+    dragIcon: () => 'icon',
+    showPreview,
+    writeClipboard
   })
   const startDrag = vi.fn()
   const event = { sender: { startDrag } } as never
-  return { handlers, listeners, service, startDrag, event, assertMainWindow }
+  return { handlers, listeners, showPreview, writeClipboard, service, startDrag, event, assertMainWindow }
 }
 
 describe('artifacts IPC', () => {
@@ -89,5 +101,33 @@ describe('artifacts IPC', () => {
     ;(listeners.get(ARTIFACT_IPC.dragStart) as (...a: unknown[]) => void)(event, { artifactId: 'a1' })
     expect(service.dragStart).not.toHaveBeenCalled()
     expect(startDrag).not.toHaveBeenCalled()
+  })
+})
+
+describe('artifacts IPC preview and copy (G55)', () => {
+  it('previews and copies by id only; main shows and writes what the service hands it', async () => {
+    const { handlers, event, showPreview, writeClipboard } = setup()
+    const preview = handlers.get(ARTIFACT_IPC.preview) as (...a: unknown[]) => Promise<unknown>
+    const copy = handlers.get(ARTIFACT_IPC.copy) as (...a: unknown[]) => Promise<unknown>
+    expect(await preview(event, { artifactId: 'a1' })).toEqual({ ok: true })
+    expect(showPreview).toHaveBeenCalledWith({ title: 'n.md', html: '<p>x</p>' })
+    expect(await copy(event, { artifactId: 'a1' })).toEqual({ ok: true })
+    expect(writeClipboard).toHaveBeenCalledWith({ kind: 'text', text: 'hi' })
+  })
+
+  it('rejects renderer-supplied paths, gates to the main window and the signed-in owner', async () => {
+    const a = setup()
+    for (const channel of [ARTIFACT_IPC.preview, ARTIFACT_IPC.copy]) {
+      const h = a.handlers.get(channel) as (...x: unknown[]) => Promise<unknown>
+      expect(await h(a.event, { artifactId: 'a1', path: '/etc/passwd' })).toEqual({ ok: false, reason: 'invalid' })
+    }
+    expect(a.service.preview).not.toHaveBeenCalled()
+    const out = setup({ signedIn: false })
+    const h = out.handlers.get(ARTIFACT_IPC.preview) as (...x: unknown[]) => Promise<unknown>
+    expect(await h(out.event, { artifactId: 'a1' })).toEqual({ ok: false, reason: 'signed-out' })
+    const wrong = setup({ mainWindow: false })
+    const g = wrong.handlers.get(ARTIFACT_IPC.copy) as (...x: unknown[]) => Promise<unknown>
+    await expect(g(wrong.event, { artifactId: 'a1' })).rejects.toThrow()
+    expect(wrong.service.copy).not.toHaveBeenCalled()
   })
 })

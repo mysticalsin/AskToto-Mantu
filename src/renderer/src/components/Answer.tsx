@@ -18,6 +18,8 @@ import { Markdown } from './Markdown'
 import { TextButton } from './ui'
 import { AgentStatus } from './AgentStatus'
 import { ArtifactChips } from './ArtifactChips'
+import { LinkFailureNotice } from './LinkFailureNotice'
+import { copyText } from '../lib/copy-text'
 import { useFlash } from '../lib/useFlash'
 import { accelLabel } from '../lib/keys'
 import { isOnboardingDemoActive } from '../lib/onboarding-demo-guard'
@@ -257,16 +259,14 @@ export const Answer = memo(function Answer({
 
   const copy = (): void => {
     if (!text) return
-    navigator.clipboard
-      .writeText(text)
-      .then(() => {
-        flashCopied()
-        setCopyError(null)
-      })
-      .catch((e) => {
-        const msg = e instanceof Error ? e.message : String(e)
-        setCopyError(`Copy failed: ${msg}`)
-      })
+    void copyText(text, navigator.clipboard).then((failure) => {
+      if (failure) {
+        setCopyError(failure)
+        return
+      }
+      flashCopied()
+      setCopyError(null)
+    })
   }
 
   const footer =
@@ -325,6 +325,7 @@ export const Answer = memo(function Answer({
           )}
         </div>
         <ArtifactChips turnId={askId} settled={!streaming} />
+        <LinkFailureNotice />
         {saveError && (
           <div
             role="alert"

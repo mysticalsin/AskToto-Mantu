@@ -1,5 +1,5 @@
 import { createReadStream } from 'node:fs'
-import { lstat } from 'node:fs/promises'
+import { lstat, open } from 'node:fs/promises'
 import { createHash } from 'node:crypto'
 
 export interface ArtifactFileStat {
@@ -14,6 +14,8 @@ export interface ArtifactFileStat {
 export interface ArtifactFs {
   lstat(path: string): Promise<ArtifactFileStat | null>
   sha256(path: string): Promise<string>
+  /** The file's bytes, or null when it is larger than `maxBytes` (never reads past the cap). */
+  readBytes(path: string, maxBytes: number): Promise<Buffer | null>
 }
 
 export const nodeArtifactFs: ArtifactFs = {
@@ -32,5 +34,15 @@ export const nodeArtifactFs: ArtifactFs = {
       stream.on('error', reject)
       stream.on('end', () => resolve(hash.digest('hex')))
     })
+  },
+  async readBytes(path, maxBytes) {
+    const handle = await open(path, 'r')
+    try {
+      const buffer = Buffer.alloc(maxBytes + 1)
+      const { bytesRead } = await handle.read(buffer, 0, maxBytes + 1, 0)
+      return bytesRead > maxBytes ? null : buffer.subarray(0, bytesRead)
+    } finally {
+      await handle.close()
+    }
   }
 }

@@ -79,7 +79,7 @@ describe('Cap2 command authority boundary', () => {
 
   it('revokes command authority when the owning window or renderer is replaced', () => {
     expect(main).toContain('const self = win')
-    const closed = between(main, "win.on('closed', () =>", 'win.webContents.setWindowOpenHandler(')
+    const closed = between(main, "win.on('closed', () =>", 'installLinkPolicy(win.webContents)')
     expect(closed).toMatch(guardedRevoke('window_closed'))
     const rendererGone = between(
       main,
@@ -108,7 +108,7 @@ describe('Cap2 command authority boundary', () => {
     expect(revokeForHandoff).toBeGreaterThan(replacementReady)
     expect(retireWindow).toBeGreaterThan(revokeForHandoff)
 
-    const closed = between(main, "win.on('closed', () =>", 'win.webContents.setWindowOpenHandler(')
+    const closed = between(main, "win.on('closed', () =>", 'installLinkPolicy(win.webContents)')
     const retiredGuard = closed.indexOf('if (win !== self) return')
     const revokeOnCurrentClose = closed.indexOf("commandControl.revokeForLifecycleEvent('window_closed')")
     expect(retiredGuard).toBeGreaterThan(-1)

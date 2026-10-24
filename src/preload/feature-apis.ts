@@ -14,6 +14,7 @@ import { createExportPreloadApi } from './export-reveal'
 import { createWalkthroughPreloadApi } from './walkthrough'
 import { createSpokenRepliesPreloadApi } from './spoken-replies'
 import { createArtifactsPreloadApi } from './artifacts'
+import { createLinksPreloadApi } from './links'
 import { createAssistantsPreloadApi } from './assistants'
 import { createUserMemoryPreloadApi } from './user-memory'
 import { createConnectorAccountsPreloadApi } from './connector-accounts'
@@ -37,6 +38,7 @@ export function createFeaturePreloadApis(ipc: IpcRenderer) {
     ...createWalkthroughPreloadApi(ipc),
     ...createSpokenRepliesPreloadApi(ipc),
     ...createArtifactsPreloadApi(ipc),
+    ...createLinksPreloadApi(ipc),
     ...createAssistantsPreloadApi(ipc),
     ...createUserMemoryPreloadApi(ipc),
     ...createConnectorAccountsPreloadApi(ipc),
