@@ -1,7 +1,11 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-const { getGraphToken, auditLog } = vi.hoisted(() => ({ getGraphToken: vi.fn(), auditLog: vi.fn() }))
-vi.mock('./auth', () => ({ getGraphToken }))
+const { getGraphToken, getGraphTokenOutcome, auditLog } = vi.hoisted(() => ({
+  getGraphToken: vi.fn(),
+  getGraphTokenOutcome: vi.fn(),
+  auditLog: vi.fn()
+}))
+vi.mock('./auth', () => ({ getGraphToken, getGraphTokenOutcome }))
 vi.mock('./logger', () => ({ auditLog }))
 
 import {
@@ -13,6 +17,7 @@ import {
 
 afterEach(() => {
   getGraphToken.mockReset()
+  getGraphTokenOutcome.mockReset()
   auditLog.mockReset()
   vi.unstubAllGlobals()
 })
@@ -39,7 +44,7 @@ describe('outlookWriteStatus', () => {
 
 describe('createOutlookDraft — never send', () => {
   it('returns an explicit consent health signal only when token acquisition reports no token', async () => {
-    getGraphToken.mockResolvedValue(null)
+    getGraphTokenOutcome.mockResolvedValue({ ok: false, reason: 'interaction_required' })
     await expect(createOutlookDraftForConnector({ subject: 'Hi', body: 'Next steps' })).resolves.toMatchObject({
       ok: false,
       needsConsent: true,
@@ -47,8 +52,18 @@ describe('createOutlookDraft — never send', () => {
     })
   })
 
+  it('reports a transient token outage without asking the owner to grant consent', async () => {
+    getGraphTokenOutcome.mockResolvedValue({ ok: false, reason: 'transient' })
+
+    const result = await createOutlookDraftForConnector({ subject: 'Hi', body: 'Next steps' })
+
+    expect(result).toMatchObject({ ok: false, healthSignal: 'transient_failure' })
+    expect(result).not.toHaveProperty('needsConsent')
+    expect(result.error).not.toMatch(/provider detail/i)
+  })
+
   it('reports transport failures as transient health signals', async () => {
-    getGraphToken.mockResolvedValue('tok')
+    getGraphTokenOutcome.mockResolvedValue({ ok: true, token: 'synthetic-token' })
     vi.stubGlobal(
       'fetch',
       vi.fn(async () => {
@@ -62,7 +77,7 @@ describe('createOutlookDraft — never send', () => {
   })
 
   it('reports real provider authorization responses as consent health signals', async () => {
-    getGraphToken.mockResolvedValue('tok')
+    getGraphTokenOutcome.mockResolvedValue({ ok: true, token: 'synthetic-token' })
     vi.stubGlobal(
       'fetch',
       vi.fn(async () => ({ ok: false, status: 403, json: async () => ({}) }))
@@ -75,7 +90,7 @@ describe('createOutlookDraft — never send', () => {
   })
 
   it('refuses when write consent is missing', async () => {
-    getGraphToken.mockResolvedValue(null)
+    getGraphTokenOutcome.mockResolvedValue({ ok: false, reason: 'interaction_required' })
     const r = await createOutlookDraft({ subject: 'Hi', body: 'Next steps' })
     expect(r.ok).toBe(false)
     expect(r.needsConsent).toBe(true)
@@ -83,7 +98,7 @@ describe('createOutlookDraft — never send', () => {
   })
 
   it('POSTs /me/messages and never /send', async () => {
-    getGraphToken.mockResolvedValue('tok')
+    getGraphTokenOutcome.mockResolvedValue({ ok: true, token: 'synthetic-token' })
     const fetchMock = vi.fn(async (url: string, init: RequestInit) => {
       expect(url).toMatch(/\/me\/messages$/)
       expect(url).not.toMatch(/send/i)
@@ -111,7 +126,7 @@ describe('createOutlookDraft — never send', () => {
     ['an empty id', async () => ({ id: '   ' })],
     ['a non-string id', async () => ({ id: 42 })]
   ])('does not report or audit success for a 2xx response with %s', async (_label, json) => {
-    getGraphToken.mockResolvedValue('tok')
+    getGraphTokenOutcome.mockResolvedValue({ ok: true, token: 'synthetic-token' })
     vi.stubGlobal(
       'fetch',
       vi.fn(async () => ({ ok: true, status: 201, json }))
@@ -126,7 +141,7 @@ describe('createOutlookDraft — never send', () => {
   })
 
   it('turns token acquisition rejection into fixed safe guidance', async () => {
-    getGraphToken.mockRejectedValue(new Error('secret-token-from-provider'))
+    getGraphTokenOutcome.mockRejectedValue(new Error('network timeout with provider detail'))
 
     await expect(createOutlookDraft({ subject: 'Follow-up', body: 'Next steps' })).resolves.toEqual({
       ok: false,
@@ -135,7 +150,7 @@ describe('createOutlookDraft — never send', () => {
   })
 
   it('treats a fetch rejection as ambiguous without leaking dependency details', async () => {
-    getGraphToken.mockResolvedValue('tok')
+    getGraphTokenOutcome.mockResolvedValue({ ok: true, token: 'synthetic-token' })
     const fetchMock = vi.fn(async () => {
       throw new Error('secret-token and provider body')
     })
@@ -152,7 +167,7 @@ describe('createOutlookDraft — never send', () => {
   })
 
   it('treats a 5xx response as ambiguous because the POST may already have committed', async () => {
-    getGraphToken.mockResolvedValue('tok')
+    getGraphTokenOutcome.mockResolvedValue({ ok: true, token: 'synthetic-token' })
     vi.stubGlobal(
       'fetch',
       vi.fn(async () => ({ ok: false, status: 502, json: async () => ({}) }))
@@ -169,7 +184,7 @@ describe('createOutlookDraft — never send', () => {
 
 describe('createOutlookEvent — no attendees, no invites', () => {
   it('POSTs /me/events with an empty attendees list', async () => {
-    getGraphToken.mockResolvedValue('tok')
+    getGraphTokenOutcome.mockResolvedValue({ ok: true, token: 'synthetic-token' })
     const fetchMock = vi.fn(async (_url: string, init: RequestInit) => {
       const body = JSON.parse(String(init.body))
       expect(body.attendees).toEqual([])

@@ -9,7 +9,7 @@
  * needsConsent and the UI says Connect / grant draft permission. We do not invent a send.
  */
 
-import { getGraphToken } from './auth'
+import { getGraphToken, getGraphTokenOutcome } from './auth'
 import { auditLog } from './logger'
 import type { ConnectorAccountHealthSignal } from '@shared/connector-accounts'
 
@@ -52,9 +52,9 @@ async function graphPost(
   body: Record<string, unknown>,
   missing: string
 ): Promise<OutlookConnectorWriteResult> {
-  let token: string | null
+  let outcome: Awaited<ReturnType<typeof getGraphTokenOutcome>>
   try {
-    token = await getGraphToken(scopes)
+    outcome = await getGraphTokenOutcome(scopes)
   } catch {
     return {
       ok: false,
@@ -62,7 +62,17 @@ async function graphPost(
       healthSignal: 'transient_failure'
     }
   }
-  if (!token) return { ok: false, needsConsent: true, error: missing, healthSignal: 'consent_required' }
+  if (!outcome.ok) {
+    if (outcome.reason === 'transient') {
+      return {
+        ok: false,
+        error: 'Métis could not access Outlook right now. Try again. Nothing was sent.',
+        healthSignal: 'transient_failure'
+      }
+    }
+    return { ok: false, needsConsent: true, error: missing, healthSignal: 'consent_required' }
+  }
+  const token = outcome.token
   const uncertain =
     path === '/me/messages'
       ? 'Outlook could not confirm whether the draft was created. Check Drafts before trying again. Nothing was sent.'

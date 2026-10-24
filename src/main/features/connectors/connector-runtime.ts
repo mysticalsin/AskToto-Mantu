@@ -6,7 +6,7 @@ import {
   type ConnectorKind,
   type ConnectorResult
 } from '@shared/connector-catalog'
-import { getGraphToken } from '../../auth'
+import { getGraphTokenOutcome } from '../../auth'
 import { auditLog } from '../../logger'
 import { OUTLOOK_DRAFT_CONSENT_COPY, OUTLOOK_EVENT_CONSENT_COPY, type OutlookWriteResult } from '../../outlook-write'
 import type { AccountResolver } from './account-ref'
@@ -31,7 +31,9 @@ export const OUTLOOK_CONSENT_COPY: Readonly<Record<string, string>> = {
 export const graphScopeGrants: ConnectorGrantSeam = {
   async check({ scopes }) {
     try {
-      return (await getGraphToken([...scopes])) ? 'granted' : 'stale'
+      const outcome = await getGraphTokenOutcome([...scopes])
+      if (outcome.ok) return 'granted'
+      return outcome.reason === 'transient' ? 'transient' : 'stale'
     } catch {
       return 'transient'
     }

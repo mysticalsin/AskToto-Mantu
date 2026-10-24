@@ -1,10 +1,11 @@
 import { describe, expect, it, vi } from 'vitest'
+import type { GraphTokenOutcome } from '../../auth'
 import { createMemoryConnectorAccountStore } from './account-store'
 import { bootstrapConnectorAccounts } from './connector-accounts-bootstrap'
 
 const SCOPE = { ownerKey: 'a'.repeat(64), tenantKey: 'b'.repeat(64) }
 
-function setup(verifyCurrentIdentity: () => Promise<string | null>) {
+function setup(verifyCurrentIdentity: () => Promise<GraphTokenOutcome>) {
   return bootstrapConnectorAccounts({
     ipcMain: { handle: vi.fn() } as never,
     assertMainWindow: vi.fn(),
@@ -24,7 +25,7 @@ function setup(verifyCurrentIdentity: () => Promise<string | null>) {
 
 describe('connector account bootstrap', () => {
   it('keeps registration connecting and completes onboarding only after a token success signal', async () => {
-    const verify = vi.fn(async () => 'token')
+    const verify = vi.fn(async () => ({ ok: true as const, token: 'synthetic-token' }))
     const bootstrap = setup(verify)
     const ref = await bootstrap.ensureCurrentAccount('outlook')
     expect((await bootstrap.registry.listViews())[0]).toMatchObject({ accountRef: ref, health: 'connecting' })
@@ -42,12 +43,42 @@ describe('connector account bootstrap', () => {
     ])
   })
 
-  it('leaves an interrupted flow paused and the account needing reauthentication after a rejected token check', async () => {
-    const bootstrap = setup(async () => null)
+  it('leaves an interrupted flow paused and the account needing reauthentication after interaction is required', async () => {
+    const bootstrap = setup(async () => ({ ok: false, reason: 'interaction_required' }))
     await bootstrap.ensureCurrentAccount('outlook')
     const flow = await bootstrap.registry.beginOnboarding({ kind: 'outlook', label: 'Work' })
     await bootstrap.ensureCurrentAccount('outlook')
     expect(await bootstrap.registry.listOnboardingFlows()).toMatchObject([{ flowId: flow.flowId, status: 'paused' }])
-    expect(await bootstrap.registry.listViews()).toMatchObject([{ health: 'needs_reauth' }])
+    expect(await bootstrap.registry.listViews()).toMatchObject([
+      { health: 'needs_reauth', reason: 'token_refresh_rejected' }
+    ])
+  })
+
+  it('keeps the existing onboarding reauth signal when token setup is not configured', async () => {
+    const bootstrap = setup(async () => ({ ok: false, reason: 'not_configured' }))
+    await bootstrap.ensureCurrentAccount('outlook')
+    const flow = await bootstrap.registry.beginOnboarding({ kind: 'outlook', label: 'Work' })
+
+    await bootstrap.ensureCurrentAccount('outlook')
+
+    expect(await bootstrap.registry.listOnboardingFlows()).toMatchObject([{ flowId: flow.flowId, status: 'paused' }])
+    expect(await bootstrap.registry.listViews()).toMatchObject([
+      { health: 'needs_reauth', reason: 'token_refresh_rejected' }
+    ])
+  })
+
+  it('keeps onboarding degraded rather than requiring reauthentication after a thrown network error', async () => {
+    const bootstrap = setup(async () => {
+      throw new Error('network timeout with provider detail')
+    })
+    await bootstrap.ensureCurrentAccount('outlook')
+    const flow = await bootstrap.registry.beginOnboarding({ kind: 'outlook', label: 'Work' })
+
+    await bootstrap.ensureCurrentAccount('outlook')
+
+    expect(await bootstrap.registry.listOnboardingFlows()).toMatchObject([{ flowId: flow.flowId, status: 'paused' }])
+    expect(await bootstrap.registry.listViews()).toMatchObject([
+      { health: 'degraded', reason: 'token_refresh_transient' }
+    ])
   })
 })

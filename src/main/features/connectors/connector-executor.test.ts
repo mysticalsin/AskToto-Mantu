@@ -118,6 +118,23 @@ describe('connector executor', () => {
     expect(read).not.toHaveBeenCalled()
   })
 
+  it('records a transient grant as degraded without asking for consent on a blocked write', async () => {
+    const { executor, accounts, write } = setup({ grant: 'transient', ready: false })
+    const input = { subject: 'x' }
+
+    const result = await executor.execute({
+      opId: 'outlook.draft.create',
+      revision: 3,
+      input,
+      approval: approval('outlook.draft.create', 3, input)
+    })
+
+    expect(accounts.observe).toHaveBeenCalledWith('outlook', ACCOUNT_REF, 'token_refresh_transient')
+    expect(result).toMatchObject({ ok: false, reason: 'account_not_ready' })
+    expect(result).not.toHaveProperty('needsConsent')
+    expect(write).not.toHaveBeenCalled()
+  })
+
   it('refuses operations with account_not_ready after a real grant result if health is not ready', async () => {
     const { executor, read } = setup({ ready: false })
     const result = await executor.execute({ opId: 'outlook.calendar.today', revision: 3, input: {} })

@@ -1,5 +1,6 @@
 import type { IpcMain, IpcMainInvokeEvent } from 'electron'
-import { authStatus, getGraphToken } from '../../auth'
+import { authStatus, getGraphTokenOutcome } from '../../auth'
+import type { GraphTokenOutcome } from '../../auth'
 import type { OwnerSessionAuthority } from '../../lifecycle/owner-session-authority'
 import { createFileConnectorAccountStore } from './account-store'
 import type { ConnectorAccountStore } from './account-store'
@@ -19,7 +20,7 @@ export interface ConnectorAccountsBootstrapDeps {
   identity?(): { signedIn: boolean; email?: string }
   /** Test seams; production persists to userData and verifies against the main-process Graph token cache. */
   accountStore?: ConnectorAccountStore
-  verifyCurrentIdentity?(): Promise<string | null>
+  verifyCurrentIdentity?(): Promise<GraphTokenOutcome>
 }
 
 /** Main-only connector account lifecycle: owner/tenant partition, registry, safe account-view IPC and G60 executor. */
@@ -48,8 +49,12 @@ export function bootstrapConnectorAccounts(deps: ConnectorAccountsBootstrapDeps)
 
     let signal: ConnectorAccountVerificationSignal
     try {
-      const token = await (deps.verifyCurrentIdentity ?? (() => getGraphToken(['User.Read'])))()
-      signal = token ? 'token_refresh_succeeded' : 'token_refresh_rejected'
+      const outcome = await (deps.verifyCurrentIdentity ?? (() => getGraphTokenOutcome(['User.Read'])))()
+      signal = outcome.ok
+        ? 'token_refresh_succeeded'
+        : outcome.reason === 'transient'
+          ? 'token_refresh_transient'
+          : 'token_refresh_rejected'
     } catch {
       signal = 'token_refresh_transient'
     }
