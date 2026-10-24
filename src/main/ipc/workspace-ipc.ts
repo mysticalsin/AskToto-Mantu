@@ -15,6 +15,7 @@ import { RESPONSIVENESS_IPC } from '@shared/responsiveness-ipc'
 import { boundedAnswerAskId } from '../ask-stream-registry'
 import {
   askTiming,
+  type CardOutcomeName,
   emptyResponsivenessReport,
   getResponsivenessRecorder
 } from '../infra/observability/responsiveness-recorder'
@@ -71,6 +72,15 @@ export function registerWorkspaceIpc(deps: WorkspaceIpcDependencies): void {
     if (!requireAuth()) return
     const id = boundedAnswerAskId(askId)
     if (id) askTiming.displayed(id)
+  })
+
+  // G71: how a displayed suggestion's duplicate review ended. The payload is the ask id and one name from a
+  // closed set (never card text); main counts it once, and only for a suggestion it marked displayed.
+  ipcMain.handle(RESPONSIVENESS_IPC.cardOutcome, (e, askId: unknown, outcome: unknown) => {
+    assertMainWindow(e)
+    if (!requireAuth()) return
+    const id = boundedAnswerAskId(askId)
+    if (id && typeof outcome === 'string') askTiming.cardOutcome(id, outcome as CardOutcomeName)
   })
 
   // Parse a recap's markdown into a structured object (decisions + action-items-with-owners) the renderer

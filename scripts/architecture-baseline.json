@@ -33,7 +33,8 @@
     "src/shared/contracts/knowledge/issue.ts": 1,
     "src/shared/contracts/knowledge/mutation.ts": 1,
     "src/shared/contracts/knowledge/provenance.ts": 1,
-    "src/shared/contracts/knowledge/record.ts": 1
+    "src/shared/contracts/knowledge/record.ts": 1,
+    "src/shared/kernel/intervention-policy.ts": 1
   },
   "FF-04": {
     "src/main/auth.ts": 974,

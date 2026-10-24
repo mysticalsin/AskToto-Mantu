@@ -2,5 +2,6 @@
  *  imports two strings, not the schemas. */
 export const RESPONSIVENESS_IPC = {
   report: 'metrics:responsiveness',
-  displayReceipt: 'metrics:display-receipt'
+  displayReceipt: 'metrics:display-receipt',
+  cardOutcome: 'metrics:card-outcome'
 } as const

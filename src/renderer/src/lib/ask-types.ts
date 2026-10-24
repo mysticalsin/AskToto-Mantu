@@ -6,6 +6,10 @@ import type { AskContextRequest } from '@shared/session-context-request'
 
 export interface AnswerState {
   id: string
+  /** Stable identity of the card on screen: the ask id that produced it, kept when a rollback restores it. */
+  cardId?: string
+  /** Monotonic per `useAsk` instance; bumps on every visible card change (new card, rollback, clear). */
+  revision?: number
   text: string
   streaming: boolean
   /** Missing is legacy/unspecified; only the current request's successful terminal event is complete. */

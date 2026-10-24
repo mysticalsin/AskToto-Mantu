@@ -321,6 +321,57 @@ describe('createAskTiming', () => {
     expect(rec.snapshot().latencies.display_receipt_ms).toEqual([10])
   })
 
+  it('card outcome counts only for a displayed suggestion', () => {
+    const { c, rec, timing } = setup()
+    timing.cardOutcome('forged-id', 'duplicate_rolled_back')
+    timing.start('ask-1', 'suggest')
+    c.advance(100)
+    timing.firstVisible('ask-1')
+    timing.cardOutcome('ask-1', 'duplicate_rolled_back') // shown but no receipt yet
+    c.advance(10)
+    timing.displayed('ask-1')
+    timing.cardOutcome('ask-1', 'duplicate_rolled_back')
+    expect(rec.snapshot().counters).toEqual({
+      suggestions_shown: 1,
+      suggestions_displayed: 1,
+      card_duplicate_rolled_back: 1
+    })
+  })
+
+  it('a second outcome for the same id is ignored', () => {
+    const { c, rec, timing } = setup()
+    timing.start('ask-1', 'suggest')
+    timing.firstVisible('ask-1')
+    c.advance(10)
+    timing.displayed('ask-1')
+    timing.cardOutcome('ask-1', 'duplicate_retained')
+    timing.cardOutcome('ask-1', 'review_expired')
+    expect(rec.snapshot().counters.card_duplicate_retained).toBe(1)
+    expect(rec.snapshot().counters.card_review_expired).toBeUndefined()
+  })
+
+  it('displayed-id memory is capped at 64', () => {
+    const { rec, timing } = setup()
+    for (let i = 0; i < 65; i += 1) {
+      timing.start(`ask-${i}`, 'suggest')
+      timing.firstVisible(`ask-${i}`)
+      timing.displayed(`ask-${i}`)
+    }
+    timing.cardOutcome('ask-0', 'review_superseded') // evicted
+    timing.cardOutcome('ask-64', 'review_superseded')
+    expect(rec.snapshot().counters.card_review_superseded).toBe(1)
+  })
+
+  it('cancel forgets the displayed id', () => {
+    const { rec, timing } = setup()
+    timing.start('ask-1', 'suggest')
+    timing.firstVisible('ask-1')
+    timing.displayed('ask-1')
+    timing.cancel(new Map([['ask-1', { abort: () => {} }]]), 'ask-1')
+    timing.cardOutcome('ask-1', 'review_expired')
+    expect(rec.snapshot().counters.card_review_expired).toBeUndefined()
+  })
+
   it('records a cancel only when a stream was actually released, and drops that ask’s open spans', () => {
     const { c, rec, timing } = setup()
     const aborted: string[] = []

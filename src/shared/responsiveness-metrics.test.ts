@@ -72,6 +72,11 @@ describe('metric catalogue', () => {
         'router_cloud_first',
         'router_local_first',
         'router_unavailable',
+        // G71: card outcomes, counted by main only for a suggestion it marked displayed
+        'card_duplicate_retained',
+        'card_duplicate_rolled_back',
+        'card_review_expired',
+        'card_review_superseded',
         'suggestions_displayed',
         'suggestions_shown',
         'useful_suggestion_ms'
@@ -80,6 +85,7 @@ describe('metric catalogue', () => {
     for (const id of METRIC_IDS) {
       const def = METRIC_DEFINITIONS[id]
       if (def.wiring === 'slot') expect(def.owner, id).toMatch(/^G\d+$/)
+      else if (id.startsWith('card_')) expect(def.owner, id).toBe('G71')
       else expect(def.owner, id).toBeNull()
     }
     expect(METRIC_DEFINITIONS.intervention_eligible.owner).toBe('G70')
@@ -87,7 +93,11 @@ describe('metric catalogue', () => {
   })
 
   it('names the IPC channels outside the shared IPC table', () => {
-    expect(RESPONSIVENESS_IPC).toEqual({ report: 'metrics:responsiveness', displayReceipt: 'metrics:display-receipt' })
+    expect(RESPONSIVENESS_IPC).toEqual({
+      report: 'metrics:responsiveness',
+      displayReceipt: 'metrics:display-receipt',
+      cardOutcome: 'metrics:card-outcome'
+    })
   })
 })
 

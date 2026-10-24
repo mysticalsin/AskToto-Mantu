@@ -22,6 +22,21 @@ describe('metrics preload bridge', () => {
     await expect(api.reportDisplayReceipt('ask-1')).resolves.toBeUndefined()
   })
 
+  it('reportCardOutcome invokes metrics:card-outcome with only the ask id and the outcome', async () => {
+    const invoke = vi.fn(async () => undefined)
+    const api = createMetricsPreloadApi({ invoke })
+    await api.reportCardOutcome('ask-1', 'duplicate_rolled_back')
+    expect(invoke).toHaveBeenLastCalledWith('metrics:card-outcome', 'ask-1', 'duplicate_rolled_back')
+  })
+
+  it('swallows a rejected invoke', async () => {
+    const invoke = vi.fn(async () => {
+      throw new Error('synthetic ipc failure')
+    })
+    const api = createMetricsPreloadApi({ invoke })
+    await expect(api.reportCardOutcome('ask-1', 'review_expired')).resolves.toBeUndefined()
+  })
+
   it('is spread into the window.toto bridge, and the inline readMetrics it replaced is gone', () => {
     // index.ts composes the self-contained feature bridges through feature-apis.ts (V02), which spreads this one.
     const { text } = readModuleSource(__dirname, './index')
