@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useId, useRef, useState, type ReactNode } from 'react'
 import { AlertCircle, Headphones, Info, MessageSquare, MessageSquareQuote, Mic, Volume2 } from 'lucide-react'
 import type { PublicSettings } from '@shared/ipc'
 import { LANGUAGE_OPTIONS } from '@shared/lang-id'
@@ -429,6 +429,8 @@ export function AudioTab({
   // Match the worker's fail-closed source selection. A failed/absent probe cannot expose a development
   // preference that has no effect in a production build.
   const [asrBundled, setAsrBundled] = useState(true)
+  const quietTitleId = useId()
+  const quietHelpId = useId()
   useEffect(() => {
     void window.toto
       .asrBundled()
@@ -499,10 +501,12 @@ export function AudioTab({
       <Section title="In meetings" icon={Headphones}>
         <label className="flex flex-col gap-1 px-1 py-2 text-[12px] text-[color:var(--cl-muted-foreground)]">
           <span className="flex items-center gap-2 text-[13px] text-[color:var(--cl-foreground)]">
-            Quiet mode <ManagedChip keys={settings.managedKeys} k="quietMode" />
+            <span id={quietTitleId}>Quiet mode</span> <ManagedChip keys={settings.managedKeys} k="quietMode" />
           </span>
-          <span>Stay quiet during calls and screen sharing</span>
+          <span id={quietHelpId}>Stay quiet during calls and screen sharing</span>
           <select
+            aria-labelledby={quietTitleId}
+            aria-describedby={quietHelpId}
             value={settings.quietMode}
             onChange={(e) => patch({ quietMode: e.target.value as PublicSettings['quietMode'] })}
             disabled={settings.managedKeys.includes('quietMode')}

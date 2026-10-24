@@ -50,9 +50,15 @@ const TranscriptRow = memo(function TranscriptRow({
         <span className="mr-1.5 text-[10px] font-semibold uppercase text-[color:var(--color-ink-3)]">{label}</span>
         {line.text}
         {translation && (
-          <div aria-label="Translation" className="mt-0.5 text-[12px] italic text-[color:var(--color-ink-3)]">
+          <div className="mt-0.5 text-[12px] italic text-[color:var(--color-ink-3)]">
+            <span className="sr-only">Translation: </span>
             {translation.text}
-            {translation.lowConfidence && <span className="ml-1.5 not-italic">Low confidence</span>}
+            {translation.lowConfidence && (
+              <>
+                <span className="sr-only">, </span>
+                <span className="ml-1.5 not-italic">Low confidence</span>
+              </>
+            )}
           </div>
         )}
       </div>
