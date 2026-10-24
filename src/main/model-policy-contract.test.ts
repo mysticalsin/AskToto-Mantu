@@ -16,7 +16,8 @@ import { describe, expect, it, vi } from 'vitest'
  * "Every call site" means every place that currently picks a cloud provider + model at all (see
  * AGENTS.md scope / M2-0412 ticket notes). Three capabilities in the policy schema — `commandAgent`,
  * `tts` and `embeddings` — have NO model-routed call site anywhere in this app (command parsing is
- * rule-based; there is no text-to-speech path; no embedding model is called), so there is nothing to
+ * rule-based; text-to-speech (G27 spoken replies) is synthesized on-device by the OS voice through
+ * the native helper, never by a routed model; no embedding model is called), so there is nothing to
  * wire; the negative assertions below pin that absence rather than silently ignoring it. `stt` is
  * enforced where a cloud speech session starts and `localModel` in local-routing's readiness gate.
  */
@@ -420,15 +421,21 @@ describe('M2-0412 — every createStream( call site in src/main resolves through
 })
 
 describe('M2-0412 — capabilities with no model-routed call site are a documented absence, not a silent gap', () => {
-  it('there is no text-to-speech call site anywhere in src/main (tts has nothing to enforce)', () => {
-    const grep = (pattern: RegExp): boolean => {
-      // Every non-test source file under src/main, so a synthesis call site cannot hide anywhere.
-      const files = readdirSync(join(root, 'src/main'), { recursive: true, encoding: 'utf8' }).filter(
-        (f) => /\.(ts|tsx|mjs|js)$/.test(f) && !/\.test\.(ts|tsx)$/.test(f)
-      )
-      return files.some((f) => pattern.test(src(join('src/main', f))))
+  it('text-to-speech is on-device only: no model-routed or network synthesis call site in src/main (tts has nothing to enforce)', () => {
+    // Every non-test source file under src/main, so a synthesis call site cannot hide anywhere.
+    const files = readdirSync(join(root, 'src/main'), { recursive: true, encoding: 'utf8' }).filter(
+      (f) => /\.(ts|tsx|mjs|js)$/.test(f) && !/\.test\.(ts|tsx)$/.test(f)
+    )
+    const ttsFiles = files.filter((f) => /text-to-speech|synthesizeSpeech|ttsStream/i.test(src(join('src/main', f))))
+    // G27's on-device path is the only place speech is synthesized: the typed adapter and its process host.
+    expect(ttsFiles.map((f) => f.replace(/\\/g, '/')).sort()).toEqual([
+      'features/spoken-replies/tts-adapter.ts',
+      'infra/process/tts-process-host.ts'
+    ])
+    for (const f of files.filter((f) => /features\/spoken-replies\/|infra\/process\/tts-process-host/.test(f.replace(/\\/g, '/')))) {
+      const text = src(join('src/main', f))
+      expect(text, f).not.toMatch(/resolveModelTier|PROVIDERS\[|createStream|\bfetch\(|https?:\/\/|WebSocket/)
     }
-    expect(grep(/text-to-speech|synthesizeSpeech|ttsStream/i)).toBe(false)
   })
 
   it('command-agent parsing is rule-based, not model-routed (metis-command-parse.ts has no provider/model resolution)', () => {
