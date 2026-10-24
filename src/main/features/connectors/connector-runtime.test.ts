@@ -19,7 +19,10 @@ import { CONNECTOR_CATALOG_REVISION } from '@shared/connector-catalog'
 import { OUTLOOK_DRAFT_CONSENT_COPY } from '../../outlook-write'
 import { createMemoryConnectorAccountStore } from './account-store'
 import { createConnectorAccountRegistry } from './account-registry'
+import type { AccountChoiceState } from '@shared/connector-account-choice'
 import {
+  accountChoiceBroker,
+  configureAccountChoiceDelivery,
   configureConnectorAccountRuntime,
   connectorCatalog,
   runConnectorWrite,
@@ -48,7 +51,12 @@ beforeEach(() => {
   })
 })
 
-afterEach(() => configureConnectorAccountRuntime(null))
+afterEach(() => {
+  accountChoiceBroker().revokeAll('test')
+  configureAccountChoiceDelivery(null)
+  configureConnectorAccountRuntime(null)
+  vi.useRealTimers()
+})
 
 describe('runConnectorWrite (Outlook IPC consumer)', () => {
   it('creates a draft through the executor and keeps the legacy result shape', async () => {
@@ -104,7 +112,7 @@ describe('runConnectorWrite (Outlook IPC consumer)', () => {
     const fetchSpy = vi.fn()
     vi.stubGlobal('fetch', fetchSpy)
     const result = await runConnectorWriteDetailed('outlook.draft.create', { subject: 'Hi', body: 'x' })
-    expect(result.result).toMatchObject({ ok: false, reason: 'account_unavailable' })
+    expect(result.result).toMatchObject({ ok: false, reason: 'account_ambiguous' })
     expect(fetchSpy).not.toHaveBeenCalled()
     expect(getGraphTokenOutcome).not.toHaveBeenCalled()
   })
@@ -119,6 +127,157 @@ describe('runConnectorWrite (Outlook IPC consumer)', () => {
     expect(result.result).toMatchObject({ ok: false, reason: 'account_not_ready' })
     expect(result.result).not.toHaveProperty('needsConsent')
     expect(await runtimeRegistry.listViews()).toMatchObject([{ health: 'degraded', reason: 'token_refresh_transient' }])
+    expect(fetchSpy).not.toHaveBeenCalled()
+  })
+})
+
+describe('ambiguity choice card (G62)', () => {
+  const OWNER = 5
+  const draftInput = { subject: 'Quarterly numbers', body: 'private body text' }
+  const created = () => vi.fn(async () => new Response(JSON.stringify({ id: 'AAMk-chosen' }), { status: 201 }))
+
+  async function twoHealthyAccounts() {
+    const current = await runtimeRegistry.ensureAccount({
+      kind: 'outlook',
+      providerAccountId: 'synthetic-outlook-owner@example.test',
+      label: 'Synthetic Outlook'
+    })
+    const other = await runtimeRegistry.ensureAccount({
+      kind: 'outlook',
+      providerAccountId: 'second-account@example.test',
+      label: 'Second'
+    })
+    await runtimeRegistry.observe('outlook', current, 'token_refresh_succeeded')
+    await runtimeRegistry.observe('outlook', other, 'token_refresh_succeeded')
+    return { current, other }
+  }
+  const sentCards = () => {
+    const sent: Array<{ id: number; state: AccountChoiceState }> = []
+    configureAccountChoiceDelivery((id, state) => sent.push({ id, state }))
+    return sent
+  }
+  const cardOf = (state: AccountChoiceState) => {
+    if (state.choiceId === null) throw new Error('expected a card')
+    return state
+  }
+
+  it('does not run an ambiguous write: it issues a card with safe account views and no content', async () => {
+    await twoHealthyAccounts()
+    const sent = sentCards()
+    const fetchSpy = vi.fn()
+    vi.stubGlobal('fetch', fetchSpy)
+    const r = await runConnectorWriteDetailed('outlook.draft.create', draftInput, { ownerWebContentsId: OWNER })
+    expect(r).toMatchObject({ ok: false, result: { ok: false, reason: 'account_ambiguous' } })
+    expect(fetchSpy).not.toHaveBeenCalled()
+    expect(sent).toHaveLength(1)
+    expect(sent[0].id).toBe(OWNER)
+    const card = cardOf(sent[0].state)
+    expect(card.options.map((o) => o.label).sort()).toEqual(['Second', 'Synthetic Outlook'])
+    const wire = JSON.stringify(card)
+    expect(wire).not.toMatch(/Quarterly|private body|synthetic-outlook-owner|second-account@/)
+  })
+
+  it('resumes exactly that operation once with the chosen account; a replay is refused', async () => {
+    const { other } = await twoHealthyAccounts()
+    const sent = sentCards()
+    const fetchSpy = created()
+    vi.stubGlobal('fetch', fetchSpy)
+    await runConnectorWriteDetailed('outlook.draft.create', draftInput, { ownerWebContentsId: OWNER })
+    const card = cardOf(sent[0].state)
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(Date.now() + 500)
+    const decision = {
+      webContentsId: OWNER,
+      choiceId: card.choiceId,
+      nonce: card.nonce,
+      argsHash: card.argsHash,
+      accountRef: other
+    }
+    const first = await accountChoiceBroker().decide(decision)
+    expect(first).toEqual({ ok: true, result: { ok: true, id: 'AAMk-chosen' } })
+    expect(fetchSpy).toHaveBeenCalledOnce()
+    const body = JSON.parse(String((fetchSpy.mock.calls[0] as unknown as [string, { body: string }])[1].body))
+    expect(body.subject).toBe('Quarterly numbers')
+    expect(await accountChoiceBroker().decide(decision)).toEqual({ ok: false, reason: 'missing' })
+    expect(fetchSpy).toHaveBeenCalledOnce()
+  })
+
+  it('refuses a choice bound to other arguments, and never offers an unhealthy account', async () => {
+    const { current, other } = await twoHealthyAccounts()
+    const sick = await runtimeRegistry.ensureAccount({
+      kind: 'outlook',
+      providerAccountId: 'third@example.test',
+      label: 'Third'
+    })
+    await runtimeRegistry.observe('outlook', sick, 'token_refresh_rejected')
+    const sent = sentCards()
+    const fetchSpy = created()
+    vi.stubGlobal('fetch', fetchSpy)
+    await runConnectorWriteDetailed('outlook.draft.create', draftInput, { ownerWebContentsId: OWNER })
+    const card = cardOf(sent[0].state)
+    expect(card.options.find((o) => o.accountRef === sick)).toMatchObject({ selectable: false, health: 'needs_reauth' })
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(Date.now() + 500)
+    const base = { webContentsId: OWNER, choiceId: card.choiceId, nonce: card.nonce }
+    expect(await accountChoiceBroker().decide({ ...base, argsHash: 'f'.repeat(64), accountRef: other })).toEqual({
+      ok: false,
+      reason: 'args_mismatch'
+    })
+    expect(await accountChoiceBroker().decide({ ...base, argsHash: card.argsHash, accountRef: sick })).toEqual({
+      ok: false,
+      reason: 'not_offered'
+    })
+    expect(fetchSpy).not.toHaveBeenCalled()
+    expect((await accountChoiceBroker().decide({ ...base, argsHash: card.argsHash, accountRef: current })).ok).toBe(
+      true
+    )
+  })
+
+  it('a stale grant on the chosen account is reported with the consent copy and nothing is written', async () => {
+    const { other } = await twoHealthyAccounts()
+    const sent = sentCards()
+    const fetchSpy = vi.fn()
+    vi.stubGlobal('fetch', fetchSpy)
+    await runConnectorWriteDetailed('outlook.draft.create', draftInput, { ownerWebContentsId: OWNER })
+    const card = cardOf(sent[0].state)
+    getGraphTokenOutcome.mockResolvedValue({ ok: false, reason: 'interaction_required' })
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(Date.now() + 500)
+    const r = await accountChoiceBroker().decide({
+      webContentsId: OWNER,
+      choiceId: card.choiceId,
+      nonce: card.nonce,
+      argsHash: card.argsHash,
+      accountRef: other
+    })
+    expect(r).toEqual({ ok: true, result: { ok: false, needsConsent: true, error: OUTLOOK_DRAFT_CONSENT_COPY } })
+    expect(fetchSpy).not.toHaveBeenCalled()
+  })
+
+  it('uses the account bound to the source item without asking, and says which rule chose it', async () => {
+    const { other } = await twoHealthyAccounts()
+    const sent = sentCards()
+    vi.stubGlobal('fetch', created())
+    const r = await runConnectorWriteDetailed('outlook.draft.create', draftInput, {
+      ownerWebContentsId: OWNER,
+      sourceAccountRef: other
+    })
+    expect(r).toMatchObject({
+      ok: true,
+      id: 'AAMk-chosen',
+      result: { provenance: { accountRef: other, accountRule: 'source_item_account' } }
+    })
+    expect(sent).toHaveLength(0)
+  })
+
+  it('without an owner window nothing runs and no card is issued (fail closed)', async () => {
+    await twoHealthyAccounts()
+    const sent = sentCards()
+    const fetchSpy = vi.fn()
+    vi.stubGlobal('fetch', fetchSpy)
+    const r = await runConnectorWriteDetailed('outlook.draft.create', draftInput)
+    expect(r.result).toMatchObject({ ok: false, reason: 'account_ambiguous' })
+    expect(sent).toHaveLength(0)
     expect(fetchSpy).not.toHaveBeenCalled()
   })
 })

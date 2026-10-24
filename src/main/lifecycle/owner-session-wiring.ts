@@ -1,4 +1,4 @@
-import { app, webFrameMain, type IpcMain, type IpcMainInvokeEvent } from 'electron'
+import { app, webContents, webFrameMain, type IpcMain, type IpcMainInvokeEvent } from 'electron'
 import { createMainTranscriptRevision } from '../features/meetings/main-transcript-revision'
 import { bindMeetingContexts, type MeetingContexts } from '../features/session-context/wiring'
 import { bindTranscriptCheckpointStore } from '../features/meetings/transcript-checkpoint-binding'
@@ -89,7 +89,8 @@ export function createOwnerSessionWiring(deps: OwnerSessionWiringDeps): OwnerSes
     requireAuth: () => requireAuth(),
     ownerSession,
     userDataPath: () => app.getPath('userData'),
-    onWillQuit: (listener) => app.once('will-quit', listener)
+    onWillQuit: (listener) => app.once('will-quit', listener),
+    sendToWebContents: (id, channel, state) => webContents.fromId(id)?.send(channel, state)
   })
   const transcriptRevision = createMainTranscriptRevision(
     (frame) => ownerSession.current(frame),

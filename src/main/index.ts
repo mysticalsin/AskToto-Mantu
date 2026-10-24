@@ -7005,7 +7005,7 @@ function registerIpc(): void {
     if (!requireAuth()) return { ok: false, error: 'Sign in with your Mantu account first.' }
     const parsed = OutlookDraftPayloadSchema.safeParse(payload)
     if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message || 'Invalid draft.' }
-    const r = await runConnectorWrite('outlook.draft.create', parsed.data)
+    const r = await runConnectorWrite('outlook.draft.create', parsed.data, { ownerWebContentsId: e.sender.id })
     if (r.ok) {
       appendTimeSavedEvent({
         kind: 'mcp-push',
@@ -7021,7 +7021,7 @@ function registerIpc(): void {
     if (!requireAuth()) return { ok: false, error: 'Sign in with your Mantu account first.' }
     const parsed = OutlookEventPayloadSchema.safeParse(payload)
     if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message || 'Invalid event.' }
-    const r = await runConnectorWrite('outlook.event.create', parsed.data)
+    const r = await runConnectorWrite('outlook.event.create', parsed.data, { ownerWebContentsId: e.sender.id })
     if (r.ok) {
       appendTimeSavedEvent({
         kind: 'mcp-push',

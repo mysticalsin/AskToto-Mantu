@@ -7,9 +7,17 @@ export interface ConnectorAccountScope {
   readonly tenantKey: string
 }
 
+/** One connected account as the resolver and the choice card see it: opaque ref, display fields and health. */
+export interface AccountResolverCandidate {
+  accountRef: AccountRef
+  label: string
+  maskedHint?: string
+  health: ConnectorAccountHealth
+}
+
 export interface AccountResolver {
-  /** Returns the requested account or the only non-disconnected account; ambiguity fails closed. */
-  resolve(kind: ConnectorKind, requestedAccountRef?: AccountRef): AccountRef | null
+  /** Every account of the kind in the current owner/tenant partition, disconnected ones included. Empty when signed out. */
+  candidates(kind: ConnectorKind): AccountResolverCandidate[]
   isReady(kind: ConnectorKind, accountRef: AccountRef, effect: ConnectorEffect): boolean
   /** Records only a result observed from the provider or its token refresh path. */
   observe(kind: ConnectorKind, accountRef: AccountRef, signal: ConnectorAccountHealthSignal): Promise<boolean>

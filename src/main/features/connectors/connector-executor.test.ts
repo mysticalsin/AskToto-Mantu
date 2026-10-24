@@ -10,6 +10,7 @@ import {
   type ConnectorHandler
 } from './connector-executor'
 import type { AccountRef, ConnectorEffect } from '@shared/connector-catalog'
+import type { AccountResolverCandidate } from './account-ref'
 
 const READ: ConnectorOperation = {
   opId: 'outlook.calendar.today',
@@ -31,6 +32,14 @@ const WRITE: ConnectorOperation = {
 }
 
 const ACCOUNT_REF = `acct_${'A'.repeat(43)}` as AccountRef
+const OTHER_REF = `acct_${'B'.repeat(43)}` as AccountRef
+const CANDIDATE: AccountResolverCandidate = { accountRef: ACCOUNT_REF, label: 'Work', health: 'healthy' }
+const OTHER: AccountResolverCandidate = {
+  accountRef: OTHER_REF,
+  label: 'Personal',
+  maskedHint: 'p***@example.test',
+  health: 'healthy'
+}
 
 function setup(
   over: {
@@ -38,6 +47,7 @@ function setup(
     handler?: ConnectorHandler
     revision?: number
     ready?: boolean | ((effect: ConnectorEffect) => boolean)
+    candidates?: AccountResolverCandidate[]
   } = {}
 ) {
   const publisher = createCatalogPublisher({ revision: over.revision ?? 3, operations: [READ, WRITE] })
@@ -45,7 +55,7 @@ function setup(
   const read = vi.fn<ConnectorHandler>(async () => ({ ok: true, output: { events: [] } }))
   const grants = { check: vi.fn(async () => over.grant ?? 'granted') }
   const accounts = {
-    resolve: vi.fn((_kind: 'outlook', requested?: AccountRef) => requested ?? ACCOUNT_REF),
+    candidates: vi.fn((_kind: 'outlook') => over.candidates ?? [CANDIDATE]),
     isReady: vi.fn((_kind: 'outlook', _ref: AccountRef, effect: ConnectorEffect) =>
       typeof over.ready === 'function' ? over.ready(effect) : (over.ready ?? over.grant !== 'stale')
     ),
@@ -158,11 +168,102 @@ describe('connector executor', () => {
     expect(accounts.isReady).toHaveBeenCalledWith('outlook', ACCOUNT_REF, 'create')
   })
 
-  it('passes an explicit opaque account reference to the registry instead of choosing another account', async () => {
-    const { executor, accounts } = setup()
-    const requested = `acct_${'B'.repeat(43)}` as AccountRef
-    await executor.execute({ opId: 'outlook.calendar.today', revision: 3, input: {}, accountRef: requested })
-    expect(accounts.resolve).toHaveBeenCalledWith('outlook', requested)
+  it('an explicit owner choice names the account; no other account stands in for it', async () => {
+    const { executor, accounts, read } = setup({ candidates: [CANDIDATE, OTHER] })
+    const ok = await executor.execute({ opId: 'outlook.calendar.today', revision: 3, input: {}, accountRef: OTHER_REF })
+    expect(ok).toMatchObject({ ok: true, provenance: { accountRef: OTHER_REF, accountRule: 'explicit_owner_choice' } })
+    expect(accounts.isReady).toHaveBeenCalledWith('outlook', OTHER_REF, 'read')
+    read.mockClear()
+    const missing = `acct_${'Z'.repeat(43)}` as AccountRef
+    const refused = await executor.execute({
+      opId: 'outlook.calendar.today',
+      revision: 3,
+      input: {},
+      accountRef: missing
+    })
+    expect(refused).toMatchObject({ ok: false, reason: 'account_unavailable' })
+    expect(read).not.toHaveBeenCalled()
+  })
+
+  it('uses the account bound to the source item and records that rule', async () => {
+    const { executor, audit } = setup({ candidates: [CANDIDATE, OTHER] })
+    const r = await executor.execute({
+      opId: 'outlook.calendar.today',
+      revision: 3,
+      input: {},
+      sourceAccountRef: OTHER_REF
+    })
+    expect(r).toMatchObject({ ok: true, provenance: { accountRef: OTHER_REF, accountRule: 'source_item_account' } })
+    expect(audit).toHaveBeenCalledWith(
+      'connector.executed',
+      expect.objectContaining({ accountRule: 'source_item_account' })
+    )
+  })
+
+  it('records which rule chose a lone account, in the result and in a closed audit record', async () => {
+    const { executor, audit } = setup()
+    const r = await executor.execute({ opId: 'outlook.calendar.today', revision: 3, input: {} })
+    expect(r).toMatchObject({ ok: true, provenance: { accountRule: 'only_account' } })
+    const [, metadata] = audit.mock.calls.find(([event]) => event === 'connector.executed') ?? []
+    expect(metadata).toEqual({
+      opId: 'outlook.calendar.today',
+      revision: 3,
+      effect: 'read',
+      accountRule: 'only_account'
+    })
+    expect(JSON.stringify(audit.mock.calls)).not.toMatch(/acct_|example\.test|Work|Personal/)
+  })
+
+  it('does not run an ambiguous operation: it returns renderer-safe choices and touches nothing', async () => {
+    const stale = {
+      ...OTHER,
+      accountRef: `acct_${'C'.repeat(43)}` as AccountRef,
+      label: 'Old',
+      health: 'needs_reauth' as const
+    }
+    const { executor, write, grants, accounts, audit } = setup({ candidates: [CANDIDATE, OTHER, stale] })
+    const r = await executor.execute({
+      opId: 'outlook.draft.create',
+      revision: 3,
+      input: { subject: 'x' },
+      approval: approval('outlook.draft.create', 3, { subject: 'x' })
+    })
+    expect(r).toMatchObject({ ok: false, reason: 'account_ambiguous' })
+    expect(!r.ok && r.choices).toEqual([
+      { accountRef: ACCOUNT_REF, label: 'Work', health: 'healthy', selectable: true },
+      {
+        accountRef: OTHER_REF,
+        label: 'Personal',
+        maskedHint: 'p***@example.test',
+        health: 'healthy',
+        selectable: true
+      },
+      {
+        accountRef: stale.accountRef,
+        label: 'Old',
+        maskedHint: 'p***@example.test',
+        health: 'needs_reauth',
+        selectable: false
+      }
+    ])
+    expect(write).not.toHaveBeenCalled()
+    expect(grants.check).not.toHaveBeenCalled()
+    expect(accounts.observe).not.toHaveBeenCalled()
+    expect(audit).toHaveBeenCalledWith(
+      'connector.refused',
+      expect.objectContaining({ reason: 'account_ambiguous', candidateCount: 3 })
+    )
+    expect(JSON.stringify(audit.mock.calls)).not.toMatch(/acct_|example\.test/)
+  })
+
+  it('excludes an unhealthy account from the automatic pick when exactly one healthy account remains', async () => {
+    const sick = { ...OTHER, health: 'needs_reauth' as const }
+    const { executor } = setup({ candidates: [sick, CANDIDATE] })
+    const r = await executor.execute({ opId: 'outlook.calendar.today', revision: 3, input: {} })
+    expect(r).toMatchObject({
+      ok: true,
+      provenance: { accountRef: ACCOUNT_REF, accountRule: 'single_healthy_account' }
+    })
   })
 
   it('returns provenance with every result, including refusals after resolution', async () => {

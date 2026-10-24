@@ -11,6 +11,8 @@ import { auditLog } from '../../logger'
 import { OUTLOOK_DRAFT_CONSENT_COPY, OUTLOOK_EVENT_CONSENT_COPY, type OutlookWriteResult } from '../../outlook-write'
 import type { AccountResolver } from './account-ref'
 import type { ConnectorAccountRegistry } from './account-registry'
+import type { AccountChoiceRunResult, AccountChoiceState } from '@shared/connector-account-choice'
+import { createAccountChoiceBroker, type AccountChoiceBroker, type PendingAccountChoice } from './account-choice-broker'
 import { createCatalogPublisher } from './catalog-publisher'
 import {
   createActionGuardWriteGate,
@@ -65,7 +67,7 @@ export async function ensureCurrentConnectorAccount(kind: ConnectorKind): Promis
 }
 
 const registeredAccounts: AccountResolver = {
-  resolve: (kind, requested) => accountRuntime?.registry.resolve(kind, requested) ?? null,
+  candidates: (kind) => accountRuntime?.registry.candidates(kind) ?? [],
   isReady: (kind, ref, effect) => accountRuntime?.registry.isReady(kind, ref, effect) ?? false,
   observe: async (kind, ref, signal) => accountRuntime?.registry.observe(kind, ref, signal) ?? false
 }
@@ -83,15 +85,75 @@ export function connectorExecutor(): ConnectorExecutor {
   return executor
 }
 
+function toLegacy(opId: string, result: ConnectorResult): OutlookWriteResult & { result: ConnectorResult } {
+  if (result.ok) return { ok: true, id: (result.output as { id: string }).id, result }
+  const consent = result.needsConsent ? OUTLOOK_CONSENT_COPY[opId] : undefined
+  return {
+    ok: false,
+    error: consent ?? result.error ?? result.message,
+    ...(result.needsConsent ? { needsConsent: true } : {}),
+    result
+  }
+}
+
+let choiceDelivery: ((webContentsId: number, state: AccountChoiceState) => void) | null = null
+
+/** Wired by the lifecycle composition root: how a card reaches the owner window. Tests pass a recorder. */
+export function configureAccountChoiceDelivery(
+  send: ((webContentsId: number, state: AccountChoiceState) => void) | null
+): void {
+  choiceDelivery = send
+}
+
+async function resumeChosenOperation(
+  pending: PendingAccountChoice,
+  accountRef: AccountRef
+): Promise<AccountChoiceRunResult> {
+  // The owner's choice is the only thing that names the account. The approval is the card's own proposal id and
+  // the hash of the exact arguments, so the executor's write gate accepts this operation and nothing else.
+  const result = await connectorExecutor().execute({
+    opId: pending.opId,
+    revision: pending.revision,
+    input: pending.input,
+    accountRef,
+    approval: { proposalId: pending.choiceId, argsHash: pending.argsHash }
+  })
+  const { result: _result, ...legacy } = toLegacy(pending.opId, result)
+  return legacy
+}
+
+let choiceBroker: AccountChoiceBroker | null = null
+/** The one ambiguity choice card broker (G62). Created on first use; delivery is wired by the composition root. */
+export function accountChoiceBroker(): AccountChoiceBroker {
+  choiceBroker ??= createAccountChoiceBroker({
+    send: (id, state) => choiceDelivery?.(id, state),
+    resume: resumeChosenOperation,
+    catalogRevision: () => connectorCatalog.current().revision,
+    audit: (event, metadata) => auditLog(event as never, metadata as never)
+  })
+  return choiceBroker
+}
+
+export interface ConnectorWriteOptions {
+  /** The window that asked. With more than one eligible account, the choice card is issued to it. */
+  ownerWebContentsId?: number
+  /** The account bound to the item being written about (main-supplied; never from a renderer). */
+  sourceAccountRef?: AccountRef
+}
+
 /**
  * Run a catalog write for an owner who just asked for it through a main-window-gated IPC (the Review button). The
  * approval is minted here, bound to the schema-parsed arguments, and the executor still revalidates the revision,
  * the op, the input and the grant. ASSUMED until G64 routes the confirm card's own proposal id through here.
  * The result keeps the legacy `OutlookWriteResult` shape so the renderer is unchanged.
+ *
+ * When more than one account could run it and no trusted signal picks one, nothing runs: a choice card is issued to
+ * `ownerWebContentsId`, and the owner's choice resumes exactly this operation once (account-choice-broker.ts).
  */
 export async function runConnectorWriteDetailed(
   opId: string,
-  input: unknown
+  input: unknown,
+  options: ConnectorWriteOptions = {}
 ): Promise<OutlookWriteResult & { result: ConnectorResult }> {
   const exec = connectorExecutor()
   const planned = exec.plan(opId, input)
@@ -115,27 +177,38 @@ export async function runConnectorWriteDetailed(
     }
     return { ok: false, error: result.message, result }
   }
+  const argsHash = writeArgsHash(opId, planned.revision, parsed.data)
   const result = await exec.execute({
     opId,
     revision: planned.revision,
     input,
-    approval: {
-      proposalId: randomBytes(16).toString('hex'),
-      argsHash: writeArgsHash(opId, planned.revision, parsed.data)
-    }
+    ...(options.sourceAccountRef ? { sourceAccountRef: options.sourceAccountRef } : {}),
+    approval: { proposalId: randomBytes(16).toString('hex'), argsHash }
   })
-  if (result.ok) return { ok: true, id: (result.output as { id: string }).id, result }
-  const consent = result.needsConsent ? OUTLOOK_CONSENT_COPY[opId] : undefined
-  return {
-    ok: false,
-    error: consent ?? result.error ?? result.message,
-    ...(result.needsConsent ? { needsConsent: true } : {}),
-    result
+  if (
+    !result.ok &&
+    result.reason === 'account_ambiguous' &&
+    result.choices &&
+    options.ownerWebContentsId !== undefined
+  ) {
+    accountChoiceBroker().issue({
+      ownerWebContentsId: options.ownerWebContentsId,
+      opId,
+      revision: planned.revision,
+      argsHash,
+      input: parsed.data,
+      options: result.choices
+    })
   }
+  return toLegacy(opId, result)
 }
 
-export async function runConnectorWrite(opId: string, input: unknown): Promise<OutlookWriteResult> {
-  const { result: _result, ...legacy } = await runConnectorWriteDetailed(opId, input)
+export async function runConnectorWrite(
+  opId: string,
+  input: unknown,
+  options?: ConnectorWriteOptions
+): Promise<OutlookWriteResult> {
+  const { result: _result, ...legacy } = await runConnectorWriteDetailed(opId, input, options)
   return legacy
 }
 

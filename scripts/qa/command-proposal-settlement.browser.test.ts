@@ -54,7 +54,12 @@ window.toto = {
     return result
   },
   cancelMetisCommand: async (input) => window.__cancel(input),
-  openPermissionSettings: async () => undefined
+  openPermissionSettings: async () => undefined,
+  // The account choice card (G62) shares this host; with no pending choice it renders nothing.
+  accountChoice: {
+    current: async () => ({ choiceId: null }),
+    onChanged: () => () => undefined
+  }
 }
 const root = createRoot(document.getElementById('root'))
 function render() {
