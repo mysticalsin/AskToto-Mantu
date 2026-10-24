@@ -40,8 +40,8 @@ function record(scope: RoutineScope, n = 0): RoutineRecord {
     tools: [],
     ownerKey: scope.ownerKey,
     tenantKey: scope.tenantKey,
-    idempotencyKey: 'k'.repeat(64),
-    previewHash: 'p'.repeat(64),
+    idempotencyKey: 'c'.repeat(64),
+    previewHash: 'd'.repeat(64),
     now: 100,
     nextDueAt: 500
   })

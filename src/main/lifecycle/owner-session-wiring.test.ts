@@ -21,7 +21,9 @@ vi.mock('electron', () => ({
   webContents: {},
   shell: {},
   nativeImage: {},
-  webFrameMain: { fromId: vi.fn(() => null) }
+  webFrameMain: { fromId: vi.fn(() => null) },
+  net: { isOnline: () => true },
+  powerMonitor: { on: vi.fn(), removeListener: vi.fn() }
 }))
 vi.mock('../auth', () => ({ authStatus: vi.fn(() => ({ signedIn: false })), authSessionGeneration: vi.fn(() => 1) }))
 vi.mock('./memory-partition-wiring', () => ({ bootMainMemoryPartitions: vi.fn() }))

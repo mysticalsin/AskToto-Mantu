@@ -23,8 +23,8 @@ function base(over: Partial<RoutineRecord> = {}): RoutineRecord {
       tools: [],
       ownerKey: KEY,
       tenantKey: TENANT,
-      idempotencyKey: 'k'.repeat(64),
-      previewHash: 'p'.repeat(64),
+      idempotencyKey: 'c'.repeat(64),
+      previewHash: 'd'.repeat(64),
       now: 1000,
       nextDueAt: 5000
     }),

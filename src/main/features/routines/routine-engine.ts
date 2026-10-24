@@ -19,27 +19,21 @@ import {
 } from '@shared/routines'
 import { canonicalJson } from '../../action-guard'
 import type { SchedulerLimits, SchedulerResult, TaskScheduler } from '../../tasks/task-scheduler'
+import { evaluateRoutine, leaseKey, type Gates, type Job, type RoutineAuditPhase } from './routine-evaluate'
 import {
   addPause,
-  applyAllowanceBack,
   newRoutineRecord,
   pushHistory,
   resumeRoutine,
   settleRun,
   type ErrorClass,
   type JournalEntry,
-  type RoutineRecord,
-  type WaitReason
+  type RoutineRecord
 } from './routine-model'
 import type { RoutineScope, RoutineStore } from './routine-store'
-import {
-  compileSchedule,
-  expiryOf,
-  nextOccurrence,
-  occurrencesBetween,
-  scheduleCopy,
-  type Occurrence
-} from './schedule'
+import { compileSchedule, nextOccurrence, scheduleCopy } from './schedule'
+
+export type { RoutineAuditPhase } from './routine-evaluate'
 
 /** One owner runs at most one effect job and two read-only jobs; every routine job is read-only to the scheduler. */
 export const ROUTINE_SCHEDULER_LIMITS: SchedulerLimits = {
@@ -53,25 +47,6 @@ const DAY = 24 * 60 * 60_000
 const JOURNAL_MAX = 512
 const JOURNAL_SETTLED_TTL = 30 * DAY
 const MAX_PENDING_PROPOSALS = 64
-
-export type RoutineAuditPhase =
-  | 'compiled'
-  | 'consented'
-  | 'replayed'
-  | 'claimed'
-  | 'settled'
-  | 'waiting'
-  | 'coalesced'
-  | 'paused'
-  | 'resumed'
-  | 'deleted'
-  | 'withheld'
-  | 'refused'
-  | 'recovered'
-  | 'already_recorded'
-  | 'overlap_blocked'
-  | 'quota_notice'
-  | 'archived'
 
 export type RoutinePublication =
   | { kind: 'routine'; purpose: 'reminder' | 'read_only_suggestion'; title: string }
@@ -146,23 +121,9 @@ interface Proposal {
   action?: { request: Record<string, unknown>; argsHash: string }
 }
 
-interface Job {
-  scope: RoutineScope
-  routineId: string
-  journalKey: string
-  occurrenceKey: string
-  expiresAt: number
-  purpose: RoutineRecord['purpose']
-  title: string
-  tools: readonly string[]
-  action?: RoutineRecord['action']
-}
-
 const sha = (...parts: readonly unknown[]): string => createHash('sha256').update(canonicalJson(parts)).digest('hex')
 const scopeKeyOf = (s: RoutineScope): string => `${s.partitionId}\0${s.tenantKey}\0${s.ownerKey}`
 const sameScope = (a: RoutineScope, b: RoutineScope | null): boolean => b !== null && scopeKeyOf(a) === scopeKeyOf(b)
-const leaseKey = (routineId: string, revision: number, occurrenceKey: string): string =>
-  canonicalJson([routineId, revision, occurrenceKey])
 const isOpen = (e: JournalEntry): boolean => e.status === 'running' || e.status === 'uncertain'
 
 export function createRoutineEngine(deps: RoutineEngineDeps): RoutineEngine {
@@ -497,135 +458,6 @@ export function createRoutineEngine(deps: RoutineEngineDeps): RoutineEngine {
 
   // ---------------------------------------------------------------------------------------------------------- tick
 
-  interface Gates {
-    now: number
-    archived: Set<string>
-    online: boolean
-    quiet: QuietAction
-    idle: boolean
-    allowance: ReturnType<RoutineEngineDeps['allowance']>
-  }
-
-  const evaluate = (
-    r: RoutineRecord,
-    journal: JournalEntry[],
-    gates: Gates,
-    out: { jobs: Job[]; notices: Array<number | null>; scope: RoutineScope }
-  ): RoutineRecord => {
-    const { now } = gates
-    if (r.status !== 'active') return r
-    let cur = r
-    if (cur.pauseReasons.includes('quota') && gates.allowance.available) {
-      // Only `quota` clears. What passed while the allowance was out is not owed.
-      cur = { ...applyAllowanceBack(cur), lastEvaluatedAt: now }
-    }
-    if (gates.archived.has(cur.assistantId) && !cur.pauseReasons.includes('archive')) {
-      cur = addPause(cur, 'archive')
-      audit('archived')
-    }
-    if (!gates.allowance.available && !cur.pauseReasons.includes('quota')) {
-      const resetAt = gates.allowance.resetAt
-      cur = addPause(cur, 'quota')
-      // The notice is shown once per resetAt, however many routines the allowance pauses.
-      const shownFor = cur.quota?.noticeShownFor ?? null
-      const marker = resetAt ?? 0
-      cur = { ...cur, quota: { resetAt, noticeShownFor: marker } }
-      if (shownFor !== marker && !noticed.has(marker)) out.notices.push(resetAt)
-      noticed.add(marker)
-    }
-    if (cur.pauseReasons.length > 0) {
-      // Resume moves the cursor to now, so what passes while paused is never replayed.
-      const nextDueAt = nextOccurrence(cur.schedule, now)?.dueAt ?? null
-      const { waiting: _waiting, ...rest } = cur
-      void _waiting
-      return cur === r && r.nextDueAt === nextDueAt && !r.waiting ? r : { ...rest, nextDueAt }
-    }
-    const due = occurrencesBetween(cur.schedule, cur.lastEvaluatedAt, now)
-    const nextDueAt = nextOccurrence(cur.schedule, now)?.dueAt ?? null
-    if (due.length === 0) return cur.nextDueAt === nextDueAt ? cur : { ...cur, nextDueAt }
-    const live: Occurrence[] = due.filter((o) => expiryOf(cur.schedule, o) > now)
-    const latest = live.at(-1)
-    const skipped = due.length - (latest ? 1 : 0)
-    if (!latest) {
-      audit('coalesced', { count: due.length })
-      const done = cur.consent.consentKind === 'once'
-      return {
-        ...pushHistory(cur, { outcome: 'coalesced', at: now, count: due.length, occurrenceKey: due.at(-1)!.key }),
-        lastEvaluatedAt: now,
-        waiting: undefined,
-        nextDueAt: done ? null : nextDueAt,
-        status: done ? 'completed' : 'active',
-        updatedAt: now
-      }
-    }
-    if (skipped > 0) {
-      audit('coalesced', { count: skipped })
-      // Recorded once; the cursor sits just before the occurrence being claimed so the same ones are not counted twice.
-      cur = {
-        ...pushHistory(cur, { outcome: 'coalesced', at: now, count: skipped, occurrenceKey: latest.key }),
-        lastEvaluatedAt: latest.dueAt - 1
-      }
-    }
-    const wait: WaitReason | null = !gates.online
-      ? 'network'
-      : gates.quiet === 'defer'
-        ? 'quiet'
-        : cur.purpose === 'scheduled_task' && !gates.idle
-          ? 'owner_busy'
-          : null
-    if (wait) {
-      if (cur.waiting?.reason === wait && cur.waiting.occurrenceKey === latest.key) return { ...cur, nextDueAt }
-      audit('waiting', { reason: wait })
-      return {
-        ...pushHistory(cur, { outcome: 'waiting', at: now, waitReason: wait, occurrenceKey: latest.key }),
-        waiting: { reason: wait, since: now, occurrenceKey: latest.key },
-        nextDueAt,
-        updatedAt: now
-      }
-    }
-    const key = leaseKey(cur.routineId, cur.revision, latest.key)
-    if (journal.some((e) => e.key === key)) {
-      audit('already_recorded')
-      return { ...cur, lastEvaluatedAt: latest.dueAt, waiting: undefined, nextDueAt }
-    }
-    if (journal.some((e) => e.routineId === cur.routineId && e.status === 'running')) {
-      audit('overlap_blocked')
-      return cur
-    }
-    const expiresAt = expiryOf(cur.schedule, latest)
-    journal.push({
-      key,
-      routineId: cur.routineId,
-      ownerKey: cur.ownerKey,
-      tenantKey: cur.tenantKey,
-      status: 'running',
-      dueAt: latest.dueAt,
-      expiresAt,
-      startedAt: now
-    })
-    out.jobs.push({
-      scope: out.scope,
-      routineId: cur.routineId,
-      journalKey: key,
-      occurrenceKey: latest.key,
-      expiresAt,
-      purpose: cur.purpose,
-      title: cur.title,
-      tools: cur.tools,
-      ...(cur.action ? { action: cur.action } : {})
-    })
-    audit('claimed')
-    const done = cur.consent.consentKind === 'once'
-    return {
-      ...cur,
-      lastEvaluatedAt: latest.dueAt,
-      waiting: undefined,
-      nextDueAt: done ? null : nextDueAt,
-      status: done ? 'completed' : 'active',
-      updatedAt: now
-    }
-  }
-
   const runTick = async (): Promise<void> => {
     const scope = deps.scope()
     if (scope === null) return
@@ -644,7 +476,7 @@ export function createRoutineEngine(deps: RoutineEngineDeps): RoutineEngine {
       out.jobs.length = 0
       out.notices.length = 0
       const journal = [...view.journal]
-      const routines = view.own.map((r) => evaluate(r, journal, gates, out))
+      const routines = view.own.map((r) => evaluateRoutine(r, journal, gates, out, { audit, noticed }))
       const changed =
         view.recovered > 0 || journal.length !== view.journal.length || routines.some((r, i) => r !== view.own[i])
       if (!changed) return { commit: false as const, value: 0 }
