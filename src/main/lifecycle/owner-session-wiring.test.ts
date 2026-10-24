@@ -6,6 +6,7 @@ import { CONNECTOR_ACCOUNTS_IPC } from '@shared/connector-accounts'
 import { ASSISTANT_IPC } from '@shared/assistants'
 import { DICTATION_MEMORY_IPC } from '@shared/dictation-memory'
 import { USER_MEMORY_IPC } from '@shared/user-memory'
+import { MEETING_RECORD_IPC } from '@shared/meeting-record'
 import { IPC } from '@shared/ipc'
 import { SESSION_CONTEXT_IPC } from '@shared/session-context-request'
 import { ARTIFACT_IPC } from '@shared/artifact'
@@ -82,7 +83,8 @@ describe('owner session wiring', () => {
       ARTIFACT_IPC.reveal,
       ARTIFACT_IPC.arm,
       ...Object.values(ASSISTANT_IPC),
-      ...Object.values(USER_MEMORY_IPC)
+      ...Object.values(USER_MEMORY_IPC),
+      ...Object.values(MEETING_RECORD_IPC)
     ])
     expect(ipcMain.on.mock.calls.map((call) => call[0])).toEqual([ARTIFACT_IPC.dragStart])
   })
@@ -129,7 +131,8 @@ describe('owner session wiring', () => {
             Object.values(DICTATION_MEMORY_IPC).length +
             4 +
             Object.values(ASSISTANT_IPC).length +
-            Object.values(USER_MEMORY_IPC).length
+            Object.values(USER_MEMORY_IPC).length +
+            Object.values(MEETING_RECORD_IPC).length
         },
         () => true
       )
