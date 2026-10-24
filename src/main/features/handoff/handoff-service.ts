@@ -23,8 +23,11 @@ export interface HandoffServiceDeps {
   rateLimit: HandoffRateLimit
   /** A card or confirmed action is already pending: an outside request never replaces it. */
   isBusy(): boolean
-  /** Show the confirmation card for this request. Resolves false when no card could be shown. */
-  propose(request: DesktopActionRequest): Promise<boolean>
+  /**
+   * Show the confirmation card for this request. Resolves false when no card could be shown, and 'busy' when a
+   * card appeared while the request was being checked: the installation boundary refuses to replace it.
+   */
+  propose(request: DesktopActionRequest): Promise<boolean | 'busy'>
   audit(event: HandoffAuditEvent, detail: HandoffAuditDetail): void
 }
 
@@ -45,16 +48,18 @@ export function createHandoffService(deps: HandoffServiceDeps): HandoffService {
       if (!parsed.ok) return refuse(parsed.reason)
       if (deps.isBusy()) return refuse('busy')
       if (!deps.rateLimit.take(deps.now())) return refuse('rate_limited')
-      await deps.ledger.hydrate()
-      const verdict = deps.ledger.consume(parsed.envelope.nonce, parsed.envelope.expiresAt)
+      // The nonce is durable before any card is proposed; an unreadable or unwritable store refuses the handoff.
+      const verdict = await deps.ledger.consume(parsed.envelope.nonce, parsed.envelope.expiresAt)
       if (verdict === 'replayed') return refuse('replayed')
       if (verdict === 'full') return refuse('ledger_full')
-      let shown = false
+      if (verdict === 'unavailable') return refuse('storage_unavailable')
+      let shown: boolean | 'busy' = false
       try {
         shown = await deps.propose(parsed.request)
       } catch {
         shown = false
       }
+      if (shown === 'busy') return refuse('busy')
       if (!shown) return refuse('not_shown')
       deps.audit('handoff.accepted', { claimedOrigin: parsed.envelope.origin, kind: parsed.envelope.payload.kind })
       const { title, body } = parsed.envelope.payload.data

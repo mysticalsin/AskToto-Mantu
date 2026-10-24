@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { readModuleSource } from '../../../test-helpers/module-source'
 import { envelopeDigest, HANDOFF_ORIGINS } from './handoff-envelope'
+import { CommandControl } from '../../command-control'
 import { installHandoff, type HandoffApp } from './handoff-wiring'
 
 const NOW = 1_800_000_000_000
@@ -45,6 +46,7 @@ function setup(
     getWindow: () => window,
     audit,
     argv: [],
+    nonceStore: { load: async () => ({}), save: async () => undefined },
     rateLimit: { take: () => true },
     now: () => NOW,
     sleep: async () => undefined
@@ -94,6 +96,56 @@ describe('installHandoff', () => {
     await settle()
     expect(none.proposeChecked).not.toHaveBeenCalled()
     expect(none.audit).toHaveBeenCalledWith('handoff.rejected', { reason: 'not_shown' })
+  })
+})
+
+describe('installHandoff with the real CommandControl (G37 final install fence)', () => {
+  it('an owner card created while the external preflight is deferred is left untouched, and the handoff is refused', async () => {
+    let releasePreflight: () => void = () => undefined
+    let calls = 0
+    const control = new CommandControl({
+      platform: 'darwin',
+      execute: async () => ({ id: 'desktop.create_note' as const, ok: true, outcome: 'unknown' as const }),
+      policyAllows: () => true,
+      preflight: () => {
+        calls += 1
+        return new Promise((resolve) => {
+          releasePreflight = () => resolve({ ok: true })
+        })
+      }
+    })
+    const audit = vi.fn()
+    installHandoff({
+      app: {
+        isPackaged: false,
+        on: () => undefined,
+        setAsDefaultProtocolClient: () => true,
+        whenReady: () => Promise.resolve(),
+        getPath: () => '/nonexistent-synthetic-userdata'
+      },
+      commandControl: control,
+      getWindow: () => ({ isDestroyed: () => false, webContents: { id: 7 } }),
+      audit,
+      argv: [url(nonce('f'))],
+      nonceStore: { load: async () => ({}), save: async () => undefined },
+      rateLimit: { take: () => true },
+      now: () => NOW,
+      sleep: async () => undefined
+    })
+    await settle()
+    expect(calls).toBe(1) // the external request is parked in its preflight
+    expect(control.hasPendingProposal()).toBe(false)
+    // The owner proposes their own card while that check is in flight.
+    const ownerRequest = { id: 'desktop.create_note' as const, args: { title: 'Owner note', body: 'Mine' } }
+    const owner = control.propose({ webContentsId: 7, revision: 100 }, ownerRequest)
+    const before = control.getState()
+    releasePreflight()
+    await settle()
+    const after = control.getState()
+    expect(after).toEqual(before)
+    expect(after.proposalId).toBe(owner.proposalId)
+    expect(audit).toHaveBeenCalledWith('handoff.rejected', { reason: 'busy' })
+    expect(audit).not.toHaveBeenCalledWith('handoff.accepted', expect.anything())
   })
 })
 

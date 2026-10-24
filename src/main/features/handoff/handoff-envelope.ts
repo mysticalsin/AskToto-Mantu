@@ -41,6 +41,7 @@ export const HANDOFF_REJECT_REASONS = [
   'bad_payload',
   'replayed',
   'ledger_full',
+  'storage_unavailable',
   'not_a_handoff_url',
   'not_shown',
   'busy',

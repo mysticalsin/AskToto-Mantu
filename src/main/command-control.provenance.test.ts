@@ -34,4 +34,20 @@ describe('outside-origin previews (G37)', () => {
     c.propose({ webContentsId: 1, revision: 1 }, note)
     expect(c.hasPendingProposal()).toBe(true)
   })
+
+  it('an external proposal never replaces an existing card or a confirmed action (final install fence)', () => {
+    const c = make()
+    const owner = c.propose({ webContentsId: 1, revision: 1 }, note)
+    const before = c.getState()
+    expect(() => c.propose({ webContentsId: 1, revision: 2 }, note, { provenance: 'external' })).toThrow('busy')
+    expect(c.getState()).toEqual(before)
+    expect(c.getState().proposalId).toBe(owner.proposalId)
+  })
+
+  it('an owner proposal still replaces the previous card', () => {
+    const c = make()
+    const first = c.propose({ webContentsId: 1, revision: 1 }, note)
+    const second = c.propose({ webContentsId: 1, revision: 2 }, note)
+    expect(second.proposalId).not.toBe(first.proposalId)
+  })
 })

@@ -1,4 +1,7 @@
 import { createHash } from 'node:crypto'
+import { mkdtempSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 import { mayProposeActions } from '@shared/context-authority'
 import type { DesktopActionRequest } from '@shared/desktop-actions'
@@ -12,6 +15,7 @@ import {
   type HandoffEnvelope
 } from './handoff-envelope'
 import { createNonceLedger } from './nonce-ledger'
+import { createFileNonceStore } from './nonce-file-store'
 import { envelopeTextFromUrl, extractHandoffUrls } from './handoff-url'
 import { createHandoffService } from './handoff-service'
 import { createHandoffRateLimit } from './handoff-rate-limit'
@@ -142,11 +146,11 @@ describe('parseHandoffEnvelope', () => {
 })
 
 describe('nonce ledger', () => {
-  it('accepts once, rejects replay until expiry, then forgets', () => {
+  it('accepts once, rejects replay until expiry, then forgets', async () => {
     let now = NOW
     const ledger = createNonceLedger({ now: () => now })
-    expect(ledger.consume('n1', NOW + 1000)).toBe('ok')
-    expect(ledger.consume('n1', NOW + 1000)).toBe('replayed')
+    expect(await ledger.consume('n1', NOW + 1000)).toBe('ok')
+    expect(await ledger.consume('n1', NOW + 1000)).toBe('replayed')
     now = NOW + 1000
     expect(ledger.size()).toBe(0)
   })
@@ -161,15 +165,89 @@ describe('nonce ledger', () => {
     }
     const first = createNonceLedger({ now: () => NOW, store })
     await first.hydrate()
-    first.consume('n1', NOW + 1000)
-    await Promise.resolve()
+    expect(await first.consume('n1', NOW + 1000)).toBe('ok')
     const second = createNonceLedger({ now: () => NOW, store })
     await second.hydrate()
-    expect(second.consume('n1', NOW + 1000)).toBe('replayed')
+    expect(await second.consume('n1', NOW + 1000)).toBe('replayed')
     const small = createNonceLedger({ now: () => NOW, max: 2 })
-    small.consume('a', NOW + 1000)
-    small.consume('b', NOW + 1000)
-    expect(small.consume('c', NOW + 1000)).toBe('full')
+    await small.consume('a', NOW + 1000)
+    await small.consume('b', NOW + 1000)
+    expect(await small.consume('c', NOW + 1000)).toBe('full')
+  })
+
+  it('does not report a nonce consumed until the save has finished (G37 durability)', async () => {
+    let release: () => void = () => undefined
+    const saves: Record<string, number>[] = []
+    const store = {
+      load: async () => ({}),
+      save: (r: Record<string, number>) =>
+        new Promise<void>((resolve) => {
+          release = () => {
+            saves.push({ ...r })
+            resolve()
+          }
+        })
+    }
+    const ledger = createNonceLedger({ now: () => NOW, store })
+    let verdict: string | null = null
+    const pending = ledger.consume('n1', NOW + 1000).then((v) => (verdict = v))
+    await new Promise((r) => setImmediate(r))
+    expect(verdict).toBeNull() // the write is still in flight
+    release()
+    await pending
+    expect(verdict).toBe('ok')
+    expect(saves).toEqual([{ n1: NOW + 1000 }])
+  })
+
+  it('refuses when the save fails, and when the store cannot be read (fail closed)', async () => {
+    const failingSave = createNonceLedger({
+      now: () => NOW,
+      store: { load: async () => ({}), save: async () => Promise.reject(new Error('disk full')) }
+    })
+    expect(await failingSave.consume('n1', NOW + 1000)).toBe('unavailable')
+    const unreadable = createNonceLedger({
+      now: () => NOW,
+      store: { load: async () => Promise.reject(new Error('corrupt')), save: async () => undefined }
+    })
+    expect(await unreadable.consume('n1', NOW + 1000)).toBe('unavailable')
+  })
+
+  it('serializes concurrent consumes so each save sees every earlier nonce', async () => {
+    const saved: number[] = []
+    const store = {
+      load: async () => ({}),
+      save: async (r: Record<string, number>) => {
+        await new Promise((res) => setImmediate(res))
+        saved.push(Object.keys(r).length)
+      }
+    }
+    const ledger = createNonceLedger({ now: () => NOW, store })
+    const verdicts = await Promise.all([
+      ledger.consume('a', NOW + 1000),
+      ledger.consume('a', NOW + 1000),
+      ledger.consume('b', NOW + 1000)
+    ])
+    expect(verdicts).toEqual(['ok', 'replayed', 'ok'])
+    expect(saved).toEqual([1, 2])
+  })
+})
+
+describe('file nonce store (G37)', () => {
+  const dir = (): string => mkdtempSync(join(tmpdir(), 'handoff-nonce-'))
+  it('treats a missing file as empty but corrupt or unreadable storage as an error', async () => {
+    const d = dir()
+    expect(await createFileNonceStore(join(d, 'missing.json')).load()).toEqual({})
+    writeFileSync(join(d, 'bad.json'), '{not json')
+    await expect(createFileNonceStore(join(d, 'bad.json')).load()).rejects.toThrow()
+    writeFileSync(join(d, 'arr.json'), '[1]')
+    await expect(createFileNonceStore(join(d, 'arr.json')).load()).rejects.toThrow()
+    await expect(createFileNonceStore(d).load()).rejects.toThrow() // a directory where the file should be (EISDIR)
+  })
+  it('round-trips what it saves', async () => {
+    const d = dir()
+    const store = createFileNonceStore(join(d, 'n.json'))
+    await store.save({ a: 5 })
+    expect(await store.load()).toEqual({ a: 5 })
   })
 })
 
@@ -314,6 +392,71 @@ describe('handoff is unauthenticated: rate limit, busy, provenance', () => {
     expect(await busy.service.receive(url(make()))).toEqual({ ok: false, reason: 'busy' })
     expect(busy.propose).not.toHaveBeenCalled()
     expect(busy.audit).toHaveBeenLastCalledWith('handoff.rejected', { reason: 'busy' })
+  })
+
+  it('a card installed by someone else while consuming is not replaced: the final install says busy', async () => {
+    const audit = vi.fn()
+    const service = createHandoffService({
+      now: () => NOW,
+      ledger: createNonceLedger({ now: () => NOW }),
+      rateLimit: { take: () => true },
+      isBusy: () => false, // idle at the early check ...
+      propose: async () => 'busy', // ... but occupied by the time the card would be installed
+      audit
+    })
+    expect(await service.receive(url(make()))).toEqual({ ok: false, reason: 'busy' })
+    expect(audit).toHaveBeenLastCalledWith('handoff.rejected', { reason: 'busy' })
+  })
+
+  it('refuses with storage_unavailable, and proposes nothing, when the nonce cannot be made durable', async () => {
+    const audit = vi.fn()
+    const propose = vi.fn(async () => true)
+    const service = createHandoffService({
+      now: () => NOW,
+      ledger: createNonceLedger({
+        now: () => NOW,
+        store: { load: async () => ({}), save: async () => Promise.reject(new Error('disk full')) }
+      }),
+      rateLimit: { take: () => true },
+      isBusy: () => false,
+      propose,
+      audit
+    })
+    expect(await service.receive(url(make()))).toEqual({ ok: false, reason: 'storage_unavailable' })
+    expect(propose).not.toHaveBeenCalled()
+  })
+
+  it('no proposal before the save completes; a second ledger on the durable store refuses the replay', async () => {
+    let durable: Record<string, number> = {}
+    let finish: () => void = () => undefined
+    const store = {
+      load: async () => ({ ...durable }),
+      save: (r: Record<string, number>) =>
+        new Promise<void>((resolve) => {
+          finish = () => {
+            durable = { ...r }
+            resolve()
+          }
+        })
+    }
+    const propose = vi.fn(async () => true)
+    const mk = () =>
+      createHandoffService({
+        now: () => NOW,
+        ledger: createNonceLedger({ now: () => NOW, store }),
+        rateLimit: { take: () => true },
+        isBusy: () => false,
+        propose,
+        audit: vi.fn()
+      })
+    const first = mk().receive(url(make()))
+    await new Promise((r) => setImmediate(r))
+    expect(propose).not.toHaveBeenCalled()
+    finish()
+    expect((await first).ok).toBe(true)
+    expect(propose).toHaveBeenCalledTimes(1)
+    expect(await mk().receive(url(make()))).toEqual({ ok: false, reason: 'replayed' })
+    expect(propose).toHaveBeenCalledTimes(1)
   })
 
   it('the audit never carries an unknown origin string', async () => {

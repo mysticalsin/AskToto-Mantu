@@ -9,7 +9,7 @@ import type { CommandControlProposal } from '../../command-control'
 import { scheduleCaptureDeadline } from '../../infra/scheduler/capture-deadline'
 import { createFileNonceStore } from './nonce-file-store'
 import { createHandoffRateLimit, type HandoffRateLimit } from './handoff-rate-limit'
-import { createNonceLedger } from './nonce-ledger'
+import { createNonceLedger, type NonceStore } from './nonce-ledger'
 import { createHandoffService, type HandoffAuditDetail, type HandoffAuditEvent } from './handoff-service'
 import { extractHandoffUrls, HANDOFF_SCHEME } from './handoff-url'
 
@@ -41,6 +41,8 @@ export interface HandoffDeps {
   argv?: readonly string[]
   now?: () => number
   rateLimit?: HandoffRateLimit
+  /** Test seam; production uses the userData file. */
+  nonceStore?: NonceStore
   sleep?: (ms: number) => Promise<void>
 }
 
@@ -57,7 +59,7 @@ export function installHandoff(deps: HandoffDeps): HandoffRuntime {
   const ready = deps.app.whenReady().then(() => {
     const ledger = createNonceLedger({
       now,
-      store: createFileNonceStore(join(deps.app.getPath('userData'), 'handoff-nonces.json'))
+      store: deps.nonceStore ?? createFileNonceStore(join(deps.app.getPath('userData'), 'handoff-nonces.json'))
     })
     service = createHandoffService({
       now,
@@ -76,13 +78,19 @@ export function installHandoff(deps: HandoffDeps): HandoffRuntime {
           owner = liveOwner()
         }
         if (!owner) return false
-        return (
-          (await deps.commandControl.proposeChecked(
-            { webContentsId: owner.webContentsId, revision: ++revision },
-            request,
-            { provenance: 'external' }
-          )) !== null
-        )
+        try {
+          return (
+            (await deps.commandControl.proposeChecked(
+              { webContentsId: owner.webContentsId, revision: ++revision },
+              request,
+              { provenance: 'external' }
+            )) !== null
+          )
+        } catch (error) {
+          // CommandControl refuses at the install boundary when an owner card appeared during the preflight.
+          if (error instanceof Error && error.message === 'busy') return 'busy'
+          throw error
+        }
       }
     })
   })

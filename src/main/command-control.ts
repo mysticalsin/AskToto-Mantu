@@ -174,6 +174,9 @@ export class CommandControl {
     request: DesktopActionRequest,
     options: { dependsOn?: readonly string[]; provenance?: 'external' } = {}
   ): CommandControlProposal {
+    // The final, synchronous card-installation boundary: an outside request never replaces a card or a confirmed
+    // action, however long its asynchronous preflight took. The owner's card keeps its id, nonce and preview.
+    if (options.provenance === 'external' && this.hasPendingProposal()) throw new Error('busy')
     this.clearCurrent()
     const dependencies = checkDependsOn(options.dependsOn ?? [])
     if (!dependencies.ok) {
