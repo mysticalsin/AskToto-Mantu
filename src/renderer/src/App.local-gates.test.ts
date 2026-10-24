@@ -233,7 +233,7 @@ describe('CRITICAL: follow-up draft cross-meeting leak (finding 6)', () => {
 describe('Disregard-vs-autosave race (finding 7)', () => {
   const autosaveBlock = blockBetween(
     '// auto-save the meeting to the OneDrive folder',
-    '// record a completed Ask turn'
+    'const memory = useConversationMemory('
   )
   const discardBlock = blockBetween('const discardMeeting = useCallback(', 'const clearAnswer = useCallback(')
   const startListenBlock = blockBetween('const startListen = useCallback(', 'const endReview = useCallback(')

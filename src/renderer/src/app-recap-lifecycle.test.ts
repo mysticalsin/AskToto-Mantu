@@ -1865,6 +1865,7 @@ describe('meeting exit while the stop drain is in flight', () => {
       meetingPauseRef: ref({}),
       pendingRecapRef: ref(true),
       historyRef: ref([]),
+      memory: { newThread: () => undefined },
       copilotHistoryRef: ref([]),
       pendingUserRef: ref(null),
       newMeetingWaitRef: ref(false),

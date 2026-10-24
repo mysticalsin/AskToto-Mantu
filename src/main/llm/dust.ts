@@ -6,6 +6,7 @@ import { DustAPI } from '@dust-tt/client'
 import { authStatus } from '../auth'
 import { mainLog, auditLog } from '../logger'
 import { type StreamOptions, type StreamHandle, errMsg, idleWatchdog, userText } from './shared'
+import { registerDustConversationState } from './dust-conversation-state'
 import { attachScreenshot, type DustFileContentFragment } from './dust-attachments'
 import { redactSecrets } from '@shared/redact'
 import { dustAgentUnavailableMessage } from '@shared/quick-actions'
@@ -145,6 +146,12 @@ const creationInFlight = new Map<string, Promise<void>>()
 // Bumped on every reset so an in-flight createConversation that straddles a meeting-boundary reset can
 // detect it happened and skip repopulating the cache with the (now-stale) previous meeting's conversation.
 let conversationEpoch = 0
+// G49: persisted conversations stamp this epoch, so a thread can tell its remote conversation was dropped.
+registerDustConversationState(() => ({
+  epoch: conversationEpoch,
+  active: activeConversations.size > 0,
+  ttlMs: DUST_CONVERSATION_TTL_MS
+}))
 
 /** Call when a new meeting/listening session starts — the next Dust request begins a fresh conversation. */
 export function resetDustConversation(): void {

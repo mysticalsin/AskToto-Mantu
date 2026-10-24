@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { createSealedScopedStore, type TxResult } from '../../infra/storage/sealed-scoped-store'
 import {
   AssistantEntitySchema,
   MigrationRecordSchema,
@@ -36,7 +37,7 @@ export type TxOutcome<T> =
   | { commit: false; value: T }
   | { commit: true; own: AssistantEntity[]; migration?: MigrationRecord | null; value: T }
 
-export type TxResult<T> = { ok: true; value: T } | { ok: false; reason: 'signed-out' | 'unavailable' | 'stale' }
+export type { TxResult }
 
 export interface AssistantStore {
   /**
@@ -60,88 +61,34 @@ const DocSchema = z
   .strict()
 type Doc = z.infer<typeof DocSchema>
 
-const sameScope = (a: AssistantScope, b: AssistantScope | null): boolean =>
-  b !== null && a.partitionId === b.partitionId && a.ownerKey === b.ownerKey && a.tenantKey === b.tenantKey
-
+/** An adapter over the shared sealed, scoped store: it keeps G48's owner/tenant filtering and its public shape. */
 export function createAssistantStore(deps: AssistantStoreDeps): AssistantStore {
-  let tail: Promise<unknown> = Promise.resolve()
-
-  const load = async (scope: AssistantScope): Promise<Doc | null> => {
-    const bytes = await deps.io.read(scope.partitionId)
-    if (bytes === null) {
-      return {
-        v: 1,
-        partitionId: scope.partitionId,
-        ownerKey: scope.ownerKey,
-        tenantKey: scope.tenantKey,
-        entities: [],
-        migration: null
-      }
-    }
-    try {
-      const parsed = DocSchema.safeParse(JSON.parse(deps.open(bytes)))
-      return parsed.success &&
-        parsed.data.partitionId === scope.partitionId &&
-        parsed.data.ownerKey === scope.ownerKey &&
-        parsed.data.tenantKey === scope.tenantKey
-        ? parsed.data
-        : null
-    } catch {
-      return null
-    }
-  }
-
-  const run = async <T>(
-    fn: (view: StoreView) => TxOutcome<T>,
-    expectedScope?: AssistantScope
-  ): Promise<TxResult<T>> => {
-    const scope = deps.scope()
-    if (scope === null) return { ok: false, reason: 'signed-out' }
-    if (expectedScope && !sameScope(expectedScope, scope)) return { ok: false, reason: 'stale' }
-    let doc: Doc | null
-    try {
-      doc = await load(scope)
-    } catch {
-      return { ok: false, reason: 'unavailable' }
-    }
-    if (!sameScope(scope, deps.scope())) return { ok: false, reason: 'stale' }
-    if (doc === null) return { ok: false, reason: 'unavailable' }
-    const mine = (entity: AssistantEntity): boolean =>
-      entity.ownerKey === scope.ownerKey && entity.tenantKey === scope.tenantKey
-    const own = doc.entities.filter(mine)
-    let outcome: TxOutcome<T>
-    try {
-      outcome = fn({ own, migration: doc.migration })
-    } catch {
-      return { ok: false, reason: 'unavailable' }
-    }
-    if (!outcome.commit) return { ok: true, value: outcome.value }
-    // Whatever another owner's key sits on in this file is kept untouched and never shown.
-    const foreign = doc.entities.filter((entity) => !mine(entity))
-    const next: Doc = {
-      v: 1,
-      partitionId: scope.partitionId,
-      ownerKey: scope.ownerKey,
-      tenantKey: scope.tenantKey,
-      entities: [...foreign, ...outcome.own.filter(mine)],
-      migration: outcome.migration === undefined ? doc.migration : outcome.migration
-    }
-    if (!sameScope(scope, deps.scope())) return { ok: false, reason: 'stale' }
-    try {
-      await deps.io.write(scope.partitionId, deps.seal(JSON.stringify(next)))
-    } catch {
-      return { ok: false, reason: 'unavailable' }
-    }
-    // The write was bound to the captured partition, but its result must not be delivered after an owner switch.
-    if (!sameScope(scope, deps.scope())) return { ok: false, reason: 'stale' }
-    return { ok: true, value: outcome.value }
-  }
-
+  const core = createSealedScopedStore<Doc>({
+    schema: DocSchema,
+    empty: (scope) => ({ v: 1, ...scope, entities: [], migration: null }),
+    io: deps.io,
+    seal: deps.seal,
+    open: deps.open,
+    scope: deps.scope
+  })
   return {
     transact<T>(fn: (view: StoreView) => TxOutcome<T>, expectedScope?: AssistantScope): Promise<TxResult<T>> {
-      const result = tail.then(() => run(fn, expectedScope))
-      tail = result.catch(() => undefined)
-      return result
+      return core.transact<T>((doc, scope) => {
+        const mine = (entity: AssistantEntity): boolean =>
+          entity.ownerKey === scope.ownerKey && entity.tenantKey === scope.tenantKey
+        const outcome = fn({ own: doc.entities.filter(mine), migration: doc.migration })
+        if (!outcome.commit) return outcome
+        // Whatever another owner's key sits on in this file is kept untouched and never shown.
+        return {
+          commit: true,
+          value: outcome.value,
+          doc: {
+            ...doc,
+            entities: [...doc.entities.filter((entity) => !mine(entity)), ...outcome.own.filter(mine)],
+            migration: outcome.migration === undefined ? doc.migration : outcome.migration
+          }
+        }
+      }, expectedScope)
     }
   }
 }

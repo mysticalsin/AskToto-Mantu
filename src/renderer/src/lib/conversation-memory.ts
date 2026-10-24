@@ -1,6 +1,7 @@
 import { useEffect, useRef, type MutableRefObject } from 'react'
 import type { ChatTurn } from '@shared/ipc'
 import type { AnswerState } from '../state'
+import { useConversationPersistence } from './conversation-persistence'
 import { forgetStaleTurns, rememberTurn } from './stale-outputs'
 
 const MAX_STALE_RUNS = 64
@@ -17,6 +18,15 @@ export interface ConversationMemoryRefs {
   pendingUser: MutableRefObject<{ id: string; q: string } | null>
   /** Set when the user explicitly stops an answer, so a truncated turn is never recorded. */
   cancelled: MutableRefObject<boolean>
+  /** G49: the Ask assistant and composer the persisted thread is bound to. */
+  persist: { assistantId: string; input: string; setInput: (text: string) => void }
+}
+
+export interface ConversationMemory {
+  /** The persisted thread Ask is writing to (null until main answers); what composer attachments bind to. */
+  activeConversationId: string | null
+  /** A conversation boundary ("New chat", a new meeting): clears follow-up memory and starts a fresh persisted thread. */
+  newThread(): void
 }
 
 /**
@@ -31,8 +41,14 @@ export function useConversationMemory(
   suggest: { answer: AnswerState | null; clear: () => void },
   askFollowUpMemory: boolean | undefined,
   refs: ConversationMemoryRefs
-): void {
-  const { history, copilotHistory, lastTurnAt, pendingUser, cancelled } = refs
+): ConversationMemory {
+  const { history, copilotHistory, lastTurnAt, pendingUser, cancelled, persist } = refs
+  const persistence = useConversationPersistence({
+    ...persist,
+    history,
+    lastTurnAt,
+    memoryEnabled: askFollowUpMemory === true
+  })
   const suggestAnswer = suggest.answer
   // The latest card and dismiss handler, read when a report arrives; the subscription itself is made once.
   const latest = useRef(suggest)
@@ -54,6 +70,7 @@ export function useConversationMemory(
     const next: ChatTurn[] = [...history.current, question, { role: 'assistant', content: a.text }]
     history.current = next.slice(-12)
     lastTurnAt.current = Date.now()
+    persistence.record(a.id, p.q, a.text)
   }, [askAnswer])
 
   // Flipping follow-up memory is itself a conversation boundary: Q&A recorded while the toggle was OFF
@@ -87,4 +104,6 @@ export function useConversationMemory(
       if (card?.ephemeral && stale.has(card.id)) latest.current.clear()
     })
   }, [history, copilotHistory])
+
+  return { activeConversationId: persistence.activeConversationId, newThread: persistence.newThread }
 }

@@ -22,6 +22,8 @@ import { decryptSecret, encryptSecret } from '../secrets'
 import type { SpeechDesktopHooks } from '../speech-desktop-boundary'
 import type { RendererResetSource } from '../features/meetings/session-closure'
 import { bootstrapAssistants } from './assistants-wiring'
+import { bootstrapConversations } from './conversations-wiring'
+import { dustConversationState } from '../llm/dust-conversation-state'
 import { bootstrapDictationMemory } from './dictation-memory-wiring'
 import { bootstrapUserMemory } from './user-memory-wiring'
 import { bootstrapMeetingRecord } from './meeting-record-wiring'
@@ -175,7 +177,7 @@ export function createOwnerSessionWiring(deps: OwnerSessionWiringDeps): OwnerSes
   // G53: real files a turn produced, by artifactId; the registry is the seam producers (export, tools) register into.
   const artifacts = composeArtifacts({ ipcMain, assertMainWindow, requireAuth: () => requireAuth() })
   // G48 assistants: the sealed, owner- and tenant-scoped assistant store; built-in modes are its read-only system assistants.
-  bootstrapAssistants({
+  const assistants = bootstrapAssistants({
     ipcMain,
     authorizeSender,
     requireAuth: () => requireAuth(),
@@ -187,6 +189,20 @@ export function createOwnerSessionWiring(deps: OwnerSessionWiringDeps): OwnerSes
     meetings: async () => (await listMeetings()).map((row) => ({ file: row.file, mode: row.mode })),
     audit: (record) => auditLog('assistant.store', { ...record }),
     onboardingAudit: (record) => auditLog('onboarding.interview', { ...record })
+  })
+  // G49 conversations: sealed, owner- and tenant-scoped threads with dead-thread linkage, drafts and paged history.
+  bootstrapConversations({
+    ipcMain,
+    authorizeSender,
+    requireAuth: () => requireAuth(),
+    ownerSession,
+    userDataPath: () => app.getPath('userData'),
+    seal: encryptSecret,
+    open: decryptSecret,
+    assistants,
+    meetings: async () => (await listMeetings()).map((row) => ({ file: row.file })),
+    remote: dustConversationState,
+    audit: (record) => auditLog('conversation.store', { ...record })
   })
   // G57 user memory: durable preferences and expiring project context, owner-scoped and sealed.
   bootstrapUserMemory({

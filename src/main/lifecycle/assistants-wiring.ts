@@ -14,6 +14,7 @@ import { registerAssistantsIpc } from '../ipc/assistants-ipc'
 import type { AuthorizeSender } from '../ipc/sender-auth'
 import { memoryAccess, memoryPartitionsConfigured, onMemoryPartitionChange } from '../memory-partition/memory-access'
 import { bootstrapOnboardingInterview } from './onboarding-interview-wiring'
+import { ownerPartitionScope } from './owner-partition-scope'
 
 export interface AssistantsWiringDeps {
   ipcMain: Pick<IpcMain, 'handle'>
@@ -42,13 +43,6 @@ export interface AssistantsWiringDeps {
   now?(): number
 }
 
-/** G19's partition in force: its id, or null while none is open (signed out, unverified, a switch in flight). */
-function activePartition(): string | null {
-  if (!memoryPartitionsConfigured()) return null
-  const access = memoryAccess()
-  return access.status === 'ok' ? access.partitionId : null
-}
-
 /**
  * Builds the assistant store and service (G48) under `<userData>/assistants/<partition>.bin` (sealed, one file per
  * memory partition, so the file itself belongs to the verified tenant and user), registers its IPC behind the shared
@@ -59,13 +53,7 @@ function activePartition(): string | null {
  * out: assistants are not available to an installation that has no sign-in.
  */
 export function bootstrapAssistants(deps: AssistantsWiringDeps): AssistantService {
-  const partition = deps.partition ?? activePartition
-  const scope = () => {
-    const partitionId = partition()
-    const ownerKey = deps.ownerSession.currentOwnerKey()
-    const tenantKey = deps.ownerSession.currentTenantKey()
-    return partitionId && ownerKey && tenantKey ? { partitionId, ownerKey, tenantKey } : null
-  }
+  const scope = ownerPartitionScope({ ownerSession: deps.ownerSession, partition: deps.partition })
   const file = (partitionId: string): string => {
     if (!/^(?:legacy|[0-9a-f]{24})$/.test(partitionId)) throw new Error('invalid memory partition')
     return join(deps.userDataPath(), 'assistants', `${partitionId}.bin`)

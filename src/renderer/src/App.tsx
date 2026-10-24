@@ -1291,13 +1291,13 @@ export function App(): JSX.Element {
   }, [answerId, answerText, answerStreaming, answerCompletion])
 
   const cancelledRef = useRef(false) // set when the user explicitly stops/cancels an answer
-  // record a completed Ask turn into conversation memory (for follow-ups), see useConversationMemory
-  useConversationMemory(ask.answer, suggest, settings?.askFollowUpMemory, {
+  const memory = useConversationMemory(ask.answer, suggest, settings?.askFollowUpMemory, {
     history: historyRef,
     copilotHistory: copilotHistoryRef,
     lastTurnAt: lastTurnAtRef,
     pendingUser: pendingUserRef,
-    cancelled: cancelledRef
+    cancelled: cancelledRef,
+    persist: { assistantId: `sys-${mode}`, input, setInput }
   })
 
   // Auto-refocus the ask input once an answer finishes (not on error/cancel) — so the very next keystroke
@@ -2202,7 +2202,7 @@ export function App(): JSX.Element {
       // A new meeting is the natural conversation boundary (main resets the Dust conversation on
       // listening:on for the same reason) — ad-hoc Q&A from before the meeting must not ride into
       // mid-meeting asks/fact-checks via these refs.
-      historyRef.current = []
+      memory.newThread()
       copilotHistoryRef.current = []
       pendingUserRef.current = null
       // A new meeting always starts the LIVE transcript panel from the persisted default — this only seeds
@@ -2720,7 +2720,7 @@ export function App(): JSX.Element {
     followup.clear() // whatever was being reviewed is being left — a stale follow-up draft must not
     // survive to attach itself to whatever's reviewed next (see followup's own declaration comment).
     if (!wasListening) listen.clear()
-    historyRef.current = []
+    memory.newThread()
     copilotHistoryRef.current = []
     pendingUserRef.current = null
     // Clearing the local refs above is only half of "New chat": the Dust provider's conversation lives

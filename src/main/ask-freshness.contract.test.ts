@@ -143,7 +143,8 @@ describe('renderer clears its own carriers at every conversation boundary', () =
     const start = sourceIndexOf(appSrc, 'const reset = useCallback(() => {')
     expect(start).toBeGreaterThan(-1)
     const body = appSrc.slice(start, sourceIndexOf(appSrc, '}, [', start))
-    expect(body).toMatch(/historyRef\.current = \[\]/)
+    // G49: memory.newThread() clears historyRef itself and starts a fresh persisted thread.
+    expect(body).toMatch(/historyRef\.current = \[\]|memory\.newThread\(\)/)
     expect(body).toMatch(/copilotHistoryRef\.current = \[\]/)
     expect(body).toMatch(/window\.toto\.resetAskContext\(\)/)
   })
@@ -152,7 +153,7 @@ describe('renderer clears its own carriers at every conversation boundary', () =
     const start = sourceIndexOf(appSrc, 'const startListen = useCallback(')
     expect(start).toBeGreaterThan(-1)
     const body = appSrc.slice(start, sourceIndexOf(appSrc, '}, [', start))
-    expect(body).toMatch(/historyRef\.current = \[\]/)
+    expect(body).toMatch(/historyRef\.current = \[\]|memory\.newThread\(\)/)
     expect(body).toMatch(/copilotHistoryRef\.current = \[\]/)
   })
 })

@@ -317,6 +317,7 @@ function makeHarness() {
     persistLiveMeetingOnExitRef: ref(vi.fn()),
     discardedMeetingRef: ref<string | null>('41'),
     historyRef: ref([]),
+    memory: { newThread: () => undefined },
     copilotHistoryRef: ref([]),
     pendingUserRef: ref(null),
     view: 'copilot',
