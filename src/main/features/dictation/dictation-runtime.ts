@@ -21,6 +21,8 @@ import { createVoiceChordWiring, type VoiceChordWiring } from '../../voice/chord
 import { currentDictationMemory } from './dictation-memory-registry'
 import type { DictationMemory, DictationMemorySink } from './dictation-memory'
 import { UNSUPPORTED_DICTATION_PORTS, type DictationHostPorts } from './dictation-ports'
+import { DICTATION_STATUS_IPC, type DictationStatus } from '@shared/dictation-status'
+import { toDictationStatus } from './dictation-status'
 import { DictationSession, type DictationAuditPhase, type DictationSnapshot } from './dictation-session'
 
 interface WindowLike {
@@ -82,6 +84,8 @@ export interface DictationRuntime {
   /** A dictation turn is starting, listening, being recognized or inserted. */
   active(): boolean
   snapshot(): DictationSnapshot
+  /** The renderer-facing status (G30): fixed copy only, no turn id, no speech or field text. */
+  status(): DictationStatus
   dispose(): void
 }
 
@@ -148,6 +152,7 @@ export function createDictationRuntime(deps: DictationRuntimeDeps): DictationRun
     speech: { prewarm: () => deps.parakeet.ensure() },
     ports: deps.ports ?? UNSUPPORTED_DICTATION_PORTS,
     memory: memorySink,
+    onSnapshot: (snapshot) => send(DICTATION_STATUS_IPC.state, toDictationStatus(snapshot)),
     push: {
       begin: (payload) => {
         deps.onBegin?.()
@@ -196,6 +201,7 @@ export function createDictationRuntime(deps: DictationRuntimeDeps): DictationRun
     },
     active: () => session.active(),
     snapshot: () => session.snapshot(),
+    status: () => toDictationStatus(session.snapshot()),
     dispose() {
       chord.stop()
       session.dispose()

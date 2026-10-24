@@ -20,6 +20,7 @@ import { createUserMemoryPreloadApi } from './user-memory'
 import { createConnectorAccountsPreloadApi } from './connector-accounts'
 import { createAccountChoicePreloadApi } from './connector-account-choice'
 import { createQuietPreloadApi } from './quiet'
+import { createDictationStatusPreloadApi } from './dictation-status'
 
 /** The preload bridges that are one self-contained feature each, composed here so index.ts stays under its size cap. */
 export function createFeaturePreloadApis(ipc: IpcRenderer) {
@@ -44,6 +45,7 @@ export function createFeaturePreloadApis(ipc: IpcRenderer) {
     ...createUserMemoryPreloadApi(ipc),
     ...createConnectorAccountsPreloadApi(ipc),
     ...createAccountChoicePreloadApi(ipc),
-    ...createQuietPreloadApi(ipc)
+    ...createQuietPreloadApi(ipc),
+    ...createDictationStatusPreloadApi(ipc)
   }
 }

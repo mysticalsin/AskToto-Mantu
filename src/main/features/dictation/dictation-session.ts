@@ -124,6 +124,8 @@ export interface DictationSessionDeps {
   audit?(phase: DictationAuditPhase, detail?: { reason?: string }): void
   /** Called synchronously for each draft kept after a dictation ended without a verified insertion. */
   onDraftPreserved?(draft: PriorDraft): void
+  /** The snapshot changed (G30): main pushes the renderer-facing status from it. Must not throw into the session. */
+  onSnapshot?(snapshot: DictationSnapshot): void
   /**
    * The encrypted segment journal (G26). Told of each recognized segment before any insertion is attempted, of every
    * draft the guard keeps, of a verified insertion and of the end of each turn. Every call is contained: a failing
@@ -755,6 +757,11 @@ export class DictationSession {
     this.#reason = reason
     this.#turnIdShown = this.#turn?.id ?? null
     this.#snapshot = this.#build()
+    try {
+      this.deps.onSnapshot?.(this.#snapshot)
+    } catch {
+      /* a failed push must not disturb the session */
+    }
   }
 
   #build(): DictationSnapshot {

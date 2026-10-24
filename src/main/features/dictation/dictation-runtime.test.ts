@@ -6,6 +6,8 @@ import { VOICE_ACTIONS_IPC } from '@shared/voice/voice-turn'
 import type { ChordWatcherEvent, ChordWatcherStatus } from '../../voice/chord-watcher'
 import type { VoiceChordWiringDeps } from '../../voice/chord-wiring'
 import type { DictationTarget } from '../desktop-contract'
+import { DICTATION_STATUS_IPC, DictationStatusSchema } from '@shared/dictation-status'
+import { DICTATION_REASON_COPY } from './dictation-status'
 import { createDictationRuntime, type DictationRuntimeDeps } from './dictation-runtime'
 import type { DictationHostPorts } from './dictation-ports'
 
@@ -73,6 +75,7 @@ function setup(over: Partial<DictationRuntimeDeps> & { stored?: Partial<typeof D
   ])
     fn.mockClear()
   const sent: Array<{ channel: string; payload: unknown }> = []
+  const statusSent: Array<{ channel: string; payload: unknown }> = []
   const state = { lease: null as InputSessionLease | null, meeting: false, voiceBusy: false, recorder: false }
   const authority = {
     get activeLease() {
@@ -100,7 +103,10 @@ function setup(over: Partial<DictationRuntimeDeps> & { stored?: Partial<typeof D
     window: () => ({
       isDestroyed: () => false,
       isVisible: () => true,
-      webContents: { send: (channel: string, payload: unknown) => void sent.push({ channel, payload }) }
+      webContents: {
+        send: (channel: string, payload: unknown) =>
+          void (channel === DICTATION_STATUS_IPC.state ? statusSent : sent).push({ channel, payload })
+      }
     }),
     onboardingActive: () => false,
     availability: () => ({ ok: true }),
@@ -116,7 +122,7 @@ function setup(over: Partial<DictationRuntimeDeps> & { stored?: Partial<typeof D
   }
   const runtime = createDictationRuntime(deps)
   const wiring = (): VoiceChordWiringDeps => wiringCalls[0] as VoiceChordWiringDeps
-  return { runtime, deps, state, authority, activation, ports, sent, wiring }
+  return { runtime, deps, state, authority, activation, ports, sent, statusSent, wiring }
 }
 
 beforeEach(() => vi.useFakeTimers())
@@ -295,6 +301,38 @@ describe('dictation runtime: the recognized text (G22)', () => {
     expect(h.runtime.active()).toBe(true)
     expect(h.runtime.report({ turnId: 'turn-a', phase: 'failed', reason: 'microphone_unavailable' })).toBe(true)
     expect(h.runtime.active()).toBe(false)
+  })
+})
+
+describe('dictation runtime: the renderer status (G30)', () => {
+  it('pushes the status on every snapshot change, with fixed copy and no turn id', async () => {
+    const h = setup()
+    h.runtime.start()
+    const pushes = () =>
+      h.statusSent.map((s) => s.payload as { revision: number; state: string; message: string | null })
+    expect(pushes().at(-1)).toMatchObject({ state: 'idle', message: null, enabled: true })
+    h.wiring().onChordEvent?.(armed)
+    await flush()
+    const all = pushes()
+    expect(all.length).toBeGreaterThan(1)
+    for (const p of all) {
+      expect(DictationStatusSchema.safeParse(p).success).toBe(true)
+      expect(JSON.stringify(p)).not.toContain('turn-a')
+    }
+    const revisions = all.map((p) => p.revision)
+    expect(revisions).toEqual([...revisions].sort((a, b) => a - b))
+    expect(h.runtime.status()).toEqual(all.at(-1))
+  })
+
+  it('pushes only fixed copy for a refusal reason', () => {
+    const h = setup()
+    h.runtime.start()
+    h.state.meeting = true
+    h.wiring().onChordEvent?.(armed)
+    const last = h.statusSent.at(-1)?.payload as {
+      message: string | null
+    }
+    expect(last.message === null || Object.values(DICTATION_REASON_COPY).includes(last.message)).toBe(true)
   })
 })
 
