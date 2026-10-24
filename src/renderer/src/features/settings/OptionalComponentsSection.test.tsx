@@ -4,7 +4,12 @@ import { describe, expect, it } from 'vitest'
 import { matrixRowFor } from '@shared/component-failure-matrix'
 import type { OffloadPlan, OffloadReceipt } from '@shared/component-offload'
 import type { OptionalComponentStatus } from '@shared/speech-pack'
-import { OptionalComponentsView, formatBytes, type OptionalComponentsViewProps } from './OptionalComponentsSection'
+import {
+  OptionalComponentsView,
+  formatBytes,
+  optionalConfirmKey,
+  type OptionalComponentsViewProps
+} from './OptionalComponentsSection'
 
 function status(
   id: OptionalComponentStatus['id'],
@@ -154,5 +159,22 @@ describe('OptionalComponentsSection (G87)', () => {
     expect(formatBytes(1536)).toBe('2 KB')
     expect(formatBytes(5 * 1024 * 1024)).toBe('5 MB')
     expect(formatBytes(3 * 1024 ** 3)).toBe('3.0 GB')
+  })
+
+  it('remove and confirm buttons show visible focus (G91)', () => {
+    expect(render().html).toMatch(/<button[^>]*class="[^"]*focus-ring/)
+    const buttons = render({ plan }).html.match(/<button[^>]*>/g) ?? []
+    expect(buttons.length).toBeGreaterThanOrEqual(2)
+    for (const b of buttons) expect(b).toContain('focus-ring')
+  })
+
+  it('confirm names the component (G91)', () => {
+    expect(render({ plan }).html).toContain('aria-label="Confirm remove Whisper (offline speech)"')
+  })
+
+  it('optionalConfirmKey: Escape keeps, nothing confirms by key (G91)', () => {
+    expect(optionalConfirmKey('Escape')).toBe('keep')
+    expect(optionalConfirmKey('Enter')).toBeNull()
+    expect(optionalConfirmKey('y')).toBeNull()
   })
 })

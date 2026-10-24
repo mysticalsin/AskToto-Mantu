@@ -83,9 +83,24 @@ function ReceiptCard({ receipt }: { receipt: OffloadReceipt }): JSX.Element {
   )
 }
 
+/** Keys on the destructive confirm card: Escape keeps the component; no key ever confirms. */
+export function optionalConfirmKey(key: string): 'keep' | null {
+  return key === 'Escape' ? 'keep' : null
+}
+
 /** Presentational: one row per optional component with size, provider, privacy, failure and a two-step Remove. */
 export function OptionalComponentsView(props: OptionalComponentsViewProps): JSX.Element {
   const { components, plan, receipt, receipts, message, busy } = props
+  // When the confirm card closes, focus goes back to that row's Remove button instead of the page body.
+  const removeButtons = useRef(new Map<string, HTMLButtonElement>())
+  const lastPlanned = useRef<string | null>(null)
+  useEffect(() => {
+    if (plan) lastPlanned.current = plan.componentId
+    else if (lastPlanned.current) {
+      removeButtons.current.get(lastPlanned.current)?.focus()
+      lastPlanned.current = null
+    }
+  }, [plan])
   return (
     <section
       aria-label="Optional on-device components"
@@ -140,9 +155,13 @@ export function OptionalComponentsView(props: OptionalComponentsViewProps): JSX.
               {item.removable && !planned && (
                 <button
                   type="button"
+                  ref={(el) => {
+                    if (el) removeButtons.current.set(item.id, el)
+                    else removeButtons.current.delete(item.id)
+                  }}
                   disabled={busy}
                   onClick={() => props.onRemove(item.id)}
-                  className="mt-2 rounded border px-2 py-1 text-[11px] disabled:opacity-50"
+                  className="focus-ring mt-2 rounded border px-2 py-1 text-[11px] disabled:opacity-50"
                 >
                   Remove {item.label}
                 </button>
@@ -151,6 +170,12 @@ export function OptionalComponentsView(props: OptionalComponentsViewProps): JSX.
                 <div
                   role="group"
                   aria-label="Confirm removal"
+                  onKeyDown={(e) => {
+                    if (optionalConfirmKey(e.key) !== 'keep') return
+                    e.preventDefault()
+                    e.stopPropagation()
+                    props.onKeep()
+                  }}
                   className="mt-2 rounded-lg border border-[var(--cl-border)] bg-white/[0.03] p-2.5 text-[11px]"
                 >
                   <p className="m-0 font-medium text-[color:var(--cl-foreground)]">Remove {planned.label}?</p>
@@ -164,15 +189,17 @@ export function OptionalComponentsView(props: OptionalComponentsViewProps): JSX.
                       type="button"
                       disabled={busy}
                       onClick={props.onConfirm}
-                      className="rounded border px-2 py-1 disabled:opacity-50"
+                      aria-label={`Confirm remove ${planned.label}`}
+                      className="focus-ring rounded border px-2 py-1 disabled:opacity-50"
                     >
                       Confirm remove
                     </button>
                     <button
                       type="button"
                       disabled={busy}
+                      autoFocus
                       onClick={props.onKeep}
-                      className="rounded border px-2 py-1 disabled:opacity-50"
+                      className="focus-ring rounded border px-2 py-1 disabled:opacity-50"
                     >
                       Keep it
                     </button>
