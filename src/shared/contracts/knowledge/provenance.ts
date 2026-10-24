@@ -30,7 +30,14 @@ const HUMAN_STATES: ReadonlySet<ProvenanceState> = new Set(['HUMAN-VERIFIED', 'P
 
 export type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue }
 export const JsonValueSchema: z.ZodType<JsonValue> = z.lazy(() =>
-  z.union([z.string(), z.number().finite(), z.boolean(), z.null(), z.array(JsonValueSchema), z.record(z.string(), JsonValueSchema)])
+  z.union([
+    z.string(),
+    z.number().finite(),
+    z.boolean(),
+    z.null(),
+    z.array(JsonValueSchema),
+    z.record(z.string(), JsonValueSchema)
+  ])
 )
 
 /** A top-level record field. Never a path, so a patch cannot reach into nested values or the envelope. */

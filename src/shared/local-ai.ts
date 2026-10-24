@@ -25,8 +25,7 @@ const RESYNC_LINES_MAX = 20_000
 const RESYNC_BYTES_MAX = 2 * 1024 * 1024
 const VISION_EVIDENCE_BYTES_MAX = 64 * 1024
 
-const utf8ByteLength = (value: unknown): number =>
-  new TextEncoder().encode(JSON.stringify(value)).length
+const utf8ByteLength = (value: unknown): number => new TextEncoder().encode(JSON.stringify(value)).length
 const RevisionSchema = z.number().int().nonnegative().max(SIGNED_INT32_MAX)
 
 export const LocalTranscriptLineSchema = z
@@ -80,9 +79,7 @@ export const LocalTranscriptResyncSchema = z
   })
 export type LocalTranscriptResync = z.infer<typeof LocalTranscriptResyncSchema>
 
-export const LocalTranscriptEndSchema = z
-  .object({ sessionId: z.guid() })
-  .strict()
+export const LocalTranscriptEndSchema = z.object({ sessionId: z.guid() }).strict()
 export type LocalTranscriptEnd = z.infer<typeof LocalTranscriptEndSchema>
 
 export const LocalTranscriptAckSchema = z
@@ -93,10 +90,7 @@ export const LocalTranscriptAckSchema = z
   })
   .strict()
   .refine(
-    (value) =>
-      value.resyncRequired
-        ? value.expectedRevision !== undefined
-        : value.expectedRevision === undefined,
+    (value) => (value.resyncRequired ? value.expectedRevision !== undefined : value.expectedRevision === undefined),
     {
       message: 'expectedRevision is required exactly when resyncRequired is true',
       path: ['expectedRevision']
@@ -148,8 +142,7 @@ export const LocalVisionEvidenceSchema = z
 export type LocalVisionEvidence = z.infer<typeof LocalVisionEvidenceSchema>
 
 const FutureProviderIdSchema = z.custom<ProviderId>(
-  (value): value is ProviderId =>
-    typeof value === 'string' && PROVIDER_IDS.includes(value as ProviderId),
+  (value): value is ProviderId => typeof value === 'string' && PROVIDER_IDS.includes(value as ProviderId),
   'Unknown provider.'
 )
 
