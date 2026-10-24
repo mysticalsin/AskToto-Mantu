@@ -38,13 +38,15 @@ describe('brain ingest resilience (T6 6a/6b)', () => {
   let restoreSpeechReadPolicy = (): void => {}
 
   const waitForIdle = async (): Promise<void> => {
-    await vi.waitFor(
-      () => {
-        expect(brainBackfillProgress().running).toBe(false)
-      },
-      { timeout: 10_000 }
-    )
+    // Not a fixed 10 s poll: a loaded Windows runner can spend longer than that in index/entity file I/O. Await the real
+    // drain/finalization promises each pass (they may not be registered yet on the first one, hence the loop). A genuine
+    // hang is bounded by the test's own timeout.
+    while (brainBackfillProgress().running) {
+      await settleBrainWritesForTests()
+      if (brainBackfillProgress().running) await new Promise((resolve) => setTimeout(resolve, 10))
+    }
     await settleBrainWritesForTests()
+    expect(brainBackfillProgress().running).toBe(false)
   }
 
   const respondError =

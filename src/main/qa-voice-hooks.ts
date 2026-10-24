@@ -111,6 +111,10 @@ export const nodeQaFifoFs: QaFifoFs = {
     return {
       stream,
       wake: async () => {
+        // Destroy first, so the stream cannot issue a fresh blocking read once the wake byte completes the one in
+        // flight. Written the other way round, a loaded host could run that read's callback before destroy(); the new
+        // read then blocks forever on the empty FIFO and handle.close() waits on it, so 'closed' is never audited.
+        stream.destroy()
         await handle.write('\n').catch(() => undefined)
       },
       close: async () => {
