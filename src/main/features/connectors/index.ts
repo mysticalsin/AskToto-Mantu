@@ -4,6 +4,9 @@ export {
   accountChoiceBroker,
   configureAccountChoiceDelivery,
   configureConnectorAccountRuntime,
+  connectorCatalog,
+  connectorExecutor,
+  connectorReadReady,
   ensureCurrentConnectorAccount,
   runConnectorWrite,
   runConnectorWriteDetailed
