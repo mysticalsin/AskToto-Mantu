@@ -27,6 +27,7 @@ import { createListeningStateHandler } from './listening-state-ipc'
 import { createSpeakerId, type SpeakerEnrollmentSnapshot, type SpeakerId } from './speaker-id'
 import { crashDetail } from './infra/observability/crash-taxonomy'
 import { createImportMeetingWriteAdapters } from './import-meeting-write-adapters'
+import { readModuleSource } from '../test-helpers/module-source'
 
 const indexText = readFileSync(join(__dirname, 'index.ts'), 'utf8')
 const indexSource = ts.createSourceFile('index.ts', indexText, ts.ScriptTarget.Latest, true)
@@ -67,11 +68,22 @@ function runSourceContext(sourceText: string, globals: Record<string, unknown>):
   return context
 }
 
+// activationFrameFromEvent moved out of index.ts with the G28 conversation wiring.
+const conversationWiringSource = ts.createSourceFile(
+  'conversation-wiring',
+  readModuleSource(__dirname, './lifecycle/conversation-wiring').text,
+  ts.ScriptTarget.Latest,
+  true
+)
+
 function actualFunctionSource(name: string): string {
-  const declaration = indexSource.statements.find((node) => ts.isFunctionDeclaration(node) && node.name?.text === name)
+  const isNamed = (node: ts.Node): boolean => ts.isFunctionDeclaration(node) && node.name?.text === name
+  const fromWiring = conversationWiringSource.statements.find(isNamed)
+  const declaration = fromWiring ?? indexSource.statements.find(isNamed)
   expect(declaration, 'Actual source function ' + name + ' was not found').toBeDefined()
   if (!declaration) return ''
-  return declaration.getText(indexSource)
+  const owner = fromWiring ? conversationWiringSource : indexSource
+  return declaration.getText(owner).replace(/^export\s+/, '')
 }
 
 function actualFunction(name: string, globals: Record<string, unknown>): (...args: any[]) => any {
