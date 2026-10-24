@@ -51,7 +51,8 @@ describe('metis-mac-helper speak (G27): the Swift side of the line protocol', ()
 
   it('bounds the text and the rate, and never touches the network, the pasteboard or a download', () => {
     const speak = body('func runSpeak(')
-    const tts = swift.slice(swift.indexOf('func emitSpeakLine'), swift.indexOf('let arguments = CommandLine.arguments'))
+    // The speak functions only: G23's AX insertion, which legitimately owns the pasteboard, shares this file.
+    const tts = ['func emitSpeakLine(', 'func runSpeak(', 'func runSpeakVoices('].map(body).join('\n')
     expect(speak).toMatch(/maxSpeakChars/)
     expect(speak).toMatch(/min\(1\.5, max\(0\.5/)
     expect(tts).not.toMatch(/NSPasteboard|UIPasteboard/)
