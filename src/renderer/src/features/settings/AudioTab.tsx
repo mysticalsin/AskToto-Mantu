@@ -21,6 +21,7 @@ import { MicLevelMeter } from './MicLevelMeter'
 import { VoiceActionsSection } from './VoiceActionsSection'
 import { LiveTranslationRow } from './LiveTranslationRow'
 import { SpokenRepliesSection } from './SpokenRepliesSection'
+import { ProactiveControlsSection } from './ProactiveControlsSection'
 import { parseAsrCorrections, sameAsrCorrections, serializeAsrCorrections } from '../../lib/asr-corrections'
 import { acquireInteractiveMic } from '../../lib/input-mic-admission'
 export { parseAsrCorrections, sameAsrCorrections, serializeAsrCorrections } from '../../lib/asr-corrections'
@@ -464,6 +465,7 @@ export function AudioTab({
       )}
       <VoiceActionsSection settings={settings} patch={patch} />
       <SpokenRepliesSection settings={settings} patch={patch} />
+      <ProactiveControlsSection settings={settings} patch={patch} />
       <Section title="Listen to" desc="Whose audio Métis transcribes during a meeting." icon={Mic}>
         <div className="mb-2">
           <ManagedChip keys={settings.managedKeys} k="audioSource" />

@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { QuietAction } from '@shared/quiet-mode-settings'
 import { InterventionGate } from './intervention-gate'
+import { ProactiveControls } from './proactive-controls'
 import {
   cancelStaleLive,
   existingRulesForQuestion,
@@ -26,6 +27,8 @@ function questionDeps(over: Partial<QuestionFlowDeps> = {}) {
     showSpeculative: vi.fn(),
     runSuggest: vi.fn(),
     offerQuiet: vi.fn(async (): Promise<QuietAction> => 'allow'),
+    controls: new ProactiveControls(() => 100_000),
+    triggerText: 'what is the price',
     ...over
   }
   return { gate, deps }
@@ -84,6 +87,125 @@ describe('existing rules (today’s gates, unchanged)', () => {
     expect(existingRulesForShadow({ ...s, watermark: { lineCount: 3, at: 0 } }).reason).toBe('no-new-line')
     expect(existingRulesForShadow({ ...s, watermark: { lineCount: 2, at: 95_000 } }).reason).toBe('cooldown')
     expect(existingRulesForShadow({ ...s, anyStreaming: true }).reason).toBe('streaming')
+  })
+})
+
+describe('proactive controls in the question path (G77)', () => {
+  const ASK = 'what is the price for the enterprise plan'
+  const decideSpy = (gate: InterventionGate) => vi.spyOn(gate, 'decide')
+
+  it('manual mode holds with mode-manual and never calls decide', async () => {
+    const { gate, deps } = questionDeps({ settings: { ...READY, interruptionMode: 'manual' } })
+    const spy = decideSpy(gate)
+    expect(await runQuestionFlow(deps, 't1')).toBe('hold')
+    expect(spy).not.toHaveBeenCalled()
+    expect(deps.runSuggest).not.toHaveBeenCalled()
+    expect(deps.lastSuggestAtRef.current).toBe(0)
+    expect(gate.records().at(-1)).toEqual({
+      path: 'question',
+      status: 'held',
+      shouldGenerate: false,
+      reason: 'mode-manual',
+      outcome: 'hold',
+      generation: gate.generation,
+      contextRevision: gate.contextRevision
+    })
+  })
+
+  it('budget exhaustion holds before decide', async () => {
+    const { gate, deps } = questionDeps({ triggerText: ASK })
+    for (let i = 0; i < 6; i++) deps.controls.reserve(gate.sessionId, 'questions')
+    const spy = decideSpy(gate)
+    expect(await runQuestionFlow(deps, 't1')).toBe('hold')
+    expect(spy).not.toHaveBeenCalled()
+    expect(deps.runSuggest).not.toHaveBeenCalled()
+    expect(gate.records().at(-1)).toMatchObject({ status: 'held', reason: 'budget', outcome: 'hold' })
+  })
+
+  it('budget is not consulted when an existing rule already says no', async () => {
+    const { gate, deps } = questionDeps({ settings: { ...READY, autoSuggest: false } })
+    for (let i = 0; i < 6; i++) deps.controls.reserve(gate.sessionId, 'questions')
+    expect(await runQuestionFlow(deps, 't1')).toBe('hold')
+    expect(gate.records().at(-1)).toMatchObject({ reason: 'auto-suggest-off' })
+  })
+
+  it('low-novelty trigger holds with novelty through decide', async () => {
+    const { gate, deps } = questionDeps({ triggerText: ASK, nowMs: () => 100_000 })
+    expect(await runQuestionFlow(deps, 't1')).toBe('generate')
+    deps.nowMs = () => 200_000 // past the 8 s cooldown
+    deps.triggerText = `${ASK}?`
+    const spy = decideSpy(gate)
+    expect(await runQuestionFlow(deps, 't2')).toBe('hold')
+    expect(spy).toHaveBeenCalledTimes(1)
+    expect(spy.mock.calls[0][1]).toEqual({ shouldGenerate: false, reason: 'novelty' })
+    expect(deps.runSuggest).toHaveBeenCalledTimes(1)
+    expect(gate.records().at(-1)).toMatchObject({ reason: 'novelty', outcome: 'hold' })
+    expect(deps.lastSuggestAtRef.current).toBe(100_000)
+    // the held trigger released its slot: five more distinct questions still fit
+    for (let i = 0; i < 5; i++) {
+      deps.nowMs = () => 300_000 + i * 20_000
+      deps.triggerText = `distinct${i} topic${i} words${i} here${i}`
+      expect(await runQuestionFlow(deps, `n${i}`)).toBe('generate')
+    }
+  })
+
+  it('quiet defer and drop release the reservation', async () => {
+    for (const action of ['defer', 'drop'] as const) {
+      const { gate, deps } = questionDeps({ triggerText: ASK, offerQuiet: vi.fn(async () => action) })
+      const { snapshot } = await gate.decide('shadow', { shouldGenerate: true, reason: 'new-line' })
+      deps.readySpeculative = () => ({ snapshot })
+      expect(await runQuestionFlow(deps, 't1')).toBe('suppressed-quiet')
+      // all 6 slots are free again and the trigger did not enter the novelty ring
+      expect(deps.controls.noveltyOf(gate.sessionId, ASK)).toBe(1)
+      const slots = Array.from({ length: 6 }, () => deps.controls.reserve(gate.sessionId, 'questions'))
+      expect(slots.every((s) => s !== null)).toBe(true)
+    }
+  })
+
+  it('adopt and generate commit the trigger', async () => {
+    const generated = questionDeps({ triggerText: ASK })
+    expect(await runQuestionFlow(generated.deps, 't1')).toBe('generate')
+    expect(generated.deps.controls.noveltyOf(generated.gate.sessionId, ASK)).toBe(0)
+
+    const adopted = questionDeps({ triggerText: ASK })
+    const { snapshot } = await adopted.gate.decide('shadow', { shouldGenerate: true, reason: 'new-line' })
+    adopted.deps.readySpeculative = () => ({ snapshot })
+    expect(await runQuestionFlow(adopted.deps, 't1')).toBe('adopt')
+    expect(adopted.deps.controls.noveltyOf(adopted.gate.sessionId, ASK)).toBe(0)
+  })
+
+  it('stale-drop releases', async () => {
+    const { gate, deps } = questionDeps({ triggerText: ASK })
+    const { snapshot } = await gate.decide('shadow', { shouldGenerate: true, reason: 'new-line' })
+    deps.readySpeculative = () => ({ snapshot })
+    deps.offerQuiet = vi.fn(async () => {
+      gate.observe({ kind: 'scope', change: 'stop' })
+      return 'allow' as const
+    })
+    expect(await runQuestionFlow(deps, 't1')).toBe('stale-drop')
+    expect(deps.controls.noveltyOf(gate.sessionId, ASK)).toBe(1)
+    const slots = Array.from({ length: 6 }, () => deps.controls.reserve(gate.sessionId, 'questions'))
+    expect(slots.every((s) => s !== null)).toBe(true)
+  })
+
+  it('a streaming race after decide releases the reservation', async () => {
+    let streaming = false
+    const { gate, deps } = questionDeps({ triggerText: ASK, suggestStreaming: () => streaming })
+    const original = gate.decide.bind(gate)
+    vi.spyOn(gate, 'decide').mockImplementation(async (...args) => {
+      streaming = true // a card started streaming during the await
+      return original(...args)
+    })
+    expect(await runQuestionFlow(deps, 't1')).toBe('hold')
+    const slots = Array.from({ length: 6 }, () => deps.controls.reserve(gate.sessionId, 'questions'))
+    expect(slots.every((s) => s !== null)).toBe(true)
+  })
+
+  it('questions mode with fresh budget and novel text behaves exactly as G70', async () => {
+    const { gate, deps } = questionDeps({ settings: { ...READY, interruptionMode: 'questions' }, triggerText: ASK })
+    expect(await runQuestionFlow(deps, 't1')).toBe('generate')
+    expect(deps.runSuggest).toHaveBeenCalledTimes(1)
+    expect(gate.records().at(-1)).toMatchObject({ status: 'existing-rules', outcome: 'generate' })
   })
 })
 

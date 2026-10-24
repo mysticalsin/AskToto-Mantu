@@ -10,6 +10,7 @@ import { z } from 'zod'
 import { BaseSettingsSchema, DEFAULT_SETTINGS } from './ipc'
 import { CLOUD_SPEECH_FEATURE } from './broker-speech-settings'
 import { OPERATOR_REPORTING_FEATURE } from './operator-reporting-settings'
+import { PROACTIVE_CONTROLS_FEATURE } from './proactive-settings'
 import { SCREEN_OBSERVATION_FEATURE } from './screen-observation-settings'
 import { QUIET_MODE_FEATURE } from './quiet-mode-settings'
 import { LIVE_TRANSLATION_FEATURE } from './live-translation-settings'
@@ -41,6 +42,7 @@ export interface SettingEntry {
 export const SETTINGS_FEATURE_MODULES: readonly SettingsFeatureModule[] = [
   CLOUD_SPEECH_FEATURE,
   OPERATOR_REPORTING_FEATURE,
+  PROACTIVE_CONTROLS_FEATURE,
   SCREEN_OBSERVATION_FEATURE,
   QUIET_MODE_FEATURE,
   SPOKEN_REPLIES_FEATURE,

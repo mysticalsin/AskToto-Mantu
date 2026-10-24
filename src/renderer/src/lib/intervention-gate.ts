@@ -19,7 +19,13 @@ export type { InterventionShadowRecord } from '@shared/intervention-shadow'
  * Segments stay empty until G74 supplies a classifier, because a disabled policy never builds classifier input.
  */
 
-export type InterventionScopeChange = 'stop' | 'resume' | 'meeting-switch' | 'sign-out' | 'permission-revoked'
+export type InterventionScopeChange =
+  | 'stop'
+  | 'resume'
+  | 'meeting-switch'
+  | 'sign-out'
+  | 'permission-revoked'
+  | 'playbook-change'
 
 export type InterventionEvent =
   | { kind: 'final' | 'correction' | 'retraction'; lineId: string }
@@ -43,6 +49,10 @@ export class LiveInterventionContext implements InterventionContext<Intervention
 
   constructor(meetingStartMs: number) {
     this.scope = { tenantId: 'local', userId: 'local', sessionId: meetingSessionId(meetingStartMs) }
+  }
+
+  get sessionId(): string {
+    return this.scope.sessionId
   }
 
   issue(triggerLineId?: string): InterventionSnapshot {
@@ -155,6 +165,11 @@ export class InterventionGate {
     return this.context.contextRevision
   }
 
+  /** Session id of the live meeting scope; proactive-controls state is keyed by it. */
+  get sessionId(): string {
+    return this.context.sessionId
+  }
+
   observe(event: InterventionEvent): void {
     this.context.observe(event)
   }
@@ -224,6 +239,23 @@ export class InterventionGate {
       shouldGenerate: false,
       reason: toReasonCode(reason),
       outcome: 'stale-drop',
+      generation: snapshot.generation,
+      contextRevision: snapshot.contextRevision
+    })
+  }
+
+  /**
+   * A proactive control (G77) held the trigger before any policy decision: closed-set `reason`, no text.
+   * Issues a snapshot only to stamp the current generation and revision.
+   */
+  recordHeld(path: InterventionPath, reason: string, triggerLineId?: string): void {
+    const snapshot = this.context.issue(triggerLineId)
+    this.push({
+      path,
+      status: 'held',
+      shouldGenerate: false,
+      reason: toReasonCode(reason),
+      outcome: 'hold',
       generation: snapshot.generation,
       contextRevision: snapshot.contextRevision
     })
