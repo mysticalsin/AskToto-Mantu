@@ -42,6 +42,6 @@ export function createFeaturePreloadApis(ipc: IpcRenderer) {
     ...createUserMemoryPreloadApi(ipc),
     ...createConnectorAccountsPreloadApi(ipc),
     ...createQuietPreloadApi(ipc),
-    ...createAttachmentsPreloadApi(ipc),
+    ...createAttachmentsPreloadApi(ipc)
   }
 }
