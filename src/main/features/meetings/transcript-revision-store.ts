@@ -34,6 +34,8 @@ export interface TranscriptRevisionStore {
   open(binding: TranscriptStoreBinding): TranscriptStoreOpenResult
   apply(binding: TranscriptStoreBinding, ev: RevisionEvent): ApplyResult
   snapshot(meetingStartedAt: number): TranscriptRevision | null
+  /** True while any meeting is open (recording): the probe data-rights erasure refuses on. Read only. */
+  hasOpenSession(): boolean
   bindingOf(meetingStartedAt: number): { frameOwner: FrameOwner; ownerKey: string | null } | null
   finalize(binding: TranscriptStoreBinding): ApplyResult
   /** Releases the meeting and makes one best-effort checkpoint of its closing snapshot. */
@@ -206,6 +208,7 @@ export function createTranscriptRevisionStore(deps: TranscriptRevisionStoreDeps 
     snapshot(meetingStartedAt) {
       return entries.get(meetingStartedAt)?.rev ?? null
     },
+    hasOpenSession: () => entries.size > 0,
     bindingOf(meetingStartedAt) {
       const entry = entries.get(meetingStartedAt)
       return entry ? { frameOwner: entry.frameOwner, ownerKey: entry.owner?.ownerKey ?? null } : null

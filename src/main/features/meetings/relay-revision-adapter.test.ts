@@ -61,6 +61,7 @@ function fakeStore(over: Partial<TranscriptRevisionStore> = {}): TranscriptRevis
     open: () => ({ ok: true }),
     apply: () => ({ ok: false, reason: 'invalid' }),
     snapshot: () => null,
+    hasOpenSession: () => false,
     bindingOf: () => null,
     finalize: () => ({ ok: false, reason: 'invalid' }),
     close: () => undefined,

@@ -6,6 +6,7 @@ import { draftFilename } from '../../infra/storage/draft-transcript-write-state'
 import type { StorageGateway } from '../../infra/storage/gateway'
 import { storageAt } from '../../infra/storage/meetings-storage'
 import { sweepOrphanSavedTemps } from '../../infra/storage/orphan-temp-sweep'
+import { erasureFenceReady, isErasureFenced, isErasureFencedName } from '../../memory-partition/erasure-fence'
 import {
   appendIndexRow,
   decodeSavedMeetingAsync,
@@ -163,6 +164,8 @@ async function promoteJournalOnlyMeeting(
   startedAt: number,
   lines: readonly TranscriptLine[]
 ): Promise<boolean> {
+  // G82: nothing the owner erased is written back as a recovered meeting.
+  if (isErasureFenced(startedAt)) return false
   try {
     const folder = ensureMeetingsFolder(settings)
     const listing = await storageAt(folder).list('')
@@ -195,6 +198,7 @@ async function promoteJournalOnlyMeeting(
 
 /** Launch recovery: finish journaled saves, drop drafts whose meeting was already saved, then promote true orphans. */
 export async function recoverOrphanDrafts(settings: Settings): Promise<{ recovered: number }> {
+  await erasureFenceReady() // G82: the fence file is read before any recovery asks it a question
   // A save killed between its temp write and its rename leaves `<meeting>.md.<hex>.tmp`; recovery rebuilds the
   // meeting from the draft or journal, so the stale temp is dead weight (and a stray copy of the transcript).
   try {
@@ -205,6 +209,13 @@ export async function recoverOrphanDrafts(settings: Settings): Promise<{ recover
   await launchResume?.(settings).catch(() => undefined)
   const savedDrafts = new Set<string>()
   await removeSavedMeetingDrafts(settings, savedDrafts)
+  // G82: a draft that outlived an erasure is excluded from promotion like a draft whose meeting was already saved.
+  try {
+    const drafts = await storageAt(resolveMeetingsFolder(settings)).list('')
+    if (drafts.status === 'ok') for (const name of drafts.names) if (isErasureFencedName(name)) savedDrafts.add(name)
+  } catch {
+    // a failed listing leaves the fence to the promotion pass's own listing failure
+  }
   const journal = currentLiveJournalLifecycle()
   const result = await promoteOrphanDrafts(settings, savedDrafts, journal?.draftHooks() ?? null)
   if (!journal) return result

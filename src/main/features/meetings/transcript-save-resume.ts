@@ -1,3 +1,4 @@
+import { erasureFenceReady, isErasureFenced } from '../../memory-partition/erasure-fence'
 import type {
   ReceiptJournalPort,
   SaveReceiptRecord,
@@ -66,12 +67,19 @@ function withStage(rec: SaveReceiptRecord, stage: SaveReceiptStage, now: number)
  */
 export async function resumeJournaledSaves(deps: ResumeDeps): Promise<ResumeOutcome> {
   const outcome: ResumeOutcome = { finished: 0, kept: 0, dropped: 0, abandoned: 0 }
+  await erasureFenceReady()
   const loaded = await deps.journal.load()
   if (!loaded.ok) return { ...outcome, error: loaded.error }
   if (loaded.records.length === 0) return outcome
   for (const original of loaded.records) {
     let rec = original
     try {
+      // G82: a receipt for a meeting the owner erased replays nothing (no draft cleanup, rebuild or ingest).
+      if (isErasureFenced(rec.meetingStartedAt)) {
+        await deps.journal.remove(rec.receiptId).catch(() => undefined)
+        outcome.dropped++
+        continue
+      }
       if (!rec.stages.savedWritten || !rec.savedBasename || rec.folderIdSha256 !== deps.folder.idSha256) {
         outcome.kept++
         continue

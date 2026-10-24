@@ -6,6 +6,7 @@ import { ACCOUNT_CHOICE_IPC } from '@shared/connector-account-choice'
 import { CONNECTOR_ACCOUNTS_IPC } from '@shared/connector-accounts'
 import { ASSISTANT_IPC } from '@shared/assistants'
 import { ONBOARDING_INTERVIEW_IPC } from '@shared/onboarding-interview'
+import { DATA_RIGHTS_IPC } from '@shared/data-rights'
 import { DICTATION_MEMORY_IPC } from '@shared/dictation-memory'
 import { USER_MEMORY_IPC } from '@shared/user-memory'
 import { MEETING_RECORD_IPC } from '@shared/meeting-record'
@@ -95,7 +96,8 @@ describe('owner session wiring', () => {
       ...Object.values(ONBOARDING_INTERVIEW_IPC),
       ...Object.values(USER_MEMORY_IPC),
       ...Object.values(MEETING_RECORD_IPC),
-      ...Object.values(SUGGESTION_IPC)
+      ...Object.values(SUGGESTION_IPC),
+      ...Object.values(DATA_RIGHTS_IPC)
     ])
     expect(ipcMain.on.mock.calls.map((call) => call[0])).toEqual([ARTIFACT_IPC.dragStart])
   })
@@ -148,7 +150,8 @@ describe('owner session wiring', () => {
             Object.values(ONBOARDING_INTERVIEW_IPC).length +
             Object.values(USER_MEMORY_IPC).length +
             Object.values(MEETING_RECORD_IPC).length +
-            Object.values(SUGGESTION_IPC).length
+            Object.values(SUGGESTION_IPC).length +
+            Object.values(DATA_RIGHTS_IPC).length
         },
         () => true
       )

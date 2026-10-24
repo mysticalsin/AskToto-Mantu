@@ -16,6 +16,7 @@ import type { ContentVersion, StorageGateway } from '../infra/storage/gateway'
 import { canonicalPath, readStableRegularFile } from '../infra/storage/stable-read'
 import { decodeSavedMeetingAsync, resolveMeetingsFolder } from '../transcripts'
 import { mainLog } from '../logger'
+import { erasureFenceReady, isErasureFencedName } from '../memory-partition/erasure-fence'
 import { brainDir, brainRelDir } from './brain-root'
 import { readIndex, slugify } from './store'
 
@@ -78,6 +79,7 @@ function observationOf(version: ContentVersion): SourceObservation {
 }
 
 async function scanFolder(root: string, source: 'meetings' | 'team', label?: string): Promise<SourceFolder> {
+  await erasureFenceReady()
   const rootId = await canonicalSourceRootId(root)
   const gateway = storageAt(root)
   const listing = await gateway.list('')
@@ -87,7 +89,10 @@ async function scanFolder(root: string, source: 'meetings' | 'team', label?: str
     return { root, source, label, status: self?.status === 'missing' ? 'missing' : 'failed', sources: [] }
   }
   if (listing.status !== 'ok' || !rootId) return { root, source, label, status: 'failed', sources: [] }
-  const names = listing.names.filter(isMeetingTranscriptFile)
+  // G82: a meeting file that started before the owner erased their data (a cloud copy that synced back) is not a source.
+  const names = listing.names.filter(
+    (name) => isMeetingTranscriptFile(name) && !(source === 'meetings' && isErasureFencedName(name))
+  )
   const classes = await classifyAll(gateway, names)
   const sources: MeetingSource[] = []
   for (const name of names) {

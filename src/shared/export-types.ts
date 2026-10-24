@@ -1,6 +1,6 @@
 /** G58: the shapes the export channels return. Receipts name where an export landed and prove what was
  *  written; they never carry meeting content. Re-exported from ./ipc. */
-export type ExportKind = 'meeting-markdown' | 'recap-pdf' | 'diagnostics-bundle'
+export type ExportKind = 'meeting-markdown' | 'recap-pdf' | 'diagnostics-bundle' | 'data-rights-bundle'
 export type ExportConflictResolution = 'none' | 'keep-both' | 'replace'
 
 export interface ExportReceipt {

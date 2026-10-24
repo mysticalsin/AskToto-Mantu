@@ -22,6 +22,8 @@ import { decryptSecret, encryptSecret } from '../secrets'
 import type { SpeechDesktopHooks } from '../speech-desktop-boundary'
 import type { RendererResetSource } from '../features/meetings/session-closure'
 import { bootstrapAssistants } from './assistants-wiring'
+import { bootstrapDataRights } from './data-rights-wiring'
+import { createProductionDataRights } from './data-rights-host'
 import { bootstrapDictationMemory } from './dictation-memory-wiring'
 import { bootstrapUserMemory } from './user-memory-wiring'
 import { bootstrapMeetingRecord } from './meeting-record-wiring'
@@ -175,7 +177,7 @@ export function createOwnerSessionWiring(deps: OwnerSessionWiringDeps): OwnerSes
   // G53: real files a turn produced, by artifactId; the registry is the seam producers (export, tools) register into.
   const artifacts = composeArtifacts({ ipcMain, assertMainWindow, requireAuth: () => requireAuth() })
   // G48 assistants: the sealed, owner- and tenant-scoped assistant store; built-in modes are its read-only system assistants.
-  bootstrapAssistants({
+  const assistants = bootstrapAssistants({
     ipcMain,
     authorizeSender,
     requireAuth: () => requireAuth(),
@@ -217,6 +219,20 @@ export function createOwnerSessionWiring(deps: OwnerSessionWiringDeps): OwnerSes
     enabled: () => getPublishedSettingsObservation()?.settings.suggestionsEnabled === true,
     notify: showQuietNotification,
     audit: (record) => auditLog('suggestion.research', { ...record })
+  })
+
+  // G82 data rights: the store inventory's erasure with receipts, the erasure fence and the export.
+  const dataRights = createProductionDataRights({ artifacts: artifacts.registry, assistants })
+  bootstrapDataRights({
+    ipcMain,
+    authorizeSender,
+    requireAuth: () => requireAuth(),
+    ownerSession,
+    userDataPath: () => app.getPath('userData'),
+    hasOpenSession: () => transcriptRevision.store.hasOpenSession(),
+    ...dataRights,
+    audit: (event, record) =>
+      event === 'data.erasure' ? auditLog('data.erasure', { ...record }) : auditLog('data.export', { ...record })
   })
   return {
     ownerSession,

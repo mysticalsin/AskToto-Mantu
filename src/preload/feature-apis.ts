@@ -28,6 +28,7 @@ import { createEntitlementPlanPreloadApi } from './entitlement-plan'
 import { createAttachmentsPreloadApi } from './attachments'
 import { createSuggestionsPreloadApi } from './suggestions'
 import { createLiveTranslationPreloadApi } from './live-translation'
+import { createDataRightsPreloadApi } from './data-rights'
 
 /** The preload bridges that are one self-contained feature each, composed here so index.ts stays under its size cap. */
 export function createFeaturePreloadApis(ipc: IpcRenderer) {
@@ -60,6 +61,7 @@ export function createFeaturePreloadApis(ipc: IpcRenderer) {
     ...createComponentOffloadPreloadApi(ipc),
     ...createEntitlementPlanPreloadApi(ipc),
     ...createSuggestionsPreloadApi(ipc),
-    ...createLiveTranslationPreloadApi(ipc)
+    ...createLiveTranslationPreloadApi(ipc),
+    ...createDataRightsPreloadApi(ipc)
   }
 }

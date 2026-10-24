@@ -50,6 +50,15 @@ export function initLogging(): void {
 /** The shared main logger (file + dev console). Use for diagnostics + crash dumps. */
 export const mainLog = log
 
+/** G82: empties the diagnostic log (`main.log`) for a data-rights erasure. The audit log is a separate logger and stays. */
+export function clearMainLogFile(): void {
+  try {
+    log.transports.file.getFile().clear()
+  } catch {
+    /* best effort: a log that cannot be emptied never throws into the caller */
+  }
+}
+
 // A separate, append-only AUDIT log for security-relevant events — one JSON object per line, its own
 // rotated file (userData/logs/audit.log), kept distinct from the noisy diagnostic log.
 const audit = log.create({ logId: 'audit' })
@@ -167,6 +176,9 @@ export type AuditEvent =
   | 'credential.read.denied'
   | 'credential.cleanup'
   | 'credential.account_switch'
+  // Metadata-only (G82): store ids, counts and closed codes of an owner erasure or export, never a path or content.
+  | 'data.erasure'
+  | 'data.export'
   | 'memory.partition_adopted'
   | 'capture.screen'
   | 'capture.display_mismatch'

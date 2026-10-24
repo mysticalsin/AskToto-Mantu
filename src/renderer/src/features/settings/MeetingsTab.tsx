@@ -8,6 +8,7 @@ import { ManagedChip } from '../../ui/ManagedChip'
 import { Section } from '../../ui/Section'
 import { ToggleRow } from '../../ui/Toggle'
 import { DangerZoneSection } from './DangerZoneSection'
+import { DataRightsSection } from './DataRightsSection'
 import { loginItemView, useSettingsOsState } from './os-state'
 import { OsSettingsHint } from './OsSettingsHint'
 
@@ -247,6 +248,7 @@ export function MeetingsTab({
         </div>
       </Section>
       <DangerZoneSection settings={settings} patch={patch} />
+      <DataRightsSection />
     </>
   )
 }

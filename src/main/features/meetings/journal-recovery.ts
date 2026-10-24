@@ -3,6 +3,7 @@ import { join } from 'node:path'
 import type { TranscriptLine } from '@shared/transcript-line'
 import { purgeMeetingJournalDirectory, resolveMeetingJournalRoot } from '../../infra/storage/meeting-journal-purge'
 import { draftFilename } from '../../infra/storage/draft-transcript-write-state'
+import { isErasureFenced } from '../../memory-partition/erasure-fence'
 import { stamp } from './transcript-document-format'
 import {
   listJournalIds,
@@ -202,6 +203,8 @@ export function createJournalRecovery(deps: JournalRecoveryDeps): LiveJournalLif
         const start = await readVerifiedJournalStart(deps.userDataPath(), id, owners())
         if (!start) continue // no verified start: another owner's journal, or one written without it
         const { startedAt } = start
+        // G82: a journal that outlived an erasure is never promoted back into a meeting.
+        if (isErasureFenced(startedAt)) continue
         // A draft still on disk owns this meeting (merged or deliberately preserved by the draft path).
         if (context.draftNames.includes(draftFilename(startedAt, stamp(startedAt)))) continue
         // A saved or recovered meeting with this start already exists: promoting would duplicate it.

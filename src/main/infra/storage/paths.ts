@@ -9,6 +9,7 @@ import { copyFileSync, existsSync, mkdirSync, readdirSync, writeFileSync } from 
 import { dirname, join } from 'node:path'
 import { homedir } from 'node:os'
 import type { Settings } from '@shared/ipc'
+import { isErasureFencedName } from '../../memory-partition/erasure-fence'
 
 // detectOneDrive() does a handful of sync fs calls (existsSync/readdirSync) and its answer can't change
 // mid-process (the OneDrive sync root doesn't move while Métis is running) — resolveMeetingsFolder
@@ -74,7 +75,7 @@ function copyForwardLegacyMeetingsOnce(folder: string): void {
         // README.md/index.md are bookkeeping this folder regenerates itself (ensureMeetingsFolder) —
         // only real meeting/note files need copying forward. Never follow a symlink planted with a
         // meeting-shaped name (mirrors recoverOrphanDrafts' same guard).
-        if (!dirent.isFile() || !dirent.name.endsWith('.md')) continue
+        if (!dirent.isFile() || !dirent.name.endsWith('.md') || isErasureFencedName(dirent.name)) continue // G82
         if (dirent.name === 'README.md' || dirent.name === 'index.md') continue
         const dest = join(folder, dirent.name)
         if (!existsSync(dest)) copyFileSync(join(legacy, dirent.name), dest) // additive only — never overwrite

@@ -8,7 +8,7 @@ import { appendFile, mkdir, readFile } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import type { ExportReceipt } from '@shared/ipc'
 
-const KINDS = new Set(['meeting-markdown', 'recap-pdf', 'diagnostics-bundle'])
+const KINDS = new Set(['meeting-markdown', 'recap-pdf', 'diagnostics-bundle', 'data-rights-bundle'])
 const RESOLUTIONS = new Set(['none', 'keep-both', 'replace'])
 
 export async function appendReceipt(logPath: string, receipt: ExportReceipt): Promise<void> {

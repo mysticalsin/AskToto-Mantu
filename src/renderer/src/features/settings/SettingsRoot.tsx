@@ -243,7 +243,7 @@ const TABS: {
     label: 'Meetings',
     icon: FolderOpen,
     desc: 'Where meetings are saved, and how long they stay.',
-    keywords: ['meetings & transcripts', 'folder', 'retention', 'danger zone', 'delete', 'ingest']
+    keywords: ['meetings & transcripts', 'folder', 'retention', 'danger zone', 'your data', 'delete', 'ingest']
   },
   {
     // Wave 5: label "Brain" — CRM/MCP push lives here as Integrations content under the same tab
