@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Globe } from 'lucide-react'
 import { TASK_BROWSER_COPY, type TaskBrowserStatus } from '@shared/task-browser'
 import { TextButton } from '../../components/ui'
@@ -15,6 +15,13 @@ export function TaskBrowserSection(): JSX.Element {
   const [status, setStatus] = useState<TaskBrowserStatus | null>(null)
   const [confirming, setConfirming] = useState(false)
   const [message, setMessage] = useState<string | null>(null)
+  // When the confirm closes, focus returns to the Clear button instead of dropping to the page body.
+  const clearRow = useRef<HTMLDivElement>(null)
+  const wasConfirming = useRef(false)
+  useEffect(() => {
+    if (wasConfirming.current && !confirming) clearRow.current?.querySelector('button')?.focus()
+    wasConfirming.current = confirming
+  }, [confirming])
 
   useEffect(() => {
     let cancelled = false
@@ -52,15 +59,27 @@ export function TaskBrowserSection(): JSX.Element {
           </div>
         )}
         {confirming ? (
-          <div className="flex flex-col gap-1" role="group" aria-label={TASK_BROWSER_COPY.clearButton}>
+          <div
+            className="flex flex-col gap-1"
+            role="group"
+            aria-label={TASK_BROWSER_COPY.clearButton}
+            onKeyDown={(e) => {
+              if (e.key !== 'Escape') return
+              e.preventDefault()
+              e.stopPropagation()
+              setConfirming(false)
+            }}
+          >
             <p className={HINT}>{TASK_BROWSER_COPY.clearConfirm}</p>
             <div className="flex items-center gap-1">
               <TextButton onClick={() => void clear()}>{TASK_BROWSER_COPY.clearConfirmButton}</TextButton>
-              <TextButton onClick={() => setConfirming(false)}>{TASK_BROWSER_COPY.clearCancel}</TextButton>
+              <TextButton autoFocus onClick={() => setConfirming(false)}>
+                {TASK_BROWSER_COPY.clearCancel}
+              </TextButton>
             </div>
           </div>
         ) : (
-          <div>
+          <div ref={clearRow}>
             <TextButton onClick={() => setConfirming(true)}>{TASK_BROWSER_COPY.clearButton}</TextButton>
           </div>
         )}

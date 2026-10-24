@@ -73,12 +73,7 @@ export function Chip({
           : 'bg-white/[0.08] text-white hover:bg-white/[0.16]'
       ].join(' ')}
     >
-      {Icon && (
-        <Icon
-          size={13}
-          className={variant === 'neutral' ? 'text-[var(--color-accent-2)]' : undefined}
-        />
-      )}
+      {Icon && <Icon size={13} className={variant === 'neutral' ? 'text-[var(--color-accent-2)]' : undefined} />}
       {/* Only wrap a plain text/number label in the truncate span. Call sites that compose their own
           icon + text (or text + <kbd>) as children must keep them as separate flex-row siblings, or a
           single truncate span glues them together with no gap. */}
@@ -99,7 +94,8 @@ export function TextButton({
   onClick,
   title,
   disabled,
-  ariaLabel
+  ariaLabel,
+  autoFocus
 }: {
   icon?: LucideIcon
   children?: ReactNode
@@ -107,12 +103,14 @@ export function TextButton({
   title?: string
   disabled?: boolean
   ariaLabel?: string
+  autoFocus?: boolean
 }): JSX.Element {
   return (
     <button
       type="button"
       title={title}
       aria-label={ariaLabel}
+      autoFocus={autoFocus}
       onClick={onClick}
       disabled={disabled}
       className="no-drag focus-ring flex min-w-0 items-center gap-1 rounded-md px-2 py-1 text-[11px] text-[color:var(--color-ink-2)] hover:bg-white/10 hover:text-[color:var(--color-ink)] disabled:opacity-40"
@@ -151,6 +149,11 @@ export function FieldHint({ text, children }: { text: string; children: ReactNod
 }
 
 /** Forgotten call sites cannot resurrect the SVG spinner. Prefer `AgentStatus` + kind at named waits. */
-export function Spinner({ kind = 'loading' }: { size?: number; kind?: import('../lib/agent-status').AgentStatusKind }): JSX.Element {
+export function Spinner({
+  kind = 'loading'
+}: {
+  size?: number
+  kind?: import('../lib/agent-status').AgentStatusKind
+}): JSX.Element {
   return <AgentStatus kind={kind} size="inline" caption={false} />
 }

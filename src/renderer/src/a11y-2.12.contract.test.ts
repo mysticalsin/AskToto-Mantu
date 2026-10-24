@@ -43,6 +43,15 @@ describe('G91 accessibility contracts', () => {
     expect(keep).toMatch(/autoFocus[\s\S]{0,200}onClick=\{props\.onKeep\}[\s\S]{0,200}Keep it/)
   })
 
+  it('task browser clear confirm: safe default focus, Escape cancels, focus returns to Clear', () => {
+    const text = src('./features/settings/TaskBrowserSection')
+    const group = from(text, 'aria-label={TASK_BROWSER_COPY.clearButton}', 1000)
+    expect(group).toMatch(/onKeyDown=\{[\s\S]*'Escape'[\s\S]*setConfirming\(false\)/)
+    expect(group).toMatch(/<TextButton autoFocus onClick=\{\(\) => setConfirming\(false\)\}>/)
+    expect(text).toMatch(/clearRow\.current\?\.querySelector\('button'\)\?\.focus\(\)/)
+    expect(src('./components/ui')).toMatch(/autoFocus\?: boolean/)
+  })
+
   it('speaking bars stop under prefers-reduced-motion: the global rule is !important', () => {
     const css = readFileSync(join(__dirname, 'styles/overlay-motion.css'), 'utf8').replace(/\r\n/g, '\n')
     const reduced = css.slice(css.indexOf('@media (prefers-reduced-motion: reduce)'))
