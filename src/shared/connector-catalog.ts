@@ -47,6 +47,13 @@ const OutlookEventInput = z.object({
   endIso: z.string().max(40).optional()
 })
 const CreatedId = z.object({ id: z.string().min(1) })
+/** A created event is returned only after the provider has read it back as requested (G65). */
+const CreatedEvent = z.object({
+  id: z.string().min(1),
+  verified: z.literal(true),
+  startIso: z.string(),
+  endIso: z.string()
+})
 const CalendarTodayInput = z.object({ tz: z.string().max(64).default('UTC') })
 const CalendarTodayOutput = z.object({ events: z.array(z.object({ subject: z.string() }).passthrough()) })
 
@@ -76,7 +83,7 @@ export const CONNECTOR_CATALOG: readonly ConnectorOperation[] = Object.freeze([
     summary: 'Create a calendar event with no attendees (no invitations)',
     scopes: ['Calendars.ReadWrite'],
     input: OutlookEventInput,
-    output: CreatedId
+    output: CreatedEvent
   }
 ])
 
@@ -85,7 +92,7 @@ export const CONNECTOR_CATALOG: readonly ConnectorOperation[] = Object.freeze([
  * effect, scopes or input shape changed). `CONNECTOR_CATALOG_DIGEST` is pinned by a test so a change without a
  * bump fails CI.
  */
-export const CONNECTOR_CATALOG_REVISION = 1
+export const CONNECTOR_CATALOG_REVISION = 2
 
 /** Stable description of the parts of an operation a plan depends on. */
 export function describeOperation(op: ConnectorOperation): string {
@@ -114,6 +121,8 @@ export type ConnectorRefusalReason =
   | 'not_approved'
   | 'handler_failed'
   | 'output_invalid'
+  | 'os_permission_missing'
+  | 'effect_uncertain'
 
 /**
  * Which rule chose the account (G62). A closed set of labels: never an email, a tenant id or an account ref, so it is
@@ -168,4 +177,6 @@ export type ConnectorResult =
       error?: string
       /** With `account_ambiguous`: the accounts the owner can choose between (renderer-safe fields only). */
       choices?: ConnectorAccountChoiceOption[]
+      /** Operating-system permission status behind `os_permission_missing`. */
+      permission?: string
     }
