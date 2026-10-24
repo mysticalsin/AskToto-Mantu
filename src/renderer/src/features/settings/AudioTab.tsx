@@ -18,6 +18,7 @@ import { OnDeviceSpeechSettings } from './OnDeviceSpeechSettings'
 import { CloudSpeechSection } from './CloudSpeechSection'
 import { MicLevelMeter } from './MicLevelMeter'
 import { VoiceActionsSection } from './VoiceActionsSection'
+import { LiveTranslationRow } from './LiveTranslationRow'
 import { SpokenRepliesSection } from './SpokenRepliesSection'
 import { parseAsrCorrections, sameAsrCorrections, serializeAsrCorrections } from '../../lib/asr-corrections'
 import { acquireInteractiveMic } from '../../lib/input-mic-admission'
@@ -509,6 +510,7 @@ export function AudioTab({
             <option value="always">Always</option>
           </select>
         </label>
+        <LiveTranslationRow settings={settings} patch={patch} />
         <ToggleRow
           label="Auto-answer"
           desc="Draft a reply the moment they ask a question."

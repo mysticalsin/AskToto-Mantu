@@ -51,7 +51,8 @@ describe('capability mapping', () => {
       'deep_answer',
       'vision',
       'command_intent',
-      'dictation_polish'
+      'dictation_polish',
+      'translate'
     ])
     expect(askCapabilityOf({ mode: 'suggest' })).toBe('suggest')
     expect(askCapabilityOf({ mode: 'answer' })).toBe('answer')
@@ -258,6 +259,41 @@ describe('copy', () => {
         expect(plan.message).not.toMatch(/[–—]/)
         expect(plan.message).not.toMatch(/_/)
       }
+    }
+  })
+})
+
+describe('translate (G73)', () => {
+  it('translate routes to the recap policy model', () => {
+    expect(policyCapabilityFor('translate')).toBe('recap')
+    const doc = policy({ recap: { provider: 'synthetic-cloud', model: 'synthetic-recap-model', fallbacks: [] } })
+    const plan = routeCapability(input({ capability: 'translate', policy: doc }))
+    expect(plan).toMatchObject({
+      kind: 'route',
+      capability: 'translate',
+      tier: 'base',
+      deadlineMs: ROUTER_DEADLINES_MS.translate,
+      model: { provider: 'synthetic-cloud', model: 'synthetic-recap-model' }
+    })
+  })
+
+  it('translate never invents a model without a recap policy entry', () => {
+    expect(routeCapability(input({ capability: 'translate', policy: null }))).toMatchObject({
+      kind: 'route',
+      model: null
+    })
+    const plan = routeCapability(
+      input({ capability: 'translate', policy: policy(), orgAllowed: ['synthetic-unrelated'] })
+    )
+    expect(plan.kind).toBe('unavailable')
+  })
+
+  it('translate local-only unfit is unavailable with copy that names live translation', () => {
+    const plan = routeCapability(input({ capability: 'translate', localOnly: true }))
+    expect(plan.kind).toBe('unavailable')
+    if (plan.kind === 'unavailable') {
+      expect(plan.reason).toBe('local_only_unfit')
+      expect(plan.message).toMatch(/live translation/)
     }
   })
 })
