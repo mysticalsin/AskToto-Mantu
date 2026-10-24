@@ -278,15 +278,43 @@ export async function makePca(cfg: AzureConfig): Promise<PublicClientApplication
   })
 }
 
-/**
- * Silently obtain a Microsoft Graph access token for the given scopes from the cached account, refreshing
- * via the persisted refresh token if needed. Returns null when SSO is unconfigured, no account is cached,
- * or consent/refresh fails — callers treat null as "needs (re)connect" and never surface raw errors.
- */
-export async function getGraphToken(scopes: string[]): Promise<string | null> {
-  const cfg = readConfig()
-  if (!cfg) return null
+export type GraphTokenOutcome =
+  | { ok: true; token: string }
+  | { ok: false; reason: 'not_configured' | 'no_account' | 'interaction_required' | 'transient' }
+
+const INTERACTION_REQUIRED_GRAPH_ERROR_CODES = new Set([
+  'invalid_grant',
+  'no_tokens_found',
+  'refresh_token_expired',
+  'ui_not_allowed',
+  'consent_required',
+  'interaction_required',
+  'login_required',
+  'bad_token',
+  'interrupted_user'
+])
+
+function graphTokenNeedsInteraction(error: unknown): boolean {
   try {
+    const InteractionRequiredAuthError = msal().InteractionRequiredAuthError
+    if (error instanceof InteractionRequiredAuthError) return true
+  } catch {
+    // A failed lazy MSAL load is not a reason to hide the original transient failure.
+  }
+  if (!error || typeof error !== 'object') return false
+  try {
+    const errorCode = (error as { errorCode?: unknown }).errorCode
+    return typeof errorCode === 'string' && INTERACTION_REQUIRED_GRAPH_ERROR_CODES.has(errorCode.trim().toLowerCase())
+  } catch {
+    return false
+  }
+}
+
+/** Obtain a Graph token while preserving the difference between missing setup, interaction, and outage. */
+export async function getGraphTokenOutcome(scopes: string[]): Promise<GraphTokenOutcome> {
+  try {
+    const cfg = readConfig()
+    if (!cfg) return { ok: false, reason: 'not_configured' }
     const pca = await makePca(cfg)
     const accounts = await pca.getTokenCache().getAllAccounts()
     // Bind to the validated, signed-in session account — NOT just accounts[0] — so a stray/extra cached
@@ -294,12 +322,19 @@ export async function getGraphToken(scopes: string[]): Promise<string | null> {
     loadSession()
     const want = (session?.email || '').toLowerCase()
     const account = accounts.find((a) => (a.username || '').toLowerCase() === want) ?? null
-    if (!account) return null
+    if (!account) return { ok: false, reason: 'no_account' }
     const result = await pca.acquireTokenSilent({ account, scopes, forceRefresh: false })
-    return result?.accessToken ?? null
-  } catch {
-    return null
+    const token = result?.accessToken
+    return token ? { ok: true, token } : { ok: false, reason: 'interaction_required' }
+  } catch (error) {
+    return { ok: false, reason: graphTokenNeedsInteraction(error) ? 'interaction_required' : 'transient' }
   }
+}
+
+/** Legacy token-only contract for existing non-connector callers. */
+export async function getGraphToken(scopes: string[]): Promise<string | null> {
+  const outcome = await getGraphTokenOutcome(scopes)
+  return outcome.ok ? outcome.token : null
 }
 
 let session: Session | null = null

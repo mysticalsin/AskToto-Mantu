@@ -1,7 +1,12 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 
-const getGraphToken = vi.hoisted(() => vi.fn(async () => 'graph-token' as string | null))
-vi.mock('./auth', () => ({ getGraphToken }))
+const getGraphTokenOutcome = vi.hoisted(() =>
+  vi.fn<() => Promise<
+    | { ok: true; token: string }
+    | { ok: false; reason: 'not_configured' | 'no_account' | 'interaction_required' | 'transient' }
+  >>(async () => ({ ok: true, token: 'graph-token' }))
+)
+vi.mock('./auth', () => ({ getGraphTokenOutcome }))
 vi.mock('./logger', () => ({ auditLog: vi.fn() }))
 
 import { calendarToday, calendarTodayForConnector, safeTimeZone } from './calendar'
@@ -81,10 +86,18 @@ describe('calendarTodayForConnector — observed account health signals', () => 
   })
 
   it('uses real token and provider outcomes to classify health', async () => {
-    getGraphToken.mockResolvedValue(null)
-    await expect(calendarTodayForConnector('UTC')).resolves.toMatchObject({ healthSignal: 'consent_required' })
+    getGraphTokenOutcome.mockResolvedValue({ ok: false, reason: 'interaction_required' })
+    await expect(calendarTodayForConnector('UTC')).resolves.toMatchObject({
+      needsConsent: true,
+      healthSignal: 'consent_required'
+    })
 
-    getGraphToken.mockResolvedValue('graph-token')
+    getGraphTokenOutcome.mockResolvedValue({ ok: false, reason: 'transient' })
+    const transient = await calendarTodayForConnector('UTC')
+    expect(transient).toMatchObject({ ok: false, healthSignal: 'transient_failure' })
+    expect(transient).not.toHaveProperty('needsConsent')
+
+    getGraphTokenOutcome.mockResolvedValue({ ok: true, token: 'graph-token' })
     vi.stubGlobal(
       'fetch',
       vi.fn(async () => ({ ok: false, status: 503, json: async () => ({}) }))
